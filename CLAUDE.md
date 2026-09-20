@@ -99,7 +99,7 @@ check free space first.
 | Repo root | `D:\Externado\Catch_2026\clarios_app` |
 | uv | 0.12.17 at `C:\Users\juanp\.local\bin` — **not on the default PATH** |
 | Python | 3.12.14, uv-managed (system Python is 3.13/3.14 — do not use it) |
-| Shell for `make` | Git Bash. The Makefile selects `bash.exe` on Windows because GNU Make defaults to `cmd.exe`. |
+| Shell for `make` | Git Bash at `D:\git\Git\bin\bash.exe`, resolved via `git --exec-path`. Selecting it as bare `bash.exe` picked up WSL's `C:\Windows\System32\bash.exe`, which has docker but no uv. `make` now works from PowerShell, cmd or Git Bash. |
 | Published port | Only Caddy, `CADDY_HTTP_PORT=8080` |
 
 ---

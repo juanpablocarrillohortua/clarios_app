@@ -215,9 +215,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-> **Windows users:** run `make` from **Git Bash**, or ensure Git's `bin`
-> directory is on `PATH`. The Makefile selects `bash` explicitly because GNU
-> Make defaults to `cmd.exe`, which cannot run POSIX recipes.
+> **Windows users:** `make` works from PowerShell, cmd or Git Bash. GNU Make
+> defaults to `cmd.exe`, which cannot run POSIX recipes, so the Makefile locates
+> Git Bash itself through `git --exec-path` — no `PATH` changes needed.
 
 ### Step 1 — Clone the repository
 
@@ -578,11 +578,21 @@ make db-upgrade
 </details>
 
 <details>
-<summary><b><code>make</code> fails on Windows with syntax errors</b></summary>
+<summary><b><code>make</code> fails on Windows with <code>uv: command not found</code> or syntax errors</b></summary>
 
-GNU Make defaults to `cmd.exe`, which cannot run the POSIX recipes. The Makefile
-selects `bash.exe` on Windows, so Git's `bin` directory must be on `PATH`. The
-simplest fix is to run `make` from a **Git Bash** shell.
+GNU Make defaults to `cmd.exe`, which cannot run the POSIX recipes, so the
+Makefile picks a bash. Selecting it by the bare name `bash.exe` is unsafe once
+WSL is installed: `C:\Windows\System32\bash.exe` often wins the `PATH` lookup,
+and that shell has Docker but not `uv` — which is why `make up` would succeed
+while every quality gate failed with `uv: command not found`.
+
+The Makefile therefore resolves Git Bash from `git --exec-path`. If you still hit
+this, confirm `git` is on `PATH`:
+
+```bash
+git --exec-path    # expect <git-root>/mingw64/libexec/git-core
+make lint          # expect "All checks passed!"
+```
 </details>
 
 <details>

@@ -4,13 +4,20 @@
 # Every developer and CI action goes through this file. `make check` is THE
 # quality gate: if it is green locally, CI will be green too.
 #
-# Windows note: GNU Make defaults to cmd.exe, which cannot run these recipes.
-# Git Bash is selected automatically below, so Git's `bin` directory must be on
-# PATH (it is, with a standard Git for Windows installation).
+# Windows note: GNU Make defaults to cmd.exe, which cannot run these recipes, so
+# Git Bash is selected below. It is located through `git --exec-path` rather than
+# by name, which means `make` behaves identically from PowerShell, cmd and Git
+# Bash, and no PATH changes are needed.
 # =============================================================================
 
 ifeq ($(OS),Windows_NT)
-SHELL := bash.exe
+# `bash.exe` alone is ambiguous here: resolved through the Windows PATH it can
+# find C:\Windows\System32\bash.exe, the WSL launcher, which carries docker but
+# not uv - so `make up` would succeed while every quality gate died with
+# "uv: command not found". Derive Git Bash from git's own install location so
+# the same shell is used from PowerShell, cmd and Git Bash alike.
+GIT_BASH := $(abspath $(shell git --exec-path)/../../../bin/bash.exe)
+SHELL := $(if $(wildcard $(GIT_BASH)),$(GIT_BASH),bash.exe)
 # MSYS rewrites values that look like POSIX paths when it hands them to a native
 # Windows binary, so an exported DASH_URL_BASE_PATHNAME=/ reaches docker as
 # `D:/git/Git/` and Dash rejects it. These switches turn that rewriting off.
