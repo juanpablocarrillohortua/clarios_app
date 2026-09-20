@@ -1,0 +1,74 @@
+# =============================================================================
+# Local development overrides
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#
+# Docker Compose merges docker-compose.override.yml automatically. The copy is
+# gitignored, so this is where personal, machine-specific tweaks belong rather
+# than in docker-compose.yml.
+#
+# NOTE: several entries below publish ports that the committed stack
+# deliberately keeps internal. That is fine on a laptop and unacceptable on a
+# shared or deployed host - never apply this file outside local development.
+# =============================================================================
+
+services:
+  api:
+    # Live reload: mount the source over the image copy and let uvicorn watch it.
+    volumes:
+      - ./src:/app/src:ro
+      - ./config:/app/config:ro
+      - ./migrations:/app/migrations:ro
+    environment:
+      APP_DEBUG: "true"
+      LOG_LEVEL: DEBUG
+      LOG_FORMAT: console
+      DB_ECHO: "false"
+    command:
+      - uvicorn
+      - energy.api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/src
+    # Expose the API directly, bypassing Caddy, for a debugger or an HTTP client.
+    ports:
+      - "8000:8000"
+
+  dash:
+    volumes:
+      - ./src:/app/src:ro
+      - ./config:/app/config:ro
+    environment:
+      APP_DEBUG: "true"
+      LOG_LEVEL: DEBUG
+    ports:
+      - "8050:8050"
+
+  db:
+    # Publish PostgreSQL so psql, a GUI client, or a host-side `make db-upgrade
+    # RUNNER=host` can reach it. Remember to point DATABASE_URL at localhost
+    # when running tooling on the host.
+    ports:
+      - "5432:5432"
+    environment:
+      # Log slow queries while developing.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command:
+      - postgres
+      - -c
+      - log_min_duration_statement=500
+      - -c
+      - shared_preload_libraries=timescaledb
+
+  minio:
+    ports:
+      - "9000:9000"  # S3 API
+      - "9001:9001"  # Console
+
+  prefect-server:
+    ports:
+      - "4200:4200"

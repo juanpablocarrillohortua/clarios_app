@@ -1,0 +1,294 @@
+[project]
+name = "clarios-energy"
+version = "0.1.0"
+description = "Industrial energy and gas consumption monitoring platform for multi-plant operations."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12,<3.13"
+authors = [{ name = "Clarios Energy Platform Team" }]
+keywords = ["energy", "industrial", "timeseries", "medallion", "timescaledb"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Manufacturing",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+dependencies = [
+    # ---- API -------------------------------------------------------------
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.18",
+    "httpx>=0.28",
+    # ---- Models & configuration -----------------------------------------
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    # ---- Persistence -----------------------------------------------------
+    "sqlalchemy>=2.0.36",
+    "sqlmodel>=0.0.22",
+    "alembic>=1.16",
+    "psycopg[binary]>=3.2",
+    # ---- Dataframes & validation ----------------------------------------
+    "polars>=1.17",
+    "pandas>=2.2",
+    "pyarrow>=18.0",
+    "pandera[polars]>=0.21",
+    # ---- Orchestration ---------------------------------------------------
+    "prefect>=3.1",
+    # ---- Object storage --------------------------------------------------
+    "minio>=7.2",
+    # ---- Dashboards ------------------------------------------------------
+    "dash>=2.18",
+    "plotly>=5.24",
+    # ---- Ingestion formats ----------------------------------------------
+    "openpyxl>=3.1",
+    # ---- Cross-cutting ---------------------------------------------------
+    "structlog>=24.4",
+    "pyyaml>=6.0",
+    "typer>=0.15",
+]
+
+[project.optional-dependencies]
+# Heavy statistical/ML stack used only by `energy.analytics`. Kept out of the
+# default install so the API and ingestion images stay small; Phase 4 turns this
+# into a required extra for the analytics worker image only.
+analytics = [
+    "scikit-learn>=1.5",
+    "statsmodels>=0.14",
+    "shap>=0.46",
+]
+
+[project.scripts]
+energy = "energy.__main__:main"
+
+[project.urls]
+Documentation = "https://github.com/clarios/clarios-energy/tree/main/docs"
+Repository = "https://github.com/clarios/clarios-energy"
+
+[dependency-groups]
+dev = [
+    # ---- Testing ---------------------------------------------------------
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6.122",
+    "testcontainers[postgres]>=4.9",
+    # ---- Quality gates ---------------------------------------------------
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "bandit[toml]>=1.8",
+    "pip-audit>=2.7",
+    "pre-commit>=4.0",
+    # ---- Type stubs ------------------------------------------------------
+    "types-pyyaml>=6.0",
+    "pandas-stubs>=2.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/energy"]
+
+[tool.uv]
+package = true
+
+# =============================================================================
+# Alembic
+# =============================================================================
+# Alembic >= 1.16 reads its configuration from pyproject.toml, which keeps a
+# separate alembic.ini out of the repository root.
+[tool.alembic]
+script_location = "migrations"
+prepend_sys_path = ["src"]
+path_separator = "os"
+# Revision files are named 0001_*, 0002_* ... so `ls` order equals apply order.
+file_template = "%%(rev)s_%%(slug)s"
+timezone = "UTC"
+
+# =============================================================================
+# Ruff - linting and formatting
+# =============================================================================
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests", "scripts"]
+extend-exclude = ["migrations/versions/__pycache__"]
+
+[tool.ruff.lint]
+select = [
+    "F",    # pyflakes
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "N",    # pep8-naming
+    "D",    # pydocstyle - docstrings are a Phase 1 deliverable
+    "UP",   # pyupgrade
+    "ANN",  # flake8-annotations - every signature must be typed
+    "ASYNC",# flake8-async
+    "S",    # flake8-bandit
+    "B",    # flake8-bugbear
+    "A",    # flake8-builtins
+    "C4",   # flake8-comprehensions
+    "DTZ",  # flake8-datetimez - timezone-aware datetimes only
+    "T20",  # flake8-print
+    "PIE",  # flake8-pie
+    "PT",   # flake8-pytest-style
+    "RET",  # flake8-return
+    "SIM",  # flake8-simplify
+    "TID",  # flake8-tidy-imports
+    "TC",   # flake8-type-checking
+    "ARG",  # flake8-unused-arguments
+    "PTH",  # flake8-use-pathlib
+    "ERA",  # eradicate - no commented-out code
+    "PL",   # pylint
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "D203",   # conflicts with D211 (no blank line before class docstring)
+    "D213",   # conflicts with D212 (multi-line summary on first line)
+    "D107",   # Google style documents __init__ args in the class docstring
+    "ANN401", # Any is permitted in deliberately generic adapter boundaries
+    "S101",   # `assert` is allowed; it is also how architecture tests express rules
+    "PLR0913",# domain formulas legitimately take many named parameters
+    "PLR0917",# ... and pipeline tasks take many positional ones
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.isort]
+known-first-party = ["energy"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: magic numbers, private access and missing docstrings on helpers are fine.
+# TC003 is excluded because pytest reads fixture annotations at collection time.
+"tests/**/*.py" = ["D", "ANN", "PLR2004", "S105", "S106", "SLF001", "ARG001", "TC003"]
+# Migrations: Alembic's generated module layout is not ours to restyle, and its
+# revision-identifier annotations are part of that template.
+"migrations/**/*.py" = ["D103", "ANN", "ERA001", "INP001", "TC003"]
+# Operational scripts print to the console on purpose.
+"scripts/**/*.py" = ["T201", "INP001"]
+# FastAPI resolves annotations at runtime to build the dependency graph, so
+# moving them into a type-checking block would break dependency injection.
+# B008 is the framework's own idiom: Query()/File()/Form() in argument defaults.
+"src/energy/api/**/*.py" = ["TC001", "TC002", "TC003", "B008"]
+# Dash callbacks are registered by decorator and read their annotations too.
+"src/energy/dashboards/**/*.py" = ["TC001", "TC002", "TC003"]
+# Adapters construct the port DTOs they return (SourceBatch, WriteResult, ...),
+# so those are genuine runtime imports; the Phase 1 stubs just do not show it.
+"src/energy/adapters/**/*.py" = ["TC001"]
+
+[tool.ruff.format]
+docstring-code-format = true
+line-ending = "lf"
+
+# =============================================================================
+# mypy - strict mode
+# =============================================================================
+[tool.mypy]
+python_version = "3.12"
+files = ["src/energy"]
+mypy_path = "src"
+strict = true
+warn_unreachable = true
+warn_no_return = true
+show_error_codes = true
+pretty = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# Third-party packages that ship no type information (or only partial stubs).
+module = [
+    "dash.*",
+    "dash_bootstrap_components.*",
+    "plotly.*",
+    "prefect.*",
+    "pandera.*",
+    "minio.*",
+    "shap.*",
+    "statsmodels.*",
+    "sklearn.*",
+    "testcontainers.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# SQLModel's decorators are dynamically typed; table classes would otherwise
+# require an `Any` escape hatch on every column.
+module = ["energy.db.models.*"]
+disallow_untyped_decorators = false
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# =============================================================================
+# pytest
+# =============================================================================
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+    "--import-mode=importlib",
+]
+markers = [
+    "unit: pure in-process tests, no containers, no network (fast)",
+    "integration: requires a live PostgreSQL/TimescaleDB database",
+    "e2e: requires the full docker compose stack to be running",
+]
+filterwarnings = [
+    "error",
+    # Prefect and its transitive dependencies still emit these on import.
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::UserWarning",
+]
+
+# =============================================================================
+# Coverage
+# =============================================================================
+[tool.coverage.run]
+source = ["src/energy"]
+branch = true
+omit = ["*/__main__.py"]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+fail_under = 70
+exclude_lines = [
+    "pragma: no cover",
+    # Phase 1 placeholders: the docstring is the deliverable, the body is not.
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "^\\s*\\.\\.\\.$",
+    "@overload",
+    "if __name__ == .__main__.:",
+]
+
+[tool.coverage.html]
+directory = "reports/htmlcov"
+
+[tool.coverage.xml]
+output = "reports/coverage.xml"
+
+# =============================================================================
+# Bandit - security static analysis
+# =============================================================================
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "migrations", ".git"]
+targets = ["src", "scripts"]

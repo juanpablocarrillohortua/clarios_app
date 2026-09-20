@@ -1,0 +1,105 @@
+name: Docker build and publish
+
+# Publishes on version tags only. Images are built from an immutable ref, so the
+# tag that names an image always resolves to the commit that produced it.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and publish (for example v0.1.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    name: Build and push (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # One image per service target in the multi-stage Dockerfile.
+        target: [api, dash]
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.target }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.title=clarios-energy-${{ matrix.target }}
+            org.opencontainers.image.description=Industrial energy monitoring platform (${{ matrix.target }})
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push the image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions layer cache: a tag build reuses the dependency layer
+          # from the previous build instead of resolving the lockfile again.
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+          provenance: true
+          sbom: true
+          build-args: |
+            PYTHON_VERSION=3.12
+
+      - name: Verify the published image starts
+        # A pushed image that cannot import its own entry point is worse than a
+        # failed build, because it looks like a successful release.
+        run: |
+          IMAGE=$(echo '${{ steps.meta.outputs.tags }}' | head -n1)
+          echo "Smoke-testing ${IMAGE}"
+          docker run --rm --entrypoint python "${IMAGE}" -c \
+            "import energy; print('clarios-energy', energy.__version__)"
+
+      - name: Record the digest in the job summary
+        run: |
+          {
+            echo "## ${{ matrix.target }} image"
+            echo ""
+            echo "- Digest: \`${{ steps.build.outputs.digest }}\`"
+            echo "- Tags:"
+            echo '${{ steps.meta.outputs.tags }}' | sed 's/^/  - /'
+          } >> "$GITHUB_STEP_SUMMARY"

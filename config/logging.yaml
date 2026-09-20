@@ -1,0 +1,104 @@
+# =============================================================================
+# Standard library logging configuration
+#
+# structlog owns the *formatting* pipeline (see `energy.core.logging`); this file
+# configures the stdlib logging tree underneath it - which loggers exist, at what
+# level, and where their records go. Third-party libraries log through stdlib, so
+# this is what stops uvicorn and SQLAlchemy from drowning out application logs.
+#
+# Applied by `configure_from_settings()`. LOG_LEVEL and LOG_FORMAT in `.env`
+# override the root level and the renderer respectively.
+# =============================================================================
+
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  # Pass-through: structlog has already rendered the line by the time it reaches
+  # a stdlib handler, so the formatter must not re-wrap it.
+  plain:
+    format: "%(message)s"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: plain
+    stream: ext://sys.stdout
+
+loggers:
+  # ---------------------------------------------------------------------------
+  # Application
+  # ---------------------------------------------------------------------------
+  energy:
+    level: INFO
+    handlers: [console]
+    propagate: false
+
+  # Pipelines are verbose by design: a nightly run that fails at 02:00 is
+  # diagnosed entirely from its logs.
+  energy.pipelines:
+    level: INFO
+    handlers: [console]
+    propagate: false
+
+  # ---------------------------------------------------------------------------
+  # Third party - quietened so application logs stay legible
+  # ---------------------------------------------------------------------------
+  uvicorn:
+    level: INFO
+    handlers: [console]
+    propagate: false
+
+  # Suppressed because `RequestContextMiddleware` emits a richer structured
+  # access log with the correlation id attached. Leaving both on duplicates
+  # every request line.
+  uvicorn.access:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  uvicorn.error:
+    level: INFO
+    handlers: [console]
+    propagate: false
+
+  # INFO here logs every statement. Set to INFO deliberately and temporarily
+  # when debugging a query; never in a deployed environment.
+  sqlalchemy.engine:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  sqlalchemy.pool:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  alembic:
+    level: INFO
+    handlers: [console]
+    propagate: false
+
+  prefect:
+    level: INFO
+    handlers: [console]
+    propagate: false
+
+  urllib3:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  botocore:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  asyncio:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+root:
+  level: INFO
+  handlers: [console]

@@ -1,0 +1,167 @@
+# =============================================================================
+# KPI definitions
+#
+# Declares every KPI the platform computes. The formulas are *implemented* in
+# `energy.domain.kpi_formulas`; this file declares which of them run, over which
+# inputs, at which granularities, and how they roll up.
+#
+# `kind` is load-bearing and must be set correctly:
+#   extensive -> a total (kWh). Rolls up by summation.
+#   intensive -> a ratio (kWh per unit). Rolls up by a weighted mean over
+#                `roll_up_weight`, never by a plain average. Averaging a ratio
+#                across periods of unequal output gives the wrong answer.
+# =============================================================================
+
+version: 1
+
+kpis:
+  specific_energy_consumption:
+    name: Specific Energy Consumption
+    description: >-
+      Electrical energy consumed per equivalent unit produced. The headline
+      efficiency indicator. Only comparable across plants once production has
+      been normalised into equivalent units.
+    formula: specific_energy_consumption
+    kind: intensive
+    unit: kWh/unit
+    inputs:
+      energy: silver.readings[commodity=electricity]
+      production: gold.production_equivalent_units
+    roll_up_weight: production_equivalent_units
+    granularities: [hour, day, week, month]
+    # An idle period has no efficiency; emit nothing rather than infinity.
+    skip_when: production <= 0
+    direction: lower_is_better
+
+  gas_specific_consumption:
+    name: Gas Specific Consumption
+    description: >-
+      Gas energy consumed per equivalent unit produced, after applying the
+      calorific value for the period.
+    formula: specific_energy_consumption
+    kind: intensive
+    unit: kWh/unit
+    inputs:
+      energy: silver.readings[commodity=gas]
+      production: gold.production_equivalent_units
+    roll_up_weight: production_equivalent_units
+    granularities: [day, week, month]
+    skip_when: production <= 0
+    direction: lower_is_better
+
+  load_factor:
+    name: Load Factor
+    description: >-
+      How evenly demand was spread over the period. A low value means short,
+      expensive demand peaks above a much lower average - the target of
+      demand-charge reduction work.
+    formula: load_factor
+    kind: intensive
+    unit: ratio
+    inputs:
+      consumed: silver.readings[commodity=electricity]
+      peak_demand: gold.peak_demand_kw
+    roll_up_weight: energy_kwh
+    granularities: [day, week, month]
+    skip_when: peak_demand <= 0
+    direction: higher_is_better
+    bounds: [0.0, 1.0]
+
+  peak_ratio:
+    name: Peak to Average Ratio
+    description: >-
+      Peak demand divided by average demand. The reciprocal view of load factor,
+      kept separate because operations teams read it directly.
+    formula: peak_ratio
+    kind: intensive
+    unit: ratio
+    inputs:
+      peak_demand: gold.peak_demand_kw
+      average_demand: gold.average_demand_kw
+    roll_up_weight: energy_kwh
+    granularities: [day, week, month]
+    skip_when: average_demand <= 0
+    direction: lower_is_better
+
+  energy_intensity:
+    name: Energy Intensity
+    description: >-
+      Energy per square metre of conditioned floor area. Used where production
+      is not a meaningful denominator.
+    formula: energy_intensity
+    kind: intensive
+    unit: kWh/m2
+    inputs:
+      energy: silver.readings[commodity=electricity]
+      floor_area_m2: reference.plants.floor_area_m2
+    roll_up_weight: floor_area_m2
+    granularities: [month]
+    skip_when: floor_area_m2 <= 0
+    direction: lower_is_better
+
+  total_energy:
+    name: Total Electrical Energy
+    description: Total electricity consumed over the period.
+    formula: sum
+    kind: extensive
+    unit: kWh
+    inputs:
+      energy: silver.readings[commodity=electricity]
+    granularities: [hour, day, week, month]
+    direction: lower_is_better
+
+  total_gas_energy:
+    name: Total Gas Energy
+    description: Total gas energy consumed over the period, in kWh equivalent.
+    formula: sum
+    kind: extensive
+    unit: kWh
+    inputs:
+      energy: silver.readings[commodity=gas]
+    granularities: [hour, day, week, month]
+    direction: lower_is_better
+
+  baseline_deviation:
+    name: Baseline Deviation
+    description: >-
+      Relative deviation of measured consumption from the energy baseline
+      prediction. Positive means the plant consumed MORE than predicted, which
+      is worse. Reversing this sign inverts every savings report.
+    formula: baseline_deviation
+    kind: intensive
+    unit: ratio
+    inputs:
+      actual: gold.energy_kwh
+      expected: gold.baseline_kwh
+    roll_up_weight: energy_kwh
+    granularities: [day, week, month]
+    skip_when: expected <= 0
+    direction: lower_is_better
+    requires_baseline: true
+
+  avoided_consumption:
+    name: Avoided Consumption
+    description: >-
+      Energy avoided against the baseline, the IPMVP savings quantity. Positive
+      means savings were realised.
+    formula: avoided_consumption
+    kind: extensive
+    unit: kWh
+    inputs:
+      baseline: gold.baseline_kwh
+      actual: gold.energy_kwh
+    granularities: [day, week, month]
+    direction: higher_is_better
+    requires_baseline: true
+
+# -----------------------------------------------------------------------------
+# Computation defaults
+# -----------------------------------------------------------------------------
+defaults:
+  # Coverage below which a value is stored but flagged provisional. Suppressing
+  # it instead would leave unexplained gaps in a chart.
+  reportable_coverage_threshold: 0.8
+  # Quality flags whose readings may feed a KPI.
+  reliable_quality_flags: [ok, interpolated, estimated]
+  # Decimal places retained when storing a value.
+  precision: 6

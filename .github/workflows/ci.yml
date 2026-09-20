@@ -1,0 +1,203 @@
+name: CI
+
+# Runs the same gate as `make check`. If it is green locally it is green here;
+# that equivalence is the whole point of routing every action through make.
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Points host-side tooling (Alembic, pytest) at the service container below.
+  # The application assembles this URL from parts when it is unset; here it is
+  # set explicitly because the database is on localhost rather than `db`.
+  DATABASE_URL: postgresql+psycopg://energy:energy@localhost:5432/energy
+  POSTGRES_USER: energy
+  POSTGRES_PASSWORD: energy
+  POSTGRES_DB: energy
+  POSTGRES_HOST: localhost
+  POSTGRES_PORT: "5432"
+  APP_ENV: ci
+  LOG_LEVEL: WARNING
+  LOG_FORMAT: json
+  # Tells the Makefile to run Alembic on the host rather than via docker compose.
+  RUNNER: host
+  MINIMUM_COVERAGE: "70"
+
+jobs:
+  quality:
+    name: Quality gate (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Single entry today; the matrix exists so 3.13 can be added by
+        # appending one line rather than restructuring the job.
+        python-version: ["3.12"]
+
+    services:
+      db:
+        image: timescale/timescaledb-ha:pg16
+        env:
+          POSTGRES_USER: energy
+          POSTGRES_PASSWORD: energy
+          POSTGRES_DB: energy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U energy -d energy"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 60s
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.17"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install project dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Verify the lockfile is up to date
+        # A pyproject change committed without re-locking would make CI test a
+        # different dependency set than the one the Docker image builds from.
+        run: uv lock --check
+
+      - name: Check formatting
+        run: make format-check
+
+      - name: Lint with ruff
+        run: make lint
+
+      - name: Type-check with mypy (strict)
+        run: make typecheck
+
+      - name: Wait for PostgreSQL to accept connections
+        run: ./scripts/wait_for_db.sh
+
+      - name: Apply database migrations
+        run: make db-upgrade
+
+      - name: Verify the TimescaleDB extension is installed
+        run: |
+          uv run python - <<'PYTHON'
+          import os
+          from sqlalchemy import create_engine, text
+
+          engine = create_engine(os.environ["DATABASE_URL"])
+          with engine.connect() as connection:
+              installed = {
+                  row[0] for row in connection.execute(text("SELECT extname FROM pg_extension"))
+              }
+          missing = {"timescaledb", "pgcrypto"} - installed
+          if missing:
+              raise SystemExit(f"missing extensions after migration: {sorted(missing)}")
+          print("extensions present:", sorted(installed & {"timescaledb", "pgcrypto"}))
+          PYTHON
+
+      - name: Run the test suite with coverage
+        run: |
+          uv run pytest \
+            --cov \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-report=html \
+            --cov-fail-under=${MINIMUM_COVERAGE} \
+            --junitxml=reports/junit.xml
+
+      - name: Upload the coverage report
+        # Uploaded even on failure: a failing run is exactly when the report is
+        # most useful.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-py${{ matrix.python-version }}
+          path: |
+            reports/coverage.xml
+            reports/htmlcov/
+            reports/junit.xml
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Summarise coverage
+        if: always()
+        run: |
+          if [ -f reports/coverage.xml ]; then
+            uv run python - <<'PYTHON' >> "$GITHUB_STEP_SUMMARY"
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("reports/coverage.xml").getroot()
+          rate = float(root.get("line-rate", 0)) * 100
+          branch = float(root.get("branch-rate", 0)) * 100
+          print("## Coverage\n")
+          print(f"- Line coverage: **{rate:.2f}%**")
+          print(f"- Branch coverage: **{branch:.2f}%**")
+          PYTHON
+          fi
+
+  security:
+    name: Security gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.17"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install project dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Run bandit and pip-audit
+        run: make security
+
+  compose:
+    name: Validate the compose stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Create an environment file from the template
+        run: cp .env.example .env
+
+      - name: Validate the compose configuration
+        run: docker compose config --quiet
+
+      - name: Validate the Caddyfile
+        run: |
+          docker run --rm -v "${PWD}/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2 caddy validate --config /etc/caddy/Caddyfile
+
+      - name: Build the application images
+        run: |
+          docker compose build api dash
