@@ -93,6 +93,13 @@ jobs:
     name: Secret detection (gitleaks)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # gitleaks-action calls the GitHub API on a pull_request event. The
+    # workflow-wide grant is read-only, which makes that call return 403
+    # ("Resource not accessible by integration"), so the access is granted to
+    # this job alone rather than widening it for every job in the file.
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Check out the repository with full history
         uses: actions/checkout@v4
@@ -135,6 +142,10 @@ jobs:
             key="${line%%=*}"
             value="${line#*=}"
             case "$key" in
+              # Names a header rather than holding a credential. API_KEY_HEADER
+              # matches the *KEY* glob below, but "X-API-Key" is exactly the
+              # value it should carry.
+              *_HEADER|*_HEADERS) continue ;;
               *PASSWORD*|*SECRET*|*TOKEN*|*KEY*)
                 case "$value" in
                   *change-me*|minioadmin|'') ;;
