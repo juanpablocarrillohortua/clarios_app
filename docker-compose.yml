@@ -1,0 +1,265 @@
+# =============================================================================
+# Clarios Energy - full local stack
+#
+# Network policy: Caddy is the ONLY service that publishes ports. Everything
+# else is reachable solely on the internal compose network and is exposed to the
+# host through the reverse proxy. That means the database is deliberately not
+# reachable from the host, which is why `make db-upgrade` runs Alembic inside
+# the api container.
+#
+# Every service declares a healthcheck, and every dependency is gated on
+# `condition: service_healthy`, so `docker compose up --wait` returns only once
+# the stack is genuinely usable rather than merely started.
+# =============================================================================
+
+name: ${COMPOSE_PROJECT_NAME:-clarios-energy}
+
+x-common-env: &common-env
+  APP_ENV: ${APP_ENV:-local}
+  APP_DEBUG: ${APP_DEBUG:-false}
+  APP_VERSION: ${APP_VERSION:-0.1.0}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-console}
+  TZ: UTC
+
+x-db-env: &db-env
+  POSTGRES_USER: ${POSTGRES_USER:-energy}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+  POSTGRES_DB: ${POSTGRES_DB:-energy}
+  POSTGRES_HOST: db
+  POSTGRES_PORT: 5432
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-energy}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-energy}
+
+x-minio-env: &minio-env
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+  MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+  MINIO_SECURE: ${MINIO_SECURE:-false}
+  MINIO_BUCKET_BRONZE: ${MINIO_BUCKET_BRONZE:-bronze-raw}
+  MINIO_BUCKET_REPORTS: ${MINIO_BUCKET_REPORTS:-reports}
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  # ---------------------------------------------------------------------------
+  # Reverse proxy - the single ingress
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2
+    <<: *restart
+    ports:
+      - "${CADDY_HTTP_PORT:-8080}:80"
+      - "${CADDY_HTTPS_PORT:-8443}:443"
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge, backend]
+    depends_on:
+      api:
+        condition: service_healthy
+      dash:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Database - PostgreSQL 16 + TimescaleDB
+  # ---------------------------------------------------------------------------
+  db:
+    image: timescale/timescaledb-ha:pg16
+    <<: *restart
+    environment:
+      <<: *db-env
+      PGDATA: /home/postgres/pgdata/data
+    volumes:
+      # The -ha image stores its cluster under /home/postgres/pgdata, NOT the
+      # stock /var/lib/postgresql/data. Mounting the wrong path silently loses
+      # every restart's data.
+      - db_data:/home/postgres/pgdata
+    networks: [backend]
+    shm_size: 256mb
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-energy} -d ${POSTGRES_DB:-energy}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Object storage - MinIO
+  # ---------------------------------------------------------------------------
+  minio:
+    # Pulled from quay.io, MinIO's own registry, because the Docker Hub mirror
+    # (minio/minio) now refuses anonymous pulls. Pinned to a release rather than
+    # `latest` so a rebuild months from now produces the same stack.
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    <<: *restart
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+      MINIO_BROWSER_REDIRECT_URL: http://${CADDY_DOMAIN:-localhost}:${CADDY_HTTP_PORT:-8080}/minio/
+    volumes:
+      - minio_data:/data
+    networks: [backend]
+    healthcheck:
+      # MinIO's own liveness endpoint, not `mc ready local`: `mc` needs a
+      # configured alias in ~/.mc, which this image does not ship, so the client
+      # probe fails even while the server is serving normally.
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Orchestration - Prefect 3 server
+  # ---------------------------------------------------------------------------
+  prefect-server:
+    image: prefecthq/prefect:3-python3.12
+    <<: *restart
+    command:
+      - prefect
+      - server
+      - start
+      - --host
+      - 0.0.0.0
+      - --port
+      - "4200"
+    environment:
+      <<: *common-env
+      PREFECT_API_URL: http://prefect-server:4200/api
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+      PREFECT_SERVER_API_PORT: "4200"
+      PREFECT_UI_API_URL: /prefect/api
+      PREFECT_HOME: /prefect-data
+    volumes:
+      - prefect_data:/prefect-data
+    networks: [backend]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://localhost:4200/api/health',
+          timeout=5).status==200 else 1)"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+
+  # ---------------------------------------------------------------------------
+  # Orchestration - Prefect worker
+  # ---------------------------------------------------------------------------
+  prefect-worker:
+    image: prefecthq/prefect:3-python3.12
+    <<: *restart
+    command:
+      - prefect
+      - worker
+      - start
+      - --pool
+      - ${PREFECT_WORK_POOL:-energy-pool}
+      - --type
+      - process
+    environment:
+      <<: *common-env
+      PREFECT_API_URL: http://prefect-server:4200/api
+      PREFECT_HOME: /prefect-data
+    volumes:
+      - prefect_data:/prefect-data
+    networks: [backend]
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    healthcheck:
+      # The worker exposes no endpoint of its own; confirm it can still reach
+      # the server, which is the failure mode that actually matters.
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://prefect-server:4200/api/health',
+          timeout=5).status==200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Application - FastAPI
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+      args:
+        PYTHON_VERSION: "3.12"
+    <<: *restart
+    expose:
+      - "8000"
+    environment:
+      <<: [*common-env, *db-env, *minio-env]
+      API_HOST: 0.0.0.0
+      API_PORT: "8000"
+      API_ROOT_PATH: ${API_ROOT_PATH:-/api}
+      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost}
+      API_SECRET_KEY: ${API_SECRET_KEY:?API_SECRET_KEY must be set in .env}
+      PREFECT_API_URL: http://prefect-server:4200/api
+      DATA_FRESHNESS_MAX_LAG_HOURS: ${DATA_FRESHNESS_MAX_LAG_HOURS:-6}
+      CONFIG_DIR: /app/config
+    networks: [backend]
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Application - Plotly Dash
+  # ---------------------------------------------------------------------------
+  dash:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dash
+      args:
+        PYTHON_VERSION: "3.12"
+    <<: *restart
+    expose:
+      - "8050"
+    environment:
+      <<: [*common-env, *db-env]
+      DASH_HOST: 0.0.0.0
+      DASH_PORT: "8050"
+      DASH_URL_BASE_PATHNAME: ${DASH_URL_BASE_PATHNAME:-/}
+      CONFIG_DIR: /app/config
+    networks: [backend]
+    depends_on:
+      db:
+        condition: service_healthy
+
+networks:
+  # Only Caddy sits on `edge`; everything else is backend-only.
+  edge:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: false
+
+volumes:
+  db_data:
+  minio_data:
+  prefect_data:
+  caddy_data:
+  caddy_config:

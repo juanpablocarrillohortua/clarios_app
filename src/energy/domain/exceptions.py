@@ -1,0 +1,231 @@
+"""Domain exception hierarchy.
+
+Layer: domain
+
+Every error the platform raises on purpose descends from :class:`EnergyError`.
+Exceptions carry structured context (``details``) rather than pre-formatted
+messages, so the API layer can serialise them and the logging layer can index
+them without re-parsing strings.
+
+This module is pure: it imports nothing from ``energy`` and performs no I/O, so
+it is safe to import from any layer including ``domain`` itself.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+class EnergyError(Exception):
+    """Base class for every deliberate error raised by the platform.
+
+    Args:
+        message: human-readable description, in English, without trailing period.
+        **details: structured context attached to the error, for example
+            ``plant_id="P-001"`` or ``column="energy_kwh"``. These land in log
+            records and in API error payloads.
+    """
+
+    #: Stable, machine-readable code used by the API error envelope.
+    code: str = "energy_error"
+
+    def __init__(self, message: str, **details: Any) -> None:
+        super().__init__(message)
+        self.message = message
+        self.details: dict[str, Any] = details
+
+    def __str__(self) -> str:
+        """Return the message with its structured context appended, if any."""
+        if not self.details:
+            return self.message
+        rendered = ", ".join(f"{key}={value!r}" for key, value in sorted(self.details.items()))
+        return f"{self.message} ({rendered})"
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a JSON-serialisable representation for API responses.
+
+        Returns:
+            A mapping with ``code``, ``message`` and ``details`` keys.
+        """
+        return {"code": self.code, "message": self.message, "details": self.details}
+
+
+# -----------------------------------------------------------------------------
+# Configuration
+# -----------------------------------------------------------------------------
+class ConfigurationError(EnergyError):
+    """Raised when configuration is missing, malformed, or mutually inconsistent."""
+
+    code = "configuration_error"
+
+
+class UnknownSourceError(ConfigurationError):
+    """Raised when ``sources.yaml`` does not define the requested source key."""
+
+    code = "unknown_source"
+
+
+class UnknownKPIError(ConfigurationError):
+    """Raised when ``kpis.yaml`` does not define the requested KPI key."""
+
+    code = "unknown_kpi"
+
+
+# -----------------------------------------------------------------------------
+# Domain rules
+# -----------------------------------------------------------------------------
+class DomainRuleError(EnergyError):
+    """Base class for violations of an invariant the business defines."""
+
+    code = "domain_rule_error"
+
+
+class InvalidTimeWindowError(DomainRuleError):
+    """Raised when a time window is not aligned to the canonical grid or is inverted."""
+
+    code = "invalid_time_window"
+
+
+class NaiveDatetimeError(DomainRuleError):
+    """Raised when a timezone-naive datetime reaches the domain.
+
+    Every timestamp crossing a boundary into the domain must be timezone-aware
+    and expressed in UTC. Adapters localise on the way in; nothing downstream
+    guesses a timezone.
+    """
+
+    code = "naive_datetime"
+
+
+class UnitMismatchError(DomainRuleError):
+    """Raised when arithmetic is attempted between incompatible units of measure."""
+
+    code = "unit_mismatch"
+
+
+class NegativeEnergyError(DomainRuleError):
+    """Raised when an energy amount is negative outside an explicitly signed context."""
+
+    code = "negative_energy"
+
+
+# -----------------------------------------------------------------------------
+# Data quality and ingestion
+# -----------------------------------------------------------------------------
+class DataQualityError(EnergyError):
+    """Base class for errors detected while validating ingested data."""
+
+    code = "data_quality_error"
+
+
+class SchemaValidationError(DataQualityError):
+    """Raised when a dataframe fails its Pandera contract.
+
+    Args:
+        message: what failed.
+        **details: should include ``schema``, ``layer`` and ``failure_cases``.
+    """
+
+    code = "schema_validation_error"
+
+
+class DuplicateReadingError(DataQualityError):
+    """Raised when the same (meter, timestamp) pair arrives twice with different values."""
+
+    code = "duplicate_reading"
+
+
+class QuarantinedRowsError(DataQualityError):
+    """Raised when a batch exceeds the tolerated share of rejected rows.
+
+    Individual bad rows are routed to ``silver.quarantine`` without raising; this
+    error signals that so many rows failed that the batch itself is untrustworthy.
+    """
+
+    code = "quarantined_rows"
+
+
+class IngestionError(EnergyError):
+    """Base class for failures while reading from an external source system."""
+
+    code = "ingestion_error"
+
+
+class SourceUnavailableError(IngestionError):
+    """Raised when a source system cannot be reached or authenticated against."""
+
+    code = "source_unavailable"
+
+
+class UnsupportedFileFormatError(IngestionError):
+    """Raised when an uploaded file is not a format any adapter can read."""
+
+    code = "unsupported_file_format"
+
+
+class ContentHashMismatchError(IngestionError):
+    """Raised when a re-read of a Bronze payload does not match its stored hash."""
+
+    code = "content_hash_mismatch"
+
+
+# -----------------------------------------------------------------------------
+# Persistence and repositories
+# -----------------------------------------------------------------------------
+class RepositoryError(EnergyError):
+    """Base class for persistence failures surfaced through a repository port."""
+
+    code = "repository_error"
+
+
+class EntityNotFoundError(RepositoryError):
+    """Raised when a lookup by identifier finds nothing."""
+
+    code = "entity_not_found"
+
+
+class DatabaseUnavailableError(RepositoryError):
+    """Raised when the database cannot be reached or a required extension is missing."""
+
+    code = "database_unavailable"
+
+
+# -----------------------------------------------------------------------------
+# Pipelines
+# -----------------------------------------------------------------------------
+class PipelineError(EnergyError):
+    """Base class for orchestration-level failures."""
+
+    code = "pipeline_error"
+
+
+class WatermarkError(PipelineError):
+    """Raised when incremental ingestion state is missing, stale, or moves backwards."""
+
+    code = "watermark_error"
+
+
+__all__ = [
+    "ConfigurationError",
+    "ContentHashMismatchError",
+    "DataQualityError",
+    "DatabaseUnavailableError",
+    "DomainRuleError",
+    "DuplicateReadingError",
+    "EnergyError",
+    "EntityNotFoundError",
+    "IngestionError",
+    "InvalidTimeWindowError",
+    "NaiveDatetimeError",
+    "NegativeEnergyError",
+    "PipelineError",
+    "QuarantinedRowsError",
+    "RepositoryError",
+    "SchemaValidationError",
+    "SourceUnavailableError",
+    "UnitMismatchError",
+    "UnknownKPIError",
+    "UnknownSourceError",
+    "UnsupportedFileFormatError",
+    "WatermarkError",
+]

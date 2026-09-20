@@ -173,9 +173,34 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-# Cursor  
-#  Cursor is an AI-powered code editor.`.cursorignore` specifies files/directories to 
+# Cursor
+#  Cursor is an AI-powered code editor.`.cursorignore` specifies files/directories to
 #  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# =============================================================================
+# Clarios Energy - project specific
+# =============================================================================
+
+# Local environment (never commit real credentials; .env.example is the template)
+.env
+.env.local
+.env.*.local
+
+# Local compose customisations
+docker-compose.override.yml
+
+# Quality-gate output
+reports/
+coverage.xml
+htmlcov/
+
+# Local data landing zone and generated fixtures
+data/
+tests/fixtures/*
+!tests/fixtures/.gitkeep
+
+# Prefect local state
+.prefect/

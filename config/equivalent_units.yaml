@@ -1,0 +1,106 @@
+# =============================================================================
+# Production equivalence factors
+#
+# Converts a heterogeneous product mix into one comparable denominator, so that
+# Specific Energy Consumption means the same thing across plants, months and
+# product lines. A plant switching from an easy product to a hard one shows a
+# worse raw kWh-per-tonne while being no less efficient; these factors remove
+# that distortion.
+#
+# Factors are VERSIONED. A reformulation or process change makes a factor drift,
+# and historical KPIs must not be silently rewritten when a new factor is agreed.
+# Every entry therefore carries `valid_from` / `valid_to`, and the resolver in
+# `energy.domain.equivalent_units` picks the version in force at the START of the
+# period being computed.
+#
+# Rules enforced by `validate_catalogue()`:
+#   - exactly one product must be the reference, with a factor of 1.0
+#   - validity windows for one product may not overlap
+#   - validity windows for one product may not leave gaps
+#   - every factor must be strictly positive
+# =============================================================================
+
+version: 1
+
+# The product every factor is expressed relative to.
+reference_product: STD-BATT-12V
+
+products:
+  STD-BATT-12V:
+    name: Standard 12V battery
+    basis: unit
+    versions:
+      - factor: 1.0
+        valid_from: "2024-01-01T00:00:00Z"
+        valid_to: null
+        note: Reference product. Factor is 1.0 by definition.
+
+  AGM-BATT-12V:
+    name: AGM 12V battery
+    basis: unit
+    versions:
+      - factor: 1.45
+        valid_from: "2024-01-01T00:00:00Z"
+        valid_to: "2025-07-01T00:00:00Z"
+        note: Original factor from the 2023 energy audit.
+      - factor: 1.38
+        valid_from: "2025-07-01T00:00:00Z"
+        valid_to: null
+        note: >-
+          Revised after the curing oven retrofit reduced AGM-specific energy.
+          Periods before 2025-07 keep the 1.45 factor.
+
+  EFB-BATT-12V:
+    name: Enhanced flooded battery 12V
+    basis: unit
+    versions:
+      - factor: 1.18
+        valid_from: "2024-01-01T00:00:00Z"
+        valid_to: null
+
+  IND-BATT-2V:
+    name: Industrial 2V cell
+    basis: unit
+    versions:
+      - factor: 3.60
+        valid_from: "2024-01-01T00:00:00Z"
+        valid_to: null
+        note: Larger format, substantially higher formation energy per unit.
+
+  LEAD-INGOT:
+    name: Recycled lead ingot
+    basis: tonne
+    versions:
+      - factor: 0.82
+        valid_from: "2024-01-01T00:00:00Z"
+        valid_to: null
+        note: >-
+          Smelter output, measured per tonne rather than per unit. The basis
+          difference is why `basis` is declared per product and must be checked
+          before summing.
+
+  PLASTIC-CASE:
+    name: Moulded polypropylene case
+    basis: unit
+    versions:
+      - factor: 0.09
+        valid_from: "2024-01-01T00:00:00Z"
+        valid_to: null
+
+# -----------------------------------------------------------------------------
+# Calorific values for converting gas volume (Nm3) into energy (kWh).
+# Supplied by the gas distributor and revised periodically; also versioned,
+# because applying today's value to last year's volume misstates that year.
+# -----------------------------------------------------------------------------
+calorific_values:
+  unit: kWh/Nm3
+  versions:
+    - value: 10.55
+      valid_from: "2024-01-01T00:00:00Z"
+      valid_to: "2025-01-01T00:00:00Z"
+    - value: 10.61
+      valid_from: "2025-01-01T00:00:00Z"
+      valid_to: "2026-01-01T00:00:00Z"
+    - value: 10.58
+      valid_from: "2026-01-01T00:00:00Z"
+      valid_to: null

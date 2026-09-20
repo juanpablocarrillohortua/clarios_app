@@ -1,0 +1,215 @@
+# =============================================================================
+# Data source registry
+#
+# Declares every system the platform ingests from. `energy.adapters.registry`
+# turns these entries into live adapter instances, which is what makes adding a
+# plant or a source a configuration change rather than a code change.
+#
+# `priority` is the conflict-resolution policy. When two sources report the same
+# meter and interval, the LOWER priority number wins, and the loser is recorded
+# in `silver.consolidation_audit` rather than discarded silently.
+#
+# `resample.rule` must match what the source actually measures:
+#   sum           - interval consumption counters
+#   time_weighted - instantaneous measurements (demand, power)
+#   last          - cumulative registers, where the interval value is a difference
+#   mean          - averaged process values
+#
+# `timezone` is the timezone the SOURCE reports in. Conversion to UTC happens
+# before resampling; doing it afterwards misplaces every interval across a
+# daylight-saving transition.
+# =============================================================================
+
+version: 1
+
+defaults:
+  divergence_tolerance_pct: 2.0
+  max_rejection_rate: 0.05
+  lateness_allowance: PT6H
+
+plants:
+  MTY-01:
+    name: Monterrey Plant 1
+    timezone: America/Monterrey
+
+  MTY-02:
+    name: Monterrey Plant 2
+    timezone: America/Monterrey
+
+  BOG-01:
+    name: Bogota Plant
+    timezone: America/Bogota
+
+sources:
+  # ---------------------------------------------------------------------------
+  # 1. Utility interval meter via historian - the authoritative electricity source
+  # ---------------------------------------------------------------------------
+  mty01_historian_main:
+    plant: MTY-01
+    kind: historian
+    priority: 10
+    timezone: UTC
+    native_frequency: PT15M
+    supports_incremental: true
+    resample:
+      rule: sum
+      commodity: electricity
+    connection:
+      base_url: http://historian.mty01.internal:8080
+      tag_prefix: MTY01.ELEC.
+      retrieval_mode: time_weighted
+      max_tags_per_request: 50
+      timeout_seconds: 60
+      verify_tls: true
+    tags:
+      - MAIN-INCOMER-01
+      - MAIN-INCOMER-02
+      - FORMATION-AREA
+      - CASTING-AREA
+
+  # ---------------------------------------------------------------------------
+  # 2. Demand readings, separate because they are instantaneous, not cumulative
+  # ---------------------------------------------------------------------------
+  mty01_historian_demand:
+    plant: MTY-01
+    kind: historian
+    priority: 15
+    timezone: UTC
+    native_frequency: PT1M
+    supports_incremental: true
+    resample:
+      rule: time_weighted
+      commodity: electricity
+      aggregate_to_grid: max
+    connection:
+      base_url: http://historian.mty01.internal:8080
+      tag_prefix: MTY01.DEMAND.
+      retrieval_mode: interpolated
+      max_tags_per_request: 50
+      timeout_seconds: 60
+      verify_tls: true
+    tags:
+      - MAIN-KW
+
+  # ---------------------------------------------------------------------------
+  # 3. Monthly utility invoice workbook - lowest priority but highest authority
+  #    for billing reconciliation, hence the separate reconcile flag
+  # ---------------------------------------------------------------------------
+  mty01_invoice_excel:
+    plant: MTY-01
+    kind: excel
+    priority: 90
+    timezone: America/Monterrey
+    native_frequency: P1M
+    supports_incremental: false
+    reconcile_only: true
+    resample:
+      rule: sum
+      commodity: electricity
+    layout:
+      sheet_name: Consumption
+      header_row: 4
+      first_data_row: 6
+      timestamp_column: period_start
+      column_map:
+        Period: period_start
+        "Consumption (kWh)": value
+        Meter: meter_tag
+      skip_rows_matching:
+        - "^TOTAL"
+        - "^Subtotal"
+        - "^\\s*$"
+
+  # ---------------------------------------------------------------------------
+  # 4. Gas meter readings, manually recorded weekly
+  # ---------------------------------------------------------------------------
+  mty01_gas_excel:
+    plant: MTY-01
+    kind: excel
+    priority: 20
+    timezone: America/Monterrey
+    native_frequency: P1D
+    supports_incremental: false
+    resample:
+      rule: sum
+      commodity: gas
+    layout:
+      sheet_name: Gas
+      header_row: 1
+      first_data_row: 2
+      timestamp_column: reading_date
+      column_map:
+        Date: reading_date
+        "Volume (Nm3)": value
+        Meter: meter_tag
+      skip_rows_matching:
+        - "^TOTAL"
+
+  # ---------------------------------------------------------------------------
+  # 5. ERP production extract - the denominator of every efficiency KPI
+  # ---------------------------------------------------------------------------
+  mty01_erp_production:
+    plant: MTY-01
+    kind: erp
+    priority: 10
+    timezone: America/Monterrey
+    native_frequency: P1D
+    supports_incremental: true
+    resample:
+      rule: sum
+      commodity: production
+    connection:
+      dsn_env: ERP_REPLICA_DSN
+      query_name: daily_production_by_product
+      batch_column: production_date
+      timeout_seconds: 300
+
+  # ---------------------------------------------------------------------------
+  # 6. Second plant, same historian vendor, different endpoint
+  # ---------------------------------------------------------------------------
+  mty02_historian_main:
+    plant: MTY-02
+    kind: historian
+    priority: 10
+    timezone: UTC
+    native_frequency: PT15M
+    supports_incremental: true
+    resample:
+      rule: sum
+      commodity: electricity
+    connection:
+      base_url: http://historian.mty02.internal:8080
+      tag_prefix: MTY02.ELEC.
+      retrieval_mode: time_weighted
+      max_tags_per_request: 50
+      timeout_seconds: 60
+      verify_tls: true
+    tags:
+      - MAIN-INCOMER
+      - ASSEMBLY-LINE-1
+      - ASSEMBLY-LINE-2
+
+  # ---------------------------------------------------------------------------
+  # 7. Bogota plant - edge devices push rather than being polled
+  # ---------------------------------------------------------------------------
+  bog01_edge_push:
+    plant: BOG-01
+    kind: historian
+    priority: 10
+    timezone: UTC
+    native_frequency: PT5M
+    supports_incremental: true
+    push_based: true
+    resample:
+      rule: sum
+      commodity: electricity
+    connection:
+      base_url: http://gateway.bog01.internal:8080
+      tag_prefix: BOG01.
+      retrieval_mode: raw
+      max_tags_per_request: 25
+      timeout_seconds: 30
+      verify_tls: false
+    tags:
+      - MAIN-INCOMER
+      - COMPRESSOR-HOUSE

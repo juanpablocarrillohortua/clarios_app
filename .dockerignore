@@ -1,0 +1,54 @@
+# Keep the build context small and secrets out of image layers.
+
+# Version control
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python artefacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+reports/
+
+# Local data and notebooks
+data/
+notebooks/
+*.ipynb
+tests/fixtures/*.xlsx
+tests/fixtures/*.csv
+
+# Editors and OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Docs and compose overrides are not needed at runtime
+docs/
+docker-compose.override.yml
+docker-compose.override.yml.example

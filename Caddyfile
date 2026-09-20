@@ -1,0 +1,90 @@
+# =============================================================================
+# Clarios Energy - reverse proxy
+#
+# Caddy is the only service that publishes ports. Everything behind it is
+# reachable only on the internal compose network, so this file is the complete
+# definition of what the outside world can touch.
+#
+# Local development runs plain HTTP on the :80 site block below. For a real
+# deployment, replace `:80` with the hostname (for example
+# `energy.example.com`) and Caddy provisions and renews a certificate
+# automatically - that is the only change required.
+# =============================================================================
+
+{
+	# Automatic HTTPS is off for local use: `localhost` cannot be issued a
+	# public certificate, and an internal CA would make every curl and browser
+	# warn. Delete this block when deploying against a real hostname.
+	auto_https off
+
+	admin off
+
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}
+
+:80 {
+	encode zstd gzip
+
+	# -------------------------------------------------------------------------
+	# Security headers
+	# -------------------------------------------------------------------------
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy strict-origin-when-cross-origin
+		# Caddy advertising its version helps nobody but an attacker.
+		-Server
+	}
+
+	# -------------------------------------------------------------------------
+	# API - /api/* is stripped before proxying; FastAPI is told its external
+	# prefix through API_ROOT_PATH so generated URLs and /api/docs stay correct.
+	# -------------------------------------------------------------------------
+	handle_path /api/* {
+		reverse_proxy api:8000 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# -------------------------------------------------------------------------
+	# Prefect UI and API
+	# -------------------------------------------------------------------------
+	handle_path /prefect/* {
+		reverse_proxy prefect-server:4200 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# -------------------------------------------------------------------------
+	# MinIO console. The S3 API on :9000 is deliberately NOT proxied - object
+	# storage is an internal concern and must not be reachable from outside.
+	# -------------------------------------------------------------------------
+	handle_path /minio/* {
+		reverse_proxy minio:9001 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# -------------------------------------------------------------------------
+	# Dashboards at the root. Must be last: it matches everything not claimed
+	# by a handle_path above.
+	# -------------------------------------------------------------------------
+	handle {
+		reverse_proxy dash:8050 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}
