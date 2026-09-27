@@ -170,6 +170,8 @@ ban-relative-imports = "all"
 known-first-party = ["energy"]
 
 [tool.ruff.lint.per-file-ignores]
+# Ignore prints on notebooks
+"*.ipynb" = ["T201"]
 # Tests: magic numbers, private access and missing docstrings on helpers are fine.
 # TC003 is excluded because pytest reads fixture annotations at collection time.
 "tests/**/*.py" = ["D", "ANN", "PLR2004", "S105", "S106", "SLF001", "ARG001", "TC003"]
