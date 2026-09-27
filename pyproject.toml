@@ -115,7 +115,11 @@ timezone = "UTC"
 target-version = "py312"
 line-length = 100
 src = ["src", "tests", "scripts"]
-extend-exclude = ["migrations/versions/__pycache__"]
+# data_utils/ is a co-located analysis toolkit, not part of this project and not
+# written to its standards. Excluding it here keeps `make check` meaningful; the
+# ruff pre-commit hooks pass --force-exclude, so they honour this too and the two
+# never disagree.
+extend-exclude = ["migrations/versions/__pycache__", "data_utils"]
 
 [tool.ruff.lint]
 select = [
