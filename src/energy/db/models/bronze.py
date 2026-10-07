@@ -14,7 +14,9 @@ Responsibility:
     ``migrations/versions/0002`` and ``0005``. Revision 0002 also creates five
     landing tables for the equivalent-batteries exports (``raw_rct_wo``,
     ``raw_facturas``, ``raw_product_struc``, ``raw_item_master``,
-    ``raw_manual_sheets``); they are mapped when their loader is built.
+    ``raw_manual_sheets``). Those have no mapped class: the loader writes them
+    with ``COPY`` through :mod:`energy.adapters.postgres_bronze_repo`, and the
+    rules for their payloads live in :mod:`energy.domain.landing`.
 
 Depends on:
     ``sqlmodel``, ``energy.core.constants``.
@@ -63,9 +65,11 @@ class IngestionRun:
         source_system: the source it read.
         plant_code: the plant it ran for.
         state: pending, running, completed, failed, or cancelled.
-        window_start: first date of the business period the extract covers;
-            null when it is unknown.
-        window_end: last date of that period; null when it is unknown.
+        window_start: first date of the business period the run covers: the
+            earliest date found in the rows it landed, unless the caller stated
+            one. No year is assumed. Null when it is unknown, and for sources
+            that are not dated.
+        window_end: last date of that period, likewise.
         qad_program: the QAD program that produced the export, as its Info
             sheet reports it; null for sources without one.
         qad_exploration: the QAD exploration name, from the same sheet.

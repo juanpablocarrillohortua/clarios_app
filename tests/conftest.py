@@ -16,6 +16,7 @@ Everything session-scoped is created lazily, so a pure unit-test run
 
 from __future__ import annotations
 
+import contextlib
 import os
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
@@ -99,6 +100,7 @@ def database_url() -> Iterator[str]:
     except ImportError:  # pragma: no cover - testcontainers is a dev dependency
         pytest.skip("testcontainers is not installed and DATABASE_URL is not reachable")
 
+    container = None
     try:
         container = PostgresContainer(
             image=TIMESCALE_IMAGE,
@@ -109,6 +111,10 @@ def database_url() -> Iterator[str]:
         )
         container.start()
     except Exception as exc:  # any Docker failure means "skip"
+        # A container that started but did not answer in time is still running.
+        if container is not None:
+            with contextlib.suppress(Exception):
+                container.stop()
         pytest.skip(f"cannot start a TimescaleDB test container: {exc}")
 
     try:
@@ -203,6 +209,50 @@ def migrated_database(database_url: str) -> Iterator[str]:
             connection.execute(text("DROP TABLE IF EXISTS public.alembic_version"))
         cleanup_engine.dispose()
 
+        if previous is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous
+
+
+BRONZE_REVISION = "0002"
+
+
+@pytest.fixture(scope="class")
+def bronze_engine(database_url: str) -> Iterator[Engine]:
+    """Return an engine bound to a database migrated to the Bronze revision only.
+
+    Class-scoped: applying the migrations is by far the slowest step of the
+    integration suite, and the Bronze tests only read the schema, land rows they
+    roll back, or build on one shared load, so a class can share one database.
+
+    Yields:
+        An engine for a database holding the ``bronze`` schema and nothing else.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from alembic import command  # noqa: PLC0415
+    from alembic.config import Config  # noqa: PLC0415
+
+    from energy.core.constants import ALL_SCHEMAS  # noqa: PLC0415
+
+    previous = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = database_url
+
+    root = Path(__file__).resolve().parent.parent
+    config = Config(toml_file=str(root / "pyproject.toml"))
+    config.set_main_option("script_location", str(root / "migrations"))
+
+    bronze = create_engine(database_url, future=True)
+    try:
+        command.upgrade(config, BRONZE_REVISION)
+        yield bronze
+    finally:
+        with bronze.begin() as connection:
+            for schema in reversed(ALL_SCHEMAS):
+                connection.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            connection.execute(text("DROP TABLE IF EXISTS public.alembic_version"))
+        bronze.dispose()
         if previous is None:
             os.environ.pop("DATABASE_URL", None)
         else:

@@ -5,8 +5,10 @@ how the pieces relate and where to look next. For every column of every table, s
 the [data dictionary](data_dictionary.md).
 
 **Where things stand.** The tables described here exist, and the migrations that
-create them are tested. The programs that fill them are not written yet, so a fresh
-database is empty. Sections marked *planned* describe tables that do not exist yet.
+create them are tested. One loader is built: it lands the equivalent-batteries
+workbooks in Bronze (section 3). Nothing fills the other tables yet, so on a fresh
+database they are empty. Sections marked *planned* describe tables that do not
+exist yet.
 
 ---
 
@@ -87,18 +89,60 @@ Created by [`0002_create_bronze_schema.py`](../migrations/versions/0002_create_b
 
 ### How one workbook becomes Bronze rows
 
-This is the sequence the tables are designed for.
+This is what the loader does for each workbook.
 
 ```mermaid
 flowchart TD
     W["A workbook exported from QAD"]
     W --> A["1. Archive the file unchanged<br/>in object storage"]
-    A --> F["raw_files<br/>one row per workbook"]
-    W --> R["2. Open a run<br/>ingestion_runs, state = running"]
-    R --> L["3. Copy every sheet row into its landing table<br/>one spreadsheet row = one Bronze row"]
-    F --> L
-    L --> C["4. Close the run<br/>state = completed, row_count filled in"]
+    A --> F["2. Catalogue it<br/>raw_files, one row per distinct file"]
+    F --> Q{"3. Did a completed run<br/>already land these sheets?"}
+    Q -- "yes" --> S["Stop: nothing to do"]
+    Q -- "no" --> R["4. Open a run<br/>ingestion_runs, state = running"]
+    R --> L["5. Copy every sheet row into its landing table<br/>one spreadsheet row = one Bronze row<br/>all sheets in one transaction"]
+    L -- "all rows in" --> C["6. Close the run<br/>state = completed, row_count filled in,<br/>period = first and last date found in the rows"]
+    L -- "anything fails" --> X["Undo every row of the run<br/>state = failed, error filled in"]
 ```
+
+Two consequences worth knowing:
+
+- **Loading the same file twice does nothing.** A sheet that a completed run already
+  landed is skipped. To land it again on purpose, use `--force`; Bronze then holds
+  both copies, each under its own run.
+- **A run is all or nothing.** A `completed` run has all its rows. A `failed` run has
+  none, and its `error` column says why.
+- **The loader assumes no year.** It lands whatever dates an export holds, and each
+  run records the first and last *Fecha Efectiva* it found (`window_start`,
+  `window_end`). Which fiscal year a figure belongs to is decided later, in Gold.
+
+### Loading the workbooks
+
+Put the workbooks in `data/raw_excels/` and run:
+
+```bash
+make equs-load
+```
+
+This lands every workbook the calculation uses, in a fixed order, and prints one
+line per sheet. About 205,000 rows take under a minute. The files are only read,
+never changed. To land a single workbook or chosen sheets, see the `energy equs
+load` examples in the [README](../README.md).
+
+**Exports of other years go in the same folder.** Name each one with the usual
+name followed by anything, and `make equs-load` lands the ones it has not landed
+yet:
+
+```text
+Calculo de equivalente - Explorar transacciones por art.xlsx        the current export
+Calculo de equivalente - Explorar transacciones por art FY24.xlsx   an older one
+Calculo de equivalente - Unidades facturadas FY24.xlsx              its invoices
+```
+
+This works for the two movement exports only (transactions and invoices). The
+structure and catalogue workbooks are snapshots, so there is one file of each,
+under its exact name: to update one, replace the file. Any workbook in the
+folder that the loader does not recognise is listed at the end of its output as
+not loaded.
 
 ### The tables
 
@@ -175,16 +219,19 @@ The five landing tables have the same columns; the diagram spells them out once,
 `raw_rct_wo`. `raw_readings` is the landing table for energy readings. It is older
 than the others and is not linked to the two ledgers by a foreign key.
 
-| Table | What lands in it |
-|---|---|
-| `ingestion_runs` | One row per load: which source, which period, what state, how many rows. |
-| `raw_files` | One row per archived workbook, identified by the hash of its bytes. |
-| `raw_rct_wo` | Production receipts: *Explorar transacciones por art* › `Datos`. |
-| `raw_facturas` | Invoice lines: *Unidades facturadas* › `Datos`. |
-| `raw_product_struc` | Product structures: *BOM BATERIAS FORMADAS* › `PASTA`, `PLACAS`, `BAT ENS`, `BAT FOR`, `BAT TERM`, and *ESTRUCTURA DECORADO* › `Datos`. |
-| `raw_item_master` | The item master: *Item_Master* › `Datos`, `Grupo-Fam`. The workbook has not been delivered yet. |
-| `raw_manual_sheets` | Hand-made catalogues. `dataset_key` says which one: `clasif_poly`, `lineas_produccion`, `instrucc`, `element_deco`, `comparativo_lineas`. |
-| `raw_readings` | Energy meter readings. |
+| Table | What lands in it | Rows with the FY26 files |
+|---|---|---|
+| `ingestion_runs` | One row per load: which source, which period, what state, how many rows. | 7 |
+| `raw_files` | One row per archived workbook, identified by the hash of its bytes. | 6 |
+| `raw_rct_wo` | Production receipts: *Explorar transacciones por art* › `Datos`. | 138,773 |
+| `raw_facturas` | Invoice lines: *Unidades facturadas* › `Datos`. | 14,458 |
+| `raw_product_struc` | Product structures: *BOM BATERIAS FORMADAS* › `PASTA`, `PLACAS`, `BAT ENS`, `BAT FOR`, `BAT TERM`, and *ESTRUCTURA DECORADO* › `Datos`. | 48,475 |
+| `raw_item_master` | The item master: *Item_Master* › `Datos`, `Grupo-Fam`. The workbook has not been delivered yet. | 0 |
+| `raw_manual_sheets` | Hand-made catalogues. `dataset_key` says which one: `clasif_poly`, `lineas_produccion`, `instrucc`, `element_deco`, `comparativo_lineas`. | 3,633 |
+| `raw_readings` | Energy meter readings. No loader yet. | 0 |
+
+There are seven runs for six files because *ESTRUCTURA DECORADO* feeds two loads: its
+product structures and its catalogue of decoration pieces.
 
 ### Three rules that make Bronze trustworthy
 
@@ -198,20 +245,43 @@ than the others and is not linked to the two ledgers by a foreign key.
    changes the result of the calculation. That decision belongs to Silver, where it
    is visible. Bronze keeps every copy.
 
-A payload looks like this (shortened). The keys are real headers of the production
-export; the exact text form of dates and numbers will be fixed by the loader.
+This is the payload of the first production receipt (shortened):
 
 ```json
 {
-  "Fecha Efectiva": "2025-12-10 00:00:00",
+  "Fecha Efectiva": "2025-12-10",
   "Número Artículo": "111000002",
   "Número de transacción": "17240425",
   "Tipo Transacción": "RCT-WO",
   "Cambiar cantidad de ubic": "70000",
+  "Costo Total": "182346891.593783",
   "Campo Equs": "N/A",
   "Línea Producción": "MAQBUJEO"
 }
 ```
+
+How a cell becomes text:
+
+| In the workbook | In the payload |
+|---|---|
+| Text | Exactly as it is, not trimmed. `N/A` stays `N/A`. |
+| A whole number, such as 900 | `900`, never `900.0` |
+| Any other number | Its plain decimal form: `0.0636`, `0.00001`. Never `1e-05`. |
+| A date, a date and time, a time | `2025-12-10`, `2025-12-10T11:34:05`, `11:34:00` |
+| True / false | `true` / `false` |
+| An empty cell | No key at all |
+
+How a column gets its key:
+
+| The header is… | The key is… | Example |
+|---|---|---|
+| A text | That text, trimmed | `Fecha Efectiva` |
+| Repeated | The text plus ` #2`, ` #3` | `Descripción`, `Descripción #2` |
+| Blank | The Excel column letter | `P` |
+| Missing (the sheet has no header row) | The Excel column letter | `A`, `B`, `D` |
+
+Rows that are completely empty are not landed. Every other row is, including rows
+that repeat an earlier one.
 
 Around the payload, every landing row records where it came from:
 
@@ -219,6 +289,7 @@ Around the payload, every landing row records where it came from:
 |---|---|
 | `ingestion_run_id` | The load that wrote the row. |
 | `raw_file_id` | The archived workbook it came from. |
+| `source_uri` | Where the original is archived, and which sheet: `bucket://key#sheet`. |
 | `sheet_name`, `source_row` | The sheet and the Excel row number. |
 | `content_hash` | A fingerprint of the payload, used to find identical rows. |
 | `ingested_at` | When the row landed. |
@@ -467,10 +538,12 @@ The database publishes no port to your machine, so open `psql` inside its contai
 ```bash
 make up                                          # start the stack
 make db-upgrade                                  # apply the migrations
+make equs-load                                   # land the EQUS workbooks
 docker compose exec db psql -U energy -d energy  # open a SQL prompt
 ```
 
-Useful commands at the prompt:
+Plain `\dt` shows almost nothing, because the tables are not in the default
+`public` schema. Name the schema:
 
 ```sql
 \dn                       -- list the schemas
@@ -478,10 +551,16 @@ Useful commands at the prompt:
 \d+ bronze.raw_rct_wo     -- columns, indexes and triggers of a table
 
 -- The latest loads
-SELECT run_id, source_key, state, row_count, started_at
+SELECT flow_name, source_key, state, row_count, started_at
 FROM bronze.ingestion_runs
 ORDER BY started_at DESC
 LIMIT 10;
+
+-- Rows landed per sheet of the product structures
+SELECT sheet_name, count(*)
+FROM bronze.raw_product_struc
+GROUP BY sheet_name
+ORDER BY sheet_name;
 
 -- A production receipt by its QAD transaction number
 SELECT sheet_name, source_row, payload

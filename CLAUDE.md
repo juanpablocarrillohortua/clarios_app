@@ -23,8 +23,9 @@ for the design, and [CONTRIBUTING.md](CONTRIBUTING.md) for conventions.
 **Equivalent batteries (EQUS).** The plant's Excel calculation of equivalent
 batteries is being moved into this database. [docs/EQUS_CONTEXT.md](docs/EQUS_CONTEXT.md)
 is the source of truth for its rules and target schema; read it before touching
-anything EQUS. Its Bronze layer is built (revision `0002`); its Silver and Gold
-are not. [docs/database_overview.md](docs/database_overview.md) shows every schema
+anything EQUS. Its Bronze layer is built (revision `0002`) and has a loader
+(`make equs-load`, or `energy equs load` / `load-all`); its Silver and Gold are
+not. [docs/database_overview.md](docs/database_overview.md) shows every schema
 with diagrams.
 
 ---
@@ -47,21 +48,25 @@ Definition-of-Done item is verified against a running stack.
 | `/api/ready` payload | `degraded` (connectivity+extensions healthy, Silver empty) - correct, returns 200 not 503 |
 | Placeholder endpoint | `/api/kpis/summary` -> **501** with `code=not_implemented` |
 | `X-Request-Id` | Present and propagated |
-| `make check` | **Exit 0** - format, lint, mypy strict (82 files), bandit, pip-audit, tests |
-| `make test` | **208 passed, 39 skipped** |
-| Coverage | **93.74%** (threshold 70%) |
-| `make test-integration` | **26 passed** against real TimescaleDB |
+| `make check` | **Exit 0** - format, lint, mypy strict (91 files), bandit, pip-audit, tests |
+| `make test` | **438 passed, 39 skipped** |
+| Coverage | **95.54%** (threshold 70%) |
+| `make test-integration` | **56 passed** against real TimescaleDB and MinIO, with the workbooks present |
 | No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports |
 
-The table count and the three test rows were re-verified on 2026-10-06, after
-revision `0002` was rewritten for the EQUS Bronze layer; the other rows date from
+The table count was re-verified on 2026-10-06, after revision `0002` was rewritten
+for the EQUS Bronze layer, and the `make check`, test and coverage rows on
+2026-10-07, after the Bronze loader was built; the other rows date from
 2026-09-19.
 
 **Integration tests can be skipped silently.** They start a TimescaleDB container
 and wait 120 s for it. On 2026-10-06, with the machine busy, the container needed
 151 s, so `make check` exited 0 with every database test *skipped* (184 passed,
 63 skipped). An idle re-run of `make test-integration` passed. Check the skip
-count: 39 is normal, more means the database tests did not run.
+count: 39 is normal, more means the database tests did not run. The MinIO
+tests do the same: on 2026-10-07 one `make check` exited 0 with 8 of them
+skipped (47 skipped in all) because their container was not ready in 120 s; the
+next run passed all of them.
 
 ### Bugs found and fixed during verification
 
@@ -116,6 +121,7 @@ check free space first.
 | Repo root | `D:\Externado\Catch_2026\clarios_app` |
 | uv | 0.12.17 at `C:\Users\juanp\.local\bin` — **not on the default PATH** |
 | Python | 3.12.14, uv-managed (system Python is 3.13/3.14 — do not use it) |
+| `.venv` | Holds notebook packages that are **not** in `uv.lock` (seaborn, matplotlib, ipykernel, jupyter). A plain `uv sync` is exact and would remove them. To add a dependency: edit `pyproject.toml`, `uv lock`, then `uv pip install <package>==<locked version>` |
 | Shell for `make` | Git Bash at `D:\git\Git\bin\bash.exe`, resolved via `git --exec-path`. Selecting it as bare `bash.exe` picked up WSL's `C:\Windows\System32\bash.exe`, which has docker but no uv. `make` now works from PowerShell, cmd or Git Bash. |
 | Published port | Only Caddy, `CADDY_HTTP_PORT=8080` |
 
@@ -156,6 +162,52 @@ test raising would fail the suite. Keep that distinction.
 - `source_key` on both ledgers accepts only the five EQUS keys. Registering an
   energy-readings run needs a later revision that extends the list.
 - Migrations do not import application code.
+
+**EQUS Bronze loader** (built 2026-10-07):
+
+- Layout follows the hexagon: payload rules in `domain/landing.py` and
+  `domain/qad_export.py` (pure), ports in `ports/workbook_reader.py` and
+  `ports/bronze_landing.py`, adapters in `adapters/calamine_workbook.py`,
+  `postgres_bronze_repo.py`, `local_storage.py` and `minio_storage.py`, the use
+  case in `services/bronze_loader.py`, the routing table and wiring in
+  `pipelines/flows/equs_bronze_load.py`, the commands in `__main__.py`.
+- **The payload rules are a contract.** How a header becomes a key and a cell
+  becomes text decides every `content_hash`. Changing a rule makes the same
+  source row hash differently from the copies already landed.
+- A run is all-or-nothing: rows and the `completed` state commit together; on
+  failure the rows roll back and the run is left `failed`. A sheet already landed
+  by a *completed* run of the same file is skipped unless `--force`.
+- **The loader knows nothing about fiscal years** (decided 2026-10-07: Silver
+  keeps the row dates, Gold assigns the fiscal year). Do not add a year default
+  or a year option to it. A run's `window_start` / `window_end` are the first
+  and last *Fecha Efectiva* found among its rows (`DateSpan` in
+  `domain/landing.py`), written with the completion. Only real date cells count;
+  text is never parsed. The export's search conditions are stored as delivered
+  and never used for the period, because the transactions export states a stale
+  one. `energy equs load --window-start/--window-end` replaces the dates found;
+  `load-all` has no such option.
+- **Several exports side by side.** The two movement routes (`many=True`:
+  transactions and invoices) land every workbook whose normalised name *starts
+  with* the routed name, so `... por art FY24.xlsx` sits beside `... por art.xlsx`.
+  Structures and catalogues are snapshots and match by exact name only. A
+  workbook no route takes is reported (`LoadAllResult.unmatched`). No routed
+  name may be the beginning of another; a unit test checks it.
+- calamine's `iter_rows()` pads the empty rows above the data but drops the empty
+  columns to its left, so a sheet's first row is always Excel row 1 while its
+  first column may not be A. `tests/unit/test_calamine_workbook.py` pins this.
+- The loader runs inside the api container (`make equs-load` mounts
+  `data/raw_excels` read-only and archives to MinIO). From the host neither the
+  database nor MinIO is reachable: point `DATABASE_URL` at a published database
+  and pass `--archive-dir`.
+- To try a load without touching the dev data, override on the make command
+  line, which beats `.env`: `make equs-load POSTGRES_DB=<scratch db>
+  MINIO_BUCKET_BRONZE=<scratch bucket>`.
+- The acceptance tests (`tests/integration/test_equs_bronze_load.py`) need the
+  workbooks in `data/raw_excels`, which is gitignored. Without them the module
+  is skipped, so CI does not run it. They load with exact-name routes, so extra
+  exports in that folder do not change the documented counts.
+  `tests/integration/test_equs_other_years.py` builds its own small exports and
+  runs everywhere.
 
 **Tooling.**
 
@@ -204,6 +256,11 @@ All deliberate; each is explained where it lives.
    yet" rather than "server bug".
 7. **Analytics dependencies (scikit-learn, statsmodels, shap) are an optional
    extra**, not default dependencies — they are heavy and only Phase 5 needs them.
+8. **`adapters/minio_storage.py` is implemented, and `__main__.py` partly**, ahead
+   of Phases 3 and 2: the EQUS Bronze loader needs an archive and a command
+   line. `__main__.py` registers only the `equs` commands; its other functions
+   are still placeholders. `ensure_bucket` creates the bucket but sets no
+   retention policy, which the original docstring had asked for.
 
 ---
 

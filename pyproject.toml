@@ -43,6 +43,9 @@ dependencies = [
     "plotly>=5.24",
     # ---- Ingestion formats ----------------------------------------------
     "openpyxl>=3.1",
+    # Reads cached cell values an order of magnitude faster than openpyxl; the
+    # Bronze loader needs it for exports of 100k+ rows.
+    "python-calamine>=0.8",
     # ---- Cross-cutting ---------------------------------------------------
     "structlog>=24.4",
     "pyyaml>=6.0",
@@ -187,6 +190,8 @@ known-first-party = ["energy"]
 "src/energy/api/**/*.py" = ["TC001", "TC002", "TC003", "B008"]
 # Dash callbacks are registered by decorator and read their annotations too.
 "src/energy/dashboards/**/*.py" = ["TC001", "TC002", "TC003"]
+# Typer resolves command annotations at runtime to build the option parser.
+"src/energy/__main__.py" = ["TC001", "TC002", "TC003"]
 # Adapters construct the port DTOs they return (SourceBatch, WriteResult, ...),
 # so those are genuine runtime imports; the Phase 1 stubs just do not show it.
 "src/energy/adapters/**/*.py" = ["TC001"]

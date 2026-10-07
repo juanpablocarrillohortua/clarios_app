@@ -370,6 +370,8 @@ internal.
 | You want to… | Change this |
 |---|---|
 | Add a data source | `adapters/`, `config/sources.yaml` |
+| Land another EQUS workbook or sheet | the routing table in `pipelines/flows/equs_bronze_load.py` |
+| Change how a spreadsheet row is stored in Bronze | `domain/landing.py` — a contract: it changes every content hash |
 | Change a KPI formula | `domain/kpi_formulas.py` |
 | Add a KPI | `config/kpis.yaml`, then `domain/kpi_formulas.py` if the maths is new |
 | Change what counts as valid data | `schemas/silver.py` |

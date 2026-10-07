@@ -149,25 +149,29 @@ after 2 years.
 
 ### `bronze.ingestion_runs`
 
-The ledger every Bronze row points at.
+The ledger every Bronze row points at. The EQUS loader writes one row per load:
+it inserts the run as `running` before landing anything, then sets it to
+`completed` in the same transaction that lands the rows, or to `failed` after
+rolling them back. So a `completed` run has all its rows and a `failed` run has
+none.
 
 | Column | Type | Null | Description |
 |---|---|---|---|
 | `run_id` | `UUID` | no | Primary key. |
-| `flow_name` | `VARCHAR(100)` | no | Which Prefect flow ran. |
+| `flow_name` | `VARCHAR(100)` | no | The name the load ran under. The EQUS loader uses the workbook's file name without its extension unless told otherwise. |
 | `source_key` | `VARCHAR(64)` | no | Which kind of export it loaded: `qad_rct_wo`, `qad_facturas`, `qad_product_struc`, `item_master` or `manual_sheets`. |
-| `source_system` | `VARCHAR(64)` | no | The source it read. |
-| `plant_code` | `VARCHAR(32)` | no | The plant it ran for. |
+| `source_system` | `VARCHAR(64)` | no | The source it read: `qad` for exports of the ERP, `excel` for workbooks people maintain by hand. |
+| `plant_code` | `VARCHAR(32)` | no | The plant it ran for. `1515` by default. |
 | `state` | `VARCHAR(20)` | no | `pending`, `running`, `completed`, `failed`, `cancelled`. |
-| `window_start` / `window_end` | `DATE` | yes | The business period the extract covers (its *Fecha Efectiva* range). Nullable because the export's own search conditions can be stale. |
+| `window_start` / `window_end` | `DATE` | yes | The business period the run covers: the earliest and the latest *Fecha Efectiva* among the rows it landed, written when the run completes. No year is assumed. `energy equs load --window-start/--window-end` replaces the dates found with the ones given. Null for product structures and catalogues, which are not dated, and for a movement export whose *Fecha Efectiva* holds no date cells. The export's own search conditions are **not** used: the transactions export states a stale period. |
 | `qad_program` / `qad_exploration` / `qad_user` | `VARCHAR` | yes | What the workbook's *Info* sheet says about the query that produced it. |
-| `queried_at` | `TIMESTAMPTZ` | yes | When the query ran, from the *Info* sheet. |
-| `search_conditions` | `JSONB` | no | The rows of the workbook's *Condiciones de búsqueda* sheet, as delivered. Always a JSON array; empty by default. |
+| `queried_at` | `TIMESTAMPTZ` | yes | When the query ran, from *Fecha de consulta* on the *Info* sheet. The text is `dd/mm/yyyy h:mm:ss`, optionally followed by `a. m.` or `p. m.`, in America/Bogota time. Null when it cannot be read. |
+| `search_conditions` | `JSONB` | no | The rows of the workbook's *Condiciones de búsqueda* sheet, as delivered: an array of objects keyed `campo`, `operador`, `valor`, `monto hasta`, with empty cells omitted. Empty array when the workbook has no such sheet. |
 | `started_at` | `TIMESTAMPTZ` | no | Run start. |
 | `finished_at` | `TIMESTAMPTZ` | yes | Null while running. |
 | `row_count` | `BIGINT` | no | Rows written to Bronze. Never negative. |
 | `error` | `TEXT` | no | Failure message; empty on success. |
-| `parameters` | `JSONB` | no | Invocation parameters — what a retry replays. |
+| `parameters` | `JSONB` | no | Invocation parameters — what a retry replays. The EQUS loader stores `filename`, `content_hash`, `sheets` (name, dataset key and header row of each), `plant_code`, `force`, the period dates the caller gave (null when none), `uploaded_by`, and `info`: the whole *Info* sheet as a name-to-value object. |
 
 **Indexes:** `(source_key, started_at DESC)`, `(plant_code, started_at DESC)`,
 `state`.
@@ -186,12 +190,12 @@ bytes a plant sent.
 |---|---|---|---|
 | `raw_file_id` | `UUID` | no | Primary key. |
 | `content_hash` | `CHAR(64)` | no | **Unique** — a re-upload is detected before the file is parsed. |
-| `bucket` / `object_key` | `VARCHAR(63)` / `TEXT` | no | Location in object storage. |
+| `bucket` / `object_key` | `VARCHAR(63)` / `TEXT` | no | Location in object storage. The key is `{plant_code}/{source_key}/{YYYY}/{MM}/{DD}/{content_hash}.{extension}`, dated with the UTC day the file was first archived. |
 | `filename` | `TEXT` | no | Original filename as submitted. |
 | `content_type` | `VARCHAR(150)` | no | MIME type. |
 | `size_bytes` | `BIGINT` | no | Payload size. Must be positive. |
-| `plant_code` / `source_key` | `VARCHAR` | no | What it was uploaded for. `source_key` takes the same five values as on `ingestion_runs`. |
-| `sheet_names` | `TEXT[]` | no | The sheets found in the workbook. Empty by default. |
+| `plant_code` / `source_key` | `VARCHAR` | no | What it was uploaded for. `source_key` takes the same five values as on `ingestion_runs`. One workbook can feed several sources; this is the first one it was loaded for. |
+| `sheet_names` | `TEXT[]` | no | Every sheet found in the workbook, hidden ones included, whether or not it was landed. Empty by default. |
 | `uploaded_by` | `VARCHAR(200)` | no | Who submitted it. |
 | `uploaded_at` | `TIMESTAMPTZ` | no | Receipt time. |
 
@@ -219,11 +223,11 @@ Every one of them has these columns:
 | `ingested_at` | `TIMESTAMPTZ` | no | When the row landed. Part of the PK so the table can become a hypertable. |
 | `ingestion_run_id` | `UUID` | no | FK → `bronze.ingestion_runs`, `ON DELETE RESTRICT`. |
 | `raw_file_id` | `UUID` | yes | FK → `bronze.raw_files`, `ON DELETE RESTRICT`. Null when the rows did not come from an archived workbook. |
-| `source_system` | `VARCHAR(64)` | no | The system the export came from. |
-| `source_uri` | `TEXT` | no | Object-storage key or query reference locating the original. |
+| `source_system` | `VARCHAR(64)` | no | The system the export came from: `qad` or `excel`. |
+| `source_uri` | `TEXT` | no | Where the original is archived and which sheet the row came from: `{bucket}://{object_key}#{sheet_name}`. |
 | `sheet_name` | `VARCHAR(64)` | no | The worksheet the row was read from. |
-| `source_row` | `INTEGER` | no | The Excel row number. At least 1: some hand-made sheets have no header row. |
-| `content_hash` | `CHAR(64)` | no | SHA-256 of the canonical JSON payload. Indexed, **not unique**. |
+| `source_row` | `INTEGER` | no | The real Excel row number, counting empty rows and the header. At least 1: some hand-made sheets have no header row. |
+| `content_hash` | `CHAR(64)` | no | SHA-256 of the canonical JSON of the payload: keys sorted, compact separators, UTF-8, non-ASCII characters written as themselves. Indexed, **not unique**. |
 | `plant_code` | `VARCHAR(32)` | no | The plant the export belongs to. |
 | `payload` | `JSONB` | no | **The row exactly as exported.** Keys are the header texts of the sheet (Spanish, with accents); values are the cell text. Nothing is parsed. Always a JSON object. |
 
@@ -234,6 +238,95 @@ a new table.
 
 **Indexes on each:** `content_hash` (duplicate lookup), `ingestion_run_id` and
 `raw_file_id` (audit).
+
+#### What each table holds after loading the FY26 files
+
+| Table | Sheet | `dataset_key` | Header row | Rows |
+|---|---|---|---|---|
+| `raw_rct_wo` | `Datos` | | 1 | 138,773 |
+| `raw_facturas` | `Datos` | | 1 | 14,458 |
+| `raw_product_struc` | `PASTA` | | 1 | 29 |
+| `raw_product_struc` | `PLACAS` | | 1 | 220 |
+| `raw_product_struc` | `BAT ENS` | | 1 | 8,340 |
+| `raw_product_struc` | `BAT FOR` | | 1 | 4,566 |
+| `raw_product_struc` | `BAT TERM` | | 1 | 3,413 |
+| `raw_product_struc` | `Datos` (*ESTRUCTURA DECORADO*) | | 1 | 31,907 |
+| `raw_manual_sheets` | `Clasif_Poly` | `clasif_poly` | 1 | 1,753 |
+| `raw_manual_sheets` | `Lineas Produccion` | `lineas_produccion` | 1 | 64 |
+| `raw_manual_sheets` | `INSTRUCC` | `instrucc` | none | 15 |
+| `raw_manual_sheets` | `ELEMENT DECO` | `element_deco` | 1 | 1,751 |
+| `raw_manual_sheets` | `Hoja1` (*Comparativo lineas*) | `comparativo_lineas` | 1 | 50 |
+| `raw_item_master` | `Datos`, `Grupo-Fam` | | 1 | 0 — workbook not delivered yet |
+
+`L.PRODUCCION` of *EQUS BATT* (`l_produccion`, header row 3) is landed only with
+`energy equs load-all --include-optional`: it gives the group of each production
+line, but shares its sheet with two pivot tables. The sheets `REPORTE QAD` and
+`Unit_Ship` are refused by the loader, because their columns are results of the
+Excel calculation and not sources.
+
+#### How a row becomes a payload
+
+The rules are implemented once, in
+[`energy/domain/landing.py`](../src/energy/domain/landing.py), and Silver relies
+on them to read Bronze.
+
+**Keys.** A key is the header text of the column, trimmed. A blank header becomes
+the Excel column letter (`A`, `B`, … `AA`). A repeated header gets ` #2`, ` #3`:
+the QAD structure exports have two columns headed `Descripción`, which land as
+`Descripción` and `Descripción #2`. When a sheet has no header row every key is a
+column letter.
+
+**Values.** Every value is text, written as follows.
+
+| Cell | Text |
+|---|---|
+| Text | As it is. Not trimmed, not upper-cased; `N/A` stays `N/A`. |
+| Whole number | No trailing `.0`: `900.0` → `900`. |
+| Other number | Shortest exact decimal form, never scientific notation: `0.0636`, `1e-05` → `0.00001`. |
+| Date, date-time, time | ISO-8601: `2025-12-10`, `2025-12-10T11:34:05`, `11:34:00`. |
+| Boolean | `true` or `false`. |
+| Empty | The key is omitted. |
+
+**Rows.** A row that is completely empty is skipped, and so are the rows above
+the header row. Every other row is landed, including exact repeats of an earlier
+row and the header row pasted again inside `PLACAS` (Excel row 257).
+
+#### How the tables are loaded
+
+`energy equs load` lands one workbook and `energy equs load-all` (or
+`make equs-load`) lands every workbook of the monthly close. For each load the
+loader, in this order:
+
+1. refuses a request it cannot honour (unknown source, missing or forbidden
+   sheet, missing dataset key) before writing anything;
+2. archives the file and registers it in `raw_files`, once per distinct hash;
+3. skips the sheets a **completed** run already landed from this exact file, and
+   stops if that is all of them — `--force` lands them again under a new run;
+4. inserts the run as `running`;
+5. lands all requested sheets in one transaction and, in that same transaction,
+   sets the run to `completed` with the period its rows cover; on any error it
+   rolls the rows back and sets the run to `failed`.
+
+The loader only inserts into landing tables and only updates `ingestion_runs`.
+
+**Any year, several files.** The loader does not know about fiscal years. It
+lands whatever dates an export holds; the fiscal year of a figure is assigned
+later, in Gold, from the date of each row.
+
+| Kind of workbook | Files `load-all` lands | Why |
+|---|---|---|
+| Movements: *Explorar transacciones por art*, *Unidades facturadas* | Every workbook whose name **starts with** the usual name, for example `Calculo de equivalente - Explorar transacciones por art FY24.xlsx` | One export per period can sit side by side. Each is one load with its own run and its own period. |
+| Product structures and catalogues | Only the workbook with exactly the usual name | They are snapshots: in Silver the latest load is the one that counts, so a second version must replace the file, not sit beside it. |
+
+Names are compared ignoring case, spaces, hyphens and accents. A workbook that
+no route takes is listed at the end of the output as not loaded. Two exports
+that overlap land their shared rows twice, with the same `content_hash`;
+removing the repeats is a Silver decision.
+
+**Correcting a period.** A file that is already landed is skipped, so loading it
+again with other dates changes nothing. `ingestion_runs` is a ledger and can be
+updated: `UPDATE bronze.ingestion_runs SET window_start = ..., window_end = ...
+WHERE run_id = ...`.
 
 **Why `content_hash` is not unique.** The exports contain genuinely repeated
 rows, and loading the same workbook twice is legitimate. Removing duplicates

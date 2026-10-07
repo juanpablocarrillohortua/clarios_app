@@ -53,7 +53,7 @@ endif
 
 .PHONY: help install up down logs restart format format-check lint typecheck \
         security test test-unit test-integration check db-upgrade db-downgrade \
-        db-revision db-reset seed clean
+        db-revision db-reset seed equs-load clean
 
 # -----------------------------------------------------------------------------
 # Meta
@@ -151,6 +151,15 @@ db-reset: ## Drop, recreate, and re-migrate the database
 seed: ## Load reference data and synthetic sample data
 	$(DC) run --rm --no-deps api python scripts/seed_reference_data.py
 	$(DC) run --rm --no-deps api python scripts/generate_synthetic_data.py
+
+# The workbooks are not part of the image, so their directory is mounted for the
+# run - read-only, because the loader must never modify a source file. Override
+# with `make equs-load EQUS_DIR=/some/other/dir`.
+EQUS_DIR ?= $(CURDIR)/data/raw_excels
+
+equs-load: ## Land the EQUS workbooks of data/raw_excels in Bronze
+	$(DC) run --rm --no-deps -v "$(EQUS_DIR):/app/data/raw_excels:ro" api \
+		energy equs load-all --dir /app/data/raw_excels
 
 # -----------------------------------------------------------------------------
 # Housekeeping

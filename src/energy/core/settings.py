@@ -2,8 +2,8 @@
 
 Layer: core
 
-Settings are grouped into nested models (database, API, MinIO, Prefect, Dash,
-logging, data) so that each layer depends only on the slice it needs. Values come
+Settings are grouped into nested models (database, API, MinIO, archive, Prefect,
+Dash, logging, data) so that each layer depends only on the slice it needs. Values come
 from environment variables first and from ``.env`` second; there are no hardcoded
 credentials and no runtime mutation. Call :func:`get_settings` - it is cached, so
 the environment is read once per process.
@@ -21,6 +21,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 Environment = Literal["local", "ci", "staging", "production"]
 LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
 LogFormat = Literal["console", "json"]
+ArchiveBackend = Literal["minio", "local"]
 
 _ENV_FILE = ".env"
 
@@ -169,6 +170,24 @@ class MinioSettings(BaseSettings):
     bucket_reports: str = Field(default="reports", validation_alias="MINIO_BUCKET_REPORTS")
 
 
+class ArchiveSettings(BaseSettings):
+    """Where the original source files are archived before they are parsed."""
+
+    model_config = _BASE_CONFIG
+
+    # `minio` is the deployed behaviour. `local` writes the same bucket/key
+    # layout under a directory, for a load run from a machine that cannot reach
+    # MinIO - the compose stack publishes no MinIO port.
+    backend: ArchiveBackend = Field(default="minio", validation_alias="ARCHIVE_BACKEND")
+    local_dir: Path = Field(default=Path("data/bronze_archive"), validation_alias="ARCHIVE_DIR")
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _lowercase_backend(cls, value: object) -> object:
+        """Accept ``MinIO`` as well as ``minio``."""
+        return value.strip().lower() if isinstance(value, str) else value
+
+
 class PrefectSettings(BaseSettings):
     """Prefect 3 orchestration server and worker configuration."""
 
@@ -239,6 +258,7 @@ class Settings(BaseSettings):
     api: APISettings = Field(default_factory=APISettings)
     dash: DashSettings = Field(default_factory=DashSettings)
     minio: MinioSettings = Field(default_factory=MinioSettings)
+    archive: ArchiveSettings = Field(default_factory=ArchiveSettings)
     prefect: PrefectSettings = Field(default_factory=PrefectSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     data: DataSettings = Field(default_factory=DataSettings)
@@ -268,6 +288,8 @@ def get_settings() -> Settings:
 
 __all__ = [
     "APISettings",
+    "ArchiveBackend",
+    "ArchiveSettings",
     "DashSettings",
     "DataSettings",
     "DatabaseSettings",

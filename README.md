@@ -284,6 +284,8 @@ with `openssl rand -hex 32`.
 | `MINIO_SECURE` | Use TLS to reach MinIO | `false` | No |
 | `MINIO_BUCKET_BRONZE` | Bucket for archived source files | `bronze-raw` | No |
 | `MINIO_BUCKET_REPORTS` | Bucket for generated reports | `reports` | No |
+| `ARCHIVE_BACKEND` | Where source files are archived: `minio`, or `local` for a directory | `minio` | No |
+| `ARCHIVE_DIR` | Directory used when `ARCHIVE_BACKEND=local` | `data/bronze_archive` | No |
 | **Orchestration** |
 | `PREFECT_API_URL` | Prefect API the worker talks to | `http://prefect-server:4200/api` | No |
 | `PREFECT_SERVER_API_HOST` | Server bind interface | `0.0.0.0` | No |
@@ -379,6 +381,58 @@ Loads reference dimensions and synthetic sample data.
 > `scripts/generate_synthetic_data.py`, which are **Phase 2 placeholders** and
 > currently raise `NotImplementedError`. The target and its wiring are in place;
 > the data generation arrives with Phase 2.
+
+```bash
+make equs-load
+```
+
+Lands the equivalent-batteries (EQUS) workbooks found in `data/raw_excels/` in
+the Bronze layer: about 205,000 rows from six workbooks, in under a minute. The
+originals are archived in MinIO and never modified. Running it again lands
+nothing, because every sheet a completed run already landed is skipped.
+
+The loader assumes no year. It lands whatever dates an export holds, and each run
+records the first and last *Fecha Efectiva* it found. To add the export of
+another period, put it in the same folder under the usual name followed by
+anything, and run `make equs-load` again; only the new file is landed:
+
+```text
+data/raw_excels/Calculo de equivalente - Explorar transacciones por art.xlsx
+data/raw_excels/Calculo de equivalente - Explorar transacciones por art FY24.xlsx
+```
+
+That applies to the transactions and invoices exports. The structure and
+catalogue workbooks are snapshots: there is one of each, under its exact name,
+and a newer version replaces the file. A workbook the loader does not recognise
+is listed at the end of the output as not loaded.
+
+The target runs `energy equs load-all` inside the api container, with the
+workbook directory mounted read-only, because that is where the database and
+MinIO can be reached. `energy equs load` lands one workbook, or some of its
+sheets, and runs the same way (from Git Bash on Windows, prefix the command with
+`MSYS_NO_PATHCONV=1` so the container paths are left alone):
+
+```bash
+docker compose run --rm --no-deps \
+  -v "$(pwd -W 2>/dev/null || pwd)/data/raw_excels:/app/data/raw_excels:ro" api \
+  energy equs load manual_sheets "/app/data/raw_excels/EQUS BATT.xlsx" \
+  --sheet "Clasif_Poly=clasif_poly" --sheet "INSTRUCC=instrucc:0"
+```
+
+| Form | Meaning |
+|---|---|
+| `energy equs load SOURCE_KEY FILE` | Land the source's default sheets. Source keys: `qad_rct_wo`, `qad_facturas`, `qad_product_struc`, `item_master`, `manual_sheets` |
+| `--sheet NAME` | Land this sheet; repeat for several |
+| `--sheet NAME=dataset_key` | A hand-made catalogue, with the name of its dataset |
+| `--sheet NAME:N` | The header is on row `N`; `0` means the sheet has no header row |
+| `--force` | Land the sheets again under a new run |
+| `--window-start`, `--window-end` | State the business period yourself; it replaces the dates found in the rows |
+
+`energy equs load --help` lists every option. On a machine that can reach the
+database but not MinIO, pass `--archive-dir <directory>` (or set
+`ARCHIVE_BACKEND=local`) to archive the originals in a directory instead. What
+each table receives is described in
+**[docs/database_overview.md](docs/database_overview.md)**.
 
 Confirm the schema:
 
@@ -707,6 +761,10 @@ Excel, ERP and historian adapters against the `EnergySource` port; MinIO and
 PostgreSQL repository implementations; the Pandera contracts; validation,
 consolidation and quarantine tasks; the Prefect flows; watermarks; and the upload
 and ingest endpoints.
+
+Built ahead of the rest for the equivalent-batteries work: the MinIO object
+storage adapter, and the loader that lands the EQUS workbooks in Bronze
+(`energy equs load`, `energy equs load-all`).
 
 ### ⬜ Phase 4 — KPI computation and the Gold layer
 

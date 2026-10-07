@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from energy.core.settings import DashSettings
+from energy.core.settings import ArchiveSettings, DashSettings
 
 pytestmark = pytest.mark.unit
 
@@ -59,3 +59,35 @@ def test_dash_app_builds_with_a_mangled_prefix(monkeypatch: pytest.MonkeyPatch) 
         assert app.config.routes_pathname_prefix == "/"
     finally:
         get_settings.cache_clear()
+
+
+def test_archive_defaults_to_minio(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without configuration, originals are archived in object storage."""
+    monkeypatch.delenv("ARCHIVE_BACKEND", raising=False)
+    monkeypatch.delenv("ARCHIVE_DIR", raising=False)
+
+    settings = ArchiveSettings(_env_file=None)
+
+    assert settings.backend == "minio"
+    assert settings.local_dir.as_posix() == "data/bronze_archive"
+
+
+def test_archive_backend_is_read_case_insensitively(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`ARCHIVE_BACKEND=Local` selects the directory backend."""
+    monkeypatch.setenv("ARCHIVE_BACKEND", " Local ")
+    monkeypatch.setenv("ARCHIVE_DIR", "somewhere/else")
+
+    settings = ArchiveSettings(_env_file=None)
+
+    assert settings.backend == "local"
+    assert settings.local_dir.as_posix() == "somewhere/else"
+
+
+def test_archive_backend_rejects_an_unknown_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A typo in the backend fails at start-up rather than at the first load."""
+    from pydantic import ValidationError  # noqa: PLC0415
+
+    monkeypatch.setenv("ARCHIVE_BACKEND", "s3")
+
+    with pytest.raises(ValidationError):
+        ArchiveSettings(_env_file=None)

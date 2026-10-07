@@ -43,8 +43,6 @@ EXPECTED_TABLES: dict[str, set[str]] = {
     GOLD_SCHEMA: {"kpi_hourly", "kpi_daily", "plant_daily_summary"},
 }
 
-BRONZE_REVISION = "0002"
-
 # Index name -> the payload key it is built on. The keys are header texts of the
 # source workbooks, so the accents are part of the contract.
 PAYLOAD_KEY_INDEXES: dict[str, str] = {
@@ -129,43 +127,6 @@ def test_hypertables_are_registered(migrated_engine: Engine) -> None:
     registered = {row[0] for row in rows}
     missing = EXPECTED_HYPERTABLES - registered
     assert not missing, f"tables not converted to hypertables: {sorted(missing)}"
-
-
-@pytest.fixture(scope="class")
-def bronze_engine(database_url: str) -> Engine:
-    """Return an engine bound to a database migrated to the Bronze revision only.
-
-    Class-scoped: applying the migrations is by far the slowest step of this
-    suite, and the Bronze tests only read the schema or write rows they roll
-    back, so they can share one migrated database.
-    """
-    import os  # noqa: PLC0415
-    from pathlib import Path  # noqa: PLC0415
-
-    from alembic import command  # noqa: PLC0415
-    from alembic.config import Config  # noqa: PLC0415
-
-    previous = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = database_url
-
-    root = Path(__file__).resolve().parent.parent.parent
-    config = Config(toml_file=str(root / "pyproject.toml"))
-    config.set_main_option("script_location", str(root / "migrations"))
-
-    engine = create_engine(database_url, future=True)
-    try:
-        command.upgrade(config, BRONZE_REVISION)
-        yield engine
-    finally:
-        with engine.begin() as connection:
-            for schema in reversed(ALL_SCHEMAS):
-                connection.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
-            connection.execute(text("DROP TABLE IF EXISTS public.alembic_version"))
-        engine.dispose()
-        if previous is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = previous
 
 
 @pytest.fixture
