@@ -380,6 +380,7 @@ internal.
 
 ## Related documents
 
+- [Database overview](database_overview.md) — the schemas and how they relate, with diagrams
 - [Data dictionary](data_dictionary.md) — table-by-table field reference
 - [Runbook](runbook.md) — backups, restore, incident response
 - [ADR 0002](adr/0002-postgres-timescale-over-nosql.md) — why PostgreSQL + TimescaleDB

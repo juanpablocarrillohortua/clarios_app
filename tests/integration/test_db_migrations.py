@@ -22,16 +22,48 @@ from sqlalchemy import create_engine, inspect, text
 from energy.core.constants import ALL_SCHEMAS, BRONZE_SCHEMA, GOLD_SCHEMA, SILVER_SCHEMA
 
 if TYPE_CHECKING:
-    from sqlalchemy.engine import Engine
+    from sqlalchemy.engine import Connection, Engine
 
 pytestmark = pytest.mark.integration
 
+# Stated here rather than imported from the migration: a test that reads its
+# expectations from the code under test cannot catch a table going missing.
+LANDING_TABLES: tuple[str, ...] = (
+    "raw_rct_wo",
+    "raw_facturas",
+    "raw_product_struc",
+    "raw_item_master",
+    "raw_manual_sheets",
+)
+
 EXPECTED_TABLES: dict[str, set[str]] = {
     "reference": {"plants", "meters", "shifts", "targets"},
-    BRONZE_SCHEMA: {"raw_readings", "ingestion_runs", "raw_files"},
+    BRONZE_SCHEMA: {"raw_readings", "ingestion_runs", "raw_files", *LANDING_TABLES},
     SILVER_SCHEMA: {"readings", "quarantine", "consolidation_audit"},
     GOLD_SCHEMA: {"kpi_hourly", "kpi_daily", "plant_daily_summary"},
 }
+
+BRONZE_REVISION = "0002"
+
+# Index name -> the payload key it is built on. The keys are header texts of the
+# source workbooks, so the accents are part of the contract.
+PAYLOAD_KEY_INDEXES: dict[str, str] = {
+    "ix_raw_rct_wo_numero_de_transaccion": "Número de transacción",
+    "ix_raw_rct_wo_fecha_efectiva": "Fecha Efectiva",
+    "ix_raw_facturas_num_fact": "Núm Fact",
+    "ix_raw_facturas_fecha_efectiva": "Fecha Efectiva",
+    "ix_raw_product_struc_articulo_matriz": "Artículo Matriz",
+}
+
+LATEST_LOAD_INDEXES: tuple[str, ...] = (
+    "ix_raw_product_struc_sheet_name_ingested",
+    "ix_raw_item_master_sheet_name_ingested",
+    "ix_raw_manual_sheets_dataset_key_ingested",
+)
+
+VALID_HASH = "a" * 64
+UNKNOWN_RUN_ID = "00000000-0000-0000-0000-000000000000"
+VALID_PAYLOAD = '{"Fecha Efectiva": "2025-12-10 00:00:00", "Campo Equs": "N/A"}'
 
 EXPECTED_HYPERTABLES: set[str] = {
     "raw_readings",
@@ -97,6 +129,319 @@ def test_hypertables_are_registered(migrated_engine: Engine) -> None:
     registered = {row[0] for row in rows}
     missing = EXPECTED_HYPERTABLES - registered
     assert not missing, f"tables not converted to hypertables: {sorted(missing)}"
+
+
+@pytest.fixture(scope="class")
+def bronze_engine(database_url: str) -> Engine:
+    """Return an engine bound to a database migrated to the Bronze revision only.
+
+    Class-scoped: applying the migrations is by far the slowest step of this
+    suite, and the Bronze tests only read the schema or write rows they roll
+    back, so they can share one migrated database.
+    """
+    import os  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from alembic import command  # noqa: PLC0415
+    from alembic.config import Config  # noqa: PLC0415
+
+    previous = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = database_url
+
+    root = Path(__file__).resolve().parent.parent.parent
+    config = Config(toml_file=str(root / "pyproject.toml"))
+    config.set_main_option("script_location", str(root / "migrations"))
+
+    engine = create_engine(database_url, future=True)
+    try:
+        command.upgrade(config, BRONZE_REVISION)
+        yield engine
+    finally:
+        with engine.begin() as connection:
+            for schema in reversed(ALL_SCHEMAS):
+                connection.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            connection.execute(text("DROP TABLE IF EXISTS public.alembic_version"))
+        engine.dispose()
+        if previous is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous
+
+
+@pytest.fixture
+def bronze_connection(bronze_engine: Engine) -> Connection:
+    """Return a connection whose writes are rolled back when the test ends."""
+    connection = bronze_engine.connect()
+    transaction = connection.begin()
+    try:
+        yield connection
+    finally:
+        transaction.rollback()
+        connection.close()
+
+
+def _insert_run(connection: Connection, source_key: str = "qad_rct_wo") -> object:
+    """Register an ingestion run and return its id."""
+    return connection.execute(
+        text(
+            "INSERT INTO bronze.ingestion_runs "
+            "(flow_name, source_key, source_system, plant_code) "
+            "VALUES ('test_flow', :source_key, 'qad', '1515') RETURNING run_id"
+        ),
+        {"source_key": source_key},
+    ).scalar_one()
+
+
+def _insert_file(connection: Connection, source_key: str = "qad_rct_wo") -> object:
+    """Catalogue an archived workbook and return its id."""
+    return connection.execute(
+        text(
+            "INSERT INTO bronze.raw_files "
+            "(content_hash, bucket, object_key, filename, content_type, size_bytes, "
+            " plant_code, source_key, sheet_names) "
+            "VALUES (:content_hash, 'bronze-raw', 'k', 'export.xlsx', 'application/x', "
+            " 1024, '1515', :source_key, ARRAY['Datos', 'Info']) RETURNING raw_file_id"
+        ),
+        {"content_hash": VALID_HASH, "source_key": source_key},
+    ).scalar_one()
+
+
+def _insert_landing_row(
+    connection: Connection,
+    table: str,
+    run_id: object,
+    *,
+    raw_file_id: object = None,
+    content_hash: str = VALID_HASH,
+    payload: str = VALID_PAYLOAD,
+) -> None:
+    """Land one row in a Bronze landing table."""
+    extra_column = "dataset_key, " if table == "raw_manual_sheets" else ""
+    extra_value = "'instrucc', " if table == "raw_manual_sheets" else ""
+    connection.execute(
+        # The table name comes from LANDING_TABLES, never from input.
+        text(
+            f"INSERT INTO bronze.{table} "  # noqa: S608
+            f"({extra_column}ingestion_run_id, raw_file_id, source_system, source_uri, "
+            " sheet_name, source_row, content_hash, plant_code, payload) "
+            f"VALUES ({extra_value}:run_id, :raw_file_id, 'qad', 's3://bronze-raw/k', "
+            " 'Datos', 2, :content_hash, '1515', CAST(:payload AS jsonb))"
+        ),
+        {
+            "run_id": run_id,
+            "raw_file_id": raw_file_id,
+            "content_hash": content_hash,
+            "payload": payload,
+        },
+    )
+
+
+class TestBronzeRevision:
+    """Revision 0002 on its own: structure, envelope checks and the append-only guard."""
+
+    def test_creates_only_the_bronze_schema(self, bronze_engine: Engine) -> None:
+        """Revision 0002 stands alone: the Bronze tables, and no other layer.
+
+        The dimensions, Silver and Gold belong to later revisions. If one of
+        them leaked back into this revision, a deployment stopped at 0002 would
+        carry tables nothing has validated yet.
+        """
+        inspector = inspect(bronze_engine)
+
+        schemas = set(inspector.get_schema_names()) & set(ALL_SCHEMAS)
+        assert schemas == {BRONZE_SCHEMA}
+
+        tables = set(inspector.get_table_names(schema=BRONZE_SCHEMA))
+        assert tables == EXPECTED_TABLES[BRONZE_SCHEMA]
+
+    def test_landing_tables_share_one_shape(self, bronze_engine: Engine) -> None:
+        """Every landing table has the composite key and a non-unique hash index.
+
+        The key includes ``ingested_at`` so the table can become a hypertable
+        later; the hash index is not unique because Bronze keeps duplicates on
+        purpose.
+        """
+        inspector = inspect(bronze_engine)
+
+        for table in LANDING_TABLES:
+            key = inspector.get_pk_constraint(table, schema=BRONZE_SCHEMA)
+            assert key["name"] == f"pk_{table}"
+            assert key["constrained_columns"] == [f"{table}_id", "ingested_at"]
+
+            indexes = {
+                index["name"]: index for index in inspector.get_indexes(table, BRONZE_SCHEMA)
+            }
+            for suffix in ("content_hash", "run", "raw_file"):
+                assert f"ix_{table}_{suffix}" in indexes, f"{table} lacks its {suffix} index"
+            assert not indexes[f"ix_{table}_content_hash"]["unique"]
+
+            referred = {
+                foreign_key["name"]: foreign_key["referred_table"]
+                for foreign_key in inspector.get_foreign_keys(table, schema=BRONZE_SCHEMA)
+            }
+            assert referred == {
+                f"fk_{table}_ingestion_run": "ingestion_runs",
+                f"fk_{table}_raw_file": "raw_files",
+            }
+
+    def test_append_only_trigger_guards_every_landing_table(
+        self, bronze_connection: Connection
+    ) -> None:
+        """The guard function exists and is attached to the landing tables only.
+
+        The two ledgers must stay updatable - the loader moves a run from
+        pending to completed - so a trigger on them would be as wrong as a
+        missing one.
+        """
+        rows = bronze_connection.execute(
+            text(
+                "SELECT c.relname, pg_get_triggerdef(t.oid) AS definition "
+                "FROM pg_trigger t "
+                "JOIN pg_class c ON c.oid = t.tgrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "JOIN pg_proc p ON p.oid = t.tgfoid "
+                "JOIN pg_namespace pn ON pn.oid = p.pronamespace "
+                "WHERE n.nspname = 'bronze' AND pn.nspname = 'bronze' "
+                "AND p.proname = 'forbid_update' AND NOT t.tgisinternal"
+            )
+        ).all()
+
+        guarded = {row.relname: row.definition for row in rows}
+        assert set(guarded) == set(LANDING_TABLES)
+        for table, definition in guarded.items():
+            assert "BEFORE UPDATE" in definition, f"{table}: {definition}"
+            assert "FOR EACH ROW" in definition, f"{table}: {definition}"
+
+    def test_payload_key_indexes_exist(self, bronze_connection: Connection) -> None:
+        """The expression indexes are built on the exact header texts of the exports.
+
+        An index on a misspelt key is silently useless: it builds, and every
+        lookup by the source's own key still falls back to a scan.
+        """
+        rows = bronze_connection.execute(
+            text("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'bronze'")
+        ).all()
+        definitions = {row.indexname: row.indexdef for row in rows}
+
+        for index, payload_key in PAYLOAD_KEY_INDEXES.items():
+            assert index in definitions, f"missing expression index {index}"
+            assert f"payload ->> '{payload_key}'" in definitions[index]
+
+        for index in LATEST_LOAD_INDEXES:
+            assert index in definitions, f"missing index {index}"
+            assert "ingested_at DESC" in definitions[index]
+
+    def test_accepts_a_run_a_file_and_duplicate_rows(self, bronze_connection: Connection) -> None:
+        """Valid provenance is accepted, and the same row may land twice.
+
+        Duplicates are real in the source exports; collapsing them is a Silver
+        decision, so Bronze must not refuse the second copy.
+        """
+        run_id = _insert_run(bronze_connection)
+        raw_file_id = _insert_file(bronze_connection)
+
+        for table in LANDING_TABLES:
+            _insert_landing_row(bronze_connection, table, run_id, raw_file_id=raw_file_id)
+            _insert_landing_row(bronze_connection, table, run_id, raw_file_id=raw_file_id)
+
+            landed = bronze_connection.execute(
+                text(f"SELECT count(*) FROM bronze.{table}")  # noqa: S608
+            ).scalar_one()
+            assert landed == 2, f"{table} kept {landed} of 2 identical rows"
+
+    def test_rejects_malformed_provenance(self, bronze_connection: Connection) -> None:
+        """A bad hash, a non-object payload and an unknown source key are refused.
+
+        Bronze does not validate what a row says, only the envelope that makes
+        it traceable. These are the envelope checks.
+        """
+        from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
+
+        run_id = _insert_run(bronze_connection)
+
+        with (
+            pytest.raises(IntegrityError, match="ck_raw_rct_wo_hash_format"),
+            bronze_connection.begin_nested(),
+        ):
+            _insert_landing_row(bronze_connection, "raw_rct_wo", run_id, content_hash="ABCDEF")
+
+        with (
+            pytest.raises(IntegrityError, match="ck_raw_rct_wo_payload_object"),
+            bronze_connection.begin_nested(),
+        ):
+            _insert_landing_row(bronze_connection, "raw_rct_wo", run_id, payload='["a", "list"]')
+
+        with (
+            pytest.raises(IntegrityError, match="ck_ingestion_runs_source_key"),
+            bronze_connection.begin_nested(),
+        ):
+            _insert_run(bronze_connection, source_key="unknown_source")
+
+        with (
+            pytest.raises(IntegrityError, match="ck_raw_files_source_key"),
+            bronze_connection.begin_nested(),
+        ):
+            _insert_file(bronze_connection, source_key="unknown_source")
+
+        with (
+            pytest.raises(IntegrityError, match="fk_raw_rct_wo_ingestion_run"),
+            bronze_connection.begin_nested(),
+        ):
+            _insert_landing_row(bronze_connection, "raw_rct_wo", UNKNOWN_RUN_ID)
+
+    def test_landing_rows_cannot_be_updated(self, bronze_connection: Connection) -> None:
+        """An UPDATE on a landing table fails; a DELETE still works.
+
+        Append-only is what lets a published figure be traced to the row it was
+        computed from. DELETE is left open because that is how retention removes
+        old rows.
+        """
+        from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
+
+        run_id = _insert_run(bronze_connection)
+
+        for table in LANDING_TABLES:
+            _insert_landing_row(bronze_connection, table, run_id)
+
+            with (
+                pytest.raises(IntegrityError, match=f"bronze.{table} is append-only"),
+                bronze_connection.begin_nested(),
+            ):
+                bronze_connection.execute(
+                    text(f"UPDATE bronze.{table} SET source_row = source_row + 1")  # noqa: S608
+                )
+
+            deleted = bronze_connection.execute(
+                text(f"DELETE FROM bronze.{table}")  # noqa: S608
+            ).rowcount
+            assert deleted == 1, f"DELETE on {table} removed {deleted} rows"
+
+    def test_ledgers_can_be_updated(self, bronze_connection: Connection) -> None:
+        """The run ledger and the file catalogue are not append-only.
+
+        The loader records progress by updating the run it opened.
+        """
+        run_id = _insert_run(bronze_connection)
+        raw_file_id = _insert_file(bronze_connection)
+
+        state = bronze_connection.execute(
+            text(
+                "UPDATE bronze.ingestion_runs "
+                "SET state = 'completed', finished_at = now(), row_count = 10 "
+                "WHERE run_id = :run_id RETURNING state"
+            ),
+            {"run_id": run_id},
+        ).scalar_one()
+        assert state == "completed"
+
+        uploaded_by = bronze_connection.execute(
+            text(
+                "UPDATE bronze.raw_files SET uploaded_by = 'steward' "
+                "WHERE raw_file_id = :raw_file_id RETURNING uploaded_by"
+            ),
+            {"raw_file_id": raw_file_id},
+        ).scalar_one()
+        assert uploaded_by == "steward"
 
 
 def test_silver_readings_enforces_grid_alignment(migrated_engine: Engine) -> None:

@@ -20,6 +20,13 @@ which phase implements it. Function bodies raise
 Read [README.md](README.md) for setup, [docs/architecture.md](docs/architecture.md)
 for the design, and [CONTRIBUTING.md](CONTRIBUTING.md) for conventions.
 
+**Equivalent batteries (EQUS).** The plant's Excel calculation of equivalent
+batteries is being moved into this database. [docs/EQUS_CONTEXT.md](docs/EQUS_CONTEXT.md)
+is the source of truth for its rules and target schema; read it before touching
+anything EQUS. Its Bronze layer is built (revision `0002`); its Silver and Gold
+are not. [docs/database_overview.md](docs/database_overview.md) shows every schema
+with diagrams.
+
 ---
 
 ## Build state as of 2026-09-19 - FULLY VERIFIED
@@ -32,7 +39,7 @@ Definition-of-Done item is verified against a running stack.
 | `make up` | **Exit 0 - all 7 services healthy** (api, caddy, dash, db, minio, prefect-server, prefect-worker) |
 | Port policy | Only caddy publishes (8080/8443); everything else internal |
 | `make db-upgrade` | **Exit 0** - Alembic at head `0005` against live TimescaleDB |
-| Schemas / tables | `bronze, gold, reference, silver`; 13 tables |
+| Schemas / tables | `bronze, gold, reference, silver`; 18 tables (8 + 3 + 4 + 3) |
 | Extensions | timescaledb **2.30.1**, pgcrypto 1.3 |
 | Hypertables | All 5 registered: `raw_readings, readings, kpi_hourly, kpi_daily, plant_daily_summary` |
 | Timescale policies | 3 compression + 1 retention job created (no warnings) |
@@ -41,10 +48,20 @@ Definition-of-Done item is verified against a running stack.
 | Placeholder endpoint | `/api/kpis/summary` -> **501** with `code=not_implemented` |
 | `X-Request-Id` | Present and propagated |
 | `make check` | **Exit 0** - format, lint, mypy strict (82 files), bandit, pip-audit, tests |
-| `make test` | **200 passed, 39 skipped** |
+| `make test` | **208 passed, 39 skipped** |
 | Coverage | **93.74%** (threshold 70%) |
-| `make test-integration` | **21 passed** against real TimescaleDB |
-| No Spanish anywhere | 0 hits (UTF-8-aware scan) |
+| `make test-integration` | **26 passed** against real TimescaleDB |
+| No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports |
+
+The table count and the three test rows were re-verified on 2026-10-06, after
+revision `0002` was rewritten for the EQUS Bronze layer; the other rows date from
+2026-09-19.
+
+**Integration tests can be skipped silently.** They start a TimescaleDB container
+and wait 120 s for it. On 2026-10-06, with the machine busy, the container needed
+151 s, so `make check` exited 0 with every database test *skipped* (184 passed,
+63 skipped). An idle re-run of `make test-integration` passed. Check the skip
+count: 39 is normal, more means the database tests did not run.
 
 ### Bugs found and fixed during verification
 
@@ -126,6 +143,20 @@ test raising would fail the suite. Keep that distinction.
 - Corrections supersede (`superseded_at`), never overwrite.
 - Positive `deviation_pct` means **worse**.
 
+**EQUS Bronze** (revision `0002`):
+
+- The five landing tables are append-only: `bronze.forbid_update()` rejects every
+  `UPDATE`. `DELETE` is allowed (retention). `ingestion_runs` and `raw_files` are
+  ledgers and stay updatable.
+- Bronze never parses, types or deduplicates. `content_hash` is indexed but **not
+  unique** on the landing tables; deduplication is a Silver decision.
+- Payload keys are the header texts of the exports, in Spanish with accents
+  (`Número de transacción`, `Fecha Efectiva`, `Núm Fact`, `Artículo Matriz`).
+  They are data: never translate or normalise them.
+- `source_key` on both ledgers accepts only the five EQUS keys. Registering an
+  energy-readings run needs a later revision that extends the list.
+- Migrations do not import application code.
+
 **Tooling.**
 
 - `make check` = format-check → lint → typecheck → security → test. It is exactly
@@ -135,6 +166,9 @@ test raising would fail the suite. Keep that distinction.
 - `make db-upgrade` runs Alembic **inside the api container** because the
   database publishes no host port. Use `RUNNER=host` in CI or against a published
   port.
+- The api image **copies** `migrations/` at build time (no bind mount). After
+  editing a migration, rebuild the image (`docker compose build api` or
+  `make up`) before `make db-upgrade`, or the container runs the old files.
 - pip-audit runs against an exported requirements file (`--no-emit-project`);
   auditing the live environment fails because this package is not on PyPI.
 
@@ -144,9 +178,11 @@ test raising would fail the suite. Keep that distinction.
 
 All deliberate; each is explained where it lives.
 
-1. **`reference` schema is created in `0002_create_bronze_schema.py`.** Silver and
-   Gold carry foreign keys into `plants`/`meters`, so it must exist first.
-   Renumbering the five specified migrations would have been worse.
+1. **`reference` schema is created in `0003_create_silver_schema.py`.** Silver and
+   Gold carry foreign keys into `plants`/`meters`, so it must exist first, and
+   Silver is the first layer to need it. Renumbering the five specified
+   migrations would have been worse. (It lived in `0002` until 2026-10-06, when
+   `0002` was rewritten to create only Bronze for the EQUS work.)
 2. **`dashboards/app.py` is implemented, not a placeholder.** The app *factory* is
    infrastructure wiring, exactly like `api/main.py` (which the spec marks
    `[implement]`), and the `dash` container must reach a healthy state for

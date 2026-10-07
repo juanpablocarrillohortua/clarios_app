@@ -2,7 +2,8 @@
 
 Field-by-field reference for every table. The authoritative definition is always
 the migration that creates the table — this document explains *why* each column
-exists and what it guarantees.
+exists and what it guarantees. New to the project? Start with the
+[database overview](database_overview.md), which shows how the tables relate.
 
 **Conventions used throughout:**
 
@@ -27,9 +28,9 @@ exists and what it guarantees.
 
 ## `reference` — shared dimensions
 
-Created by [`0002_create_bronze_schema.py`](../migrations/versions/0002_create_bronze_schema.py).
-It shares that migration because Silver and Gold carry foreign keys into it and
-it must therefore exist before them.
+Created by [`0003_create_silver_schema.py`](../migrations/versions/0003_create_silver_schema.py).
+It shares that migration because Silver and Gold carry foreign keys into it, and
+Silver is the first layer to need it.
 
 ### `reference.plants`
 
@@ -112,8 +113,16 @@ measured against the target that was in force at the time.
 
 ## `bronze` — raw landing area
 
-Append-only. Nothing in the application updates or deletes a Bronze row; the only
-thing that removes them is the retention policy (2 years) from migration 0005.
+Created by [`0002_create_bronze_schema.py`](../migrations/versions/0002_create_bronze_schema.py).
+
+Append-only. Nothing in the application updates or deletes a landing row. On the
+five EQUS landing tables the database enforces it: a trigger rejects every
+`UPDATE`. On `raw_readings` it is a convention, and the only thing that removes
+its rows is the retention policy (2 years) from migration 0005.
+
+Two tables are ledgers, not landing tables, and are updated on purpose:
+`ingestion_runs` (the loader moves a run from `pending` to `completed`) and
+`raw_files`.
 
 ### `bronze.raw_readings` — hypertable
 
@@ -146,15 +155,25 @@ The ledger every Bronze row points at.
 |---|---|---|---|
 | `run_id` | `UUID` | no | Primary key. |
 | `flow_name` | `VARCHAR(100)` | no | Which Prefect flow ran. |
+| `source_key` | `VARCHAR(64)` | no | Which kind of export it loaded: `qad_rct_wo`, `qad_facturas`, `qad_product_struc`, `item_master` or `manual_sheets`. |
 | `source_system` | `VARCHAR(64)` | no | The source it read. |
 | `plant_code` | `VARCHAR(32)` | no | The plant it ran for. |
 | `state` | `VARCHAR(20)` | no | `pending`, `running`, `completed`, `failed`, `cancelled`. |
-| `window_start` / `window_end` | `TIMESTAMPTZ` | yes | Period requested. Null for a full read. |
+| `window_start` / `window_end` | `DATE` | yes | The business period the extract covers (its *Fecha Efectiva* range). Nullable because the export's own search conditions can be stale. |
+| `qad_program` / `qad_exploration` / `qad_user` | `VARCHAR` | yes | What the workbook's *Info* sheet says about the query that produced it. |
+| `queried_at` | `TIMESTAMPTZ` | yes | When the query ran, from the *Info* sheet. |
+| `search_conditions` | `JSONB` | no | The rows of the workbook's *Condiciones de búsqueda* sheet, as delivered. Always a JSON array; empty by default. |
 | `started_at` | `TIMESTAMPTZ` | no | Run start. |
 | `finished_at` | `TIMESTAMPTZ` | yes | Null while running. |
-| `row_count` | `BIGINT` | no | Rows written to Bronze. |
+| `row_count` | `BIGINT` | no | Rows written to Bronze. Never negative. |
 | `error` | `TEXT` | no | Failure message; empty on success. |
 | `parameters` | `JSONB` | no | Invocation parameters — what a retry replays. |
+
+**Indexes:** `(source_key, started_at DESC)`, `(plant_code, started_at DESC)`,
+`state`.
+
+**Constraints:** `state` and `source_key` restricted to the lists above;
+`window_start <= window_end` when both are present.
 
 ### `bronze.raw_files`
 
@@ -171,9 +190,60 @@ bytes a plant sent.
 | `filename` | `TEXT` | no | Original filename as submitted. |
 | `content_type` | `VARCHAR(150)` | no | MIME type. |
 | `size_bytes` | `BIGINT` | no | Payload size. Must be positive. |
-| `plant_code` / `source_key` | `VARCHAR` | no | What it was uploaded for. |
+| `plant_code` / `source_key` | `VARCHAR` | no | What it was uploaded for. `source_key` takes the same five values as on `ingestion_runs`. |
+| `sheet_names` | `TEXT[]` | no | The sheets found in the workbook. Empty by default. |
 | `uploaded_by` | `VARCHAR(200)` | no | Who submitted it. |
 | `uploaded_at` | `TIMESTAMPTZ` | no | Receipt time. |
+
+**Indexes:** `(source_key, uploaded_at DESC)`.
+
+### The EQUS landing tables
+
+Five tables receive the exports the equivalent-batteries calculation consumes,
+one spreadsheet row per table row. They are plain tables today; the composite
+primary key lets a later revision turn them into hypertables.
+
+| Table | Receives | Own indexes |
+|---|---|---|
+| `bronze.raw_rct_wo` | Production receipts: *Explorar transacciones por art* › `Datos` | payload keys `Número de transacción`, `Fecha Efectiva` |
+| `bronze.raw_facturas` | Invoice lines: *Unidades facturadas* › `Datos` | payload keys `Núm Fact`, `Fecha Efectiva` |
+| `bronze.raw_product_struc` | Product structures: *BOM BATERIAS FORMADAS* › `PASTA`, `PLACAS`, `BAT ENS`, `BAT FOR`, `BAT TERM`; *ESTRUCTURA DECORADO* › `Datos` | payload key `Artículo Matriz`; `(sheet_name, ingested_at DESC)` |
+| `bronze.raw_item_master` | *Item_Master* › `Datos`, `Grupo-Fam` | `(sheet_name, ingested_at DESC)` |
+| `bronze.raw_manual_sheets` | Hand-maintained catalogues, named by `dataset_key` | `(dataset_key, ingested_at DESC)` |
+
+Every one of them has these columns:
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| `<table>_id` | `UUID` | no | Part of the composite PK, e.g. `raw_rct_wo_id`. |
+| `ingested_at` | `TIMESTAMPTZ` | no | When the row landed. Part of the PK so the table can become a hypertable. |
+| `ingestion_run_id` | `UUID` | no | FK → `bronze.ingestion_runs`, `ON DELETE RESTRICT`. |
+| `raw_file_id` | `UUID` | yes | FK → `bronze.raw_files`, `ON DELETE RESTRICT`. Null when the rows did not come from an archived workbook. |
+| `source_system` | `VARCHAR(64)` | no | The system the export came from. |
+| `source_uri` | `TEXT` | no | Object-storage key or query reference locating the original. |
+| `sheet_name` | `VARCHAR(64)` | no | The worksheet the row was read from. |
+| `source_row` | `INTEGER` | no | The Excel row number. At least 1: some hand-made sheets have no header row. |
+| `content_hash` | `CHAR(64)` | no | SHA-256 of the canonical JSON payload. Indexed, **not unique**. |
+| `plant_code` | `VARCHAR(32)` | no | The plant the export belongs to. |
+| `payload` | `JSONB` | no | **The row exactly as exported.** Keys are the header texts of the sheet (Spanish, with accents); values are the cell text. Nothing is parsed. Always a JSON object. |
+
+`raw_manual_sheets` adds `dataset_key` (`VARCHAR(64)`, lowercase snake_case),
+which names the catalogue — `clasif_poly`, `lineas_produccion`, `instrucc`,
+`element_deco`, `comparativo_lineas` — so a new catalogue needs a new value, not
+a new table.
+
+**Indexes on each:** `content_hash` (duplicate lookup), `ingestion_run_id` and
+`raw_file_id` (audit).
+
+**Why `content_hash` is not unique.** The exports contain genuinely repeated
+rows, and loading the same workbook twice is legitimate. Removing duplicates
+changes the result of the calculation, so it is done in Silver, where it is
+visible. Bronze keeps every copy.
+
+**Append-only guard.** `bronze.forbid_update()` is attached to each landing
+table as a `BEFORE UPDATE ... FOR EACH ROW` trigger and raises
+`restrict_violation` naming the table. `DELETE` is not blocked, because that is
+how a retention policy removes old rows.
 
 ---
 
@@ -334,8 +404,10 @@ Chunk sizes descend with volume: Bronze is the highest-volume table by an order
 of magnitude and benefits from the smallest chunks. `segment_by` is set to the
 column queries filter on, so chunk exclusion still works after compression.
 
-Bronze is the only table with a retention policy. It is raw evidence whose value
-decays once the derived layers are settled, and it is also by far the largest.
+`bronze.raw_readings` is the only table with a retention policy. It is raw
+evidence whose value decays once the derived layers are settled, and it is also
+by far the largest. The EQUS landing tables are not hypertables yet and have no
+policy.
 
 ---
 

@@ -652,13 +652,15 @@ the port is missing something — raise it rather than working around it.
 
 ## Database schema
 
-Four schemas in one PostgreSQL 16 + TimescaleDB database. Full field-by-field
-reference in **[docs/data_dictionary.md](docs/data_dictionary.md)**.
+Four schemas in one PostgreSQL 16 + TimescaleDB database. Start with the guided
+tour and its diagrams in **[docs/database_overview.md](docs/database_overview.md)**;
+the full field-by-field reference is in
+**[docs/data_dictionary.md](docs/data_dictionary.md)**.
 
 | Schema | Tables | Character |
 |---|---|---|
 | `reference` | `plants`, `meters`, `shifts`, `targets` | Human-maintained dimensions. `targets` is time-versioned so a new target cannot retroactively change how last year was judged. |
-| `bronze` | `raw_readings`, `ingestion_runs`, `raw_files` | Append-only landing area. Raw records kept whole in JSONB. Two-year retention. |
+| `bronze` | `ingestion_runs`, `raw_files`, `raw_readings`, and the EQUS landing tables `raw_rct_wo`, `raw_facturas`, `raw_product_struc`, `raw_item_master`, `raw_manual_sheets` | Append-only landing area. Raw records kept whole in JSONB. Two-year retention on `raw_readings`. |
 | `silver` | `readings`, `quarantine`, `consolidation_audit` | Validated readings on the canonical hourly UTC grid, plus the rejected rows and the record of how source conflicts were resolved. |
 | `gold` | `kpi_hourly`, `kpi_daily`, `plant_daily_summary` | Published KPIs, replaced per period. |
 

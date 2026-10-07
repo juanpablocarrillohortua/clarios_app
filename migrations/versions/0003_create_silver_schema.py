@@ -1,11 +1,24 @@
-"""Create the Silver schema: validated readings and the quarantine ledger.
+"""Create the reference and Silver schemas: dimensions, readings, quarantine.
 
 Revision ID: 0003
 Revises: 0002
 Create Date: 2026-09-18
 
-Silver holds readings that are validated, deduplicated and aligned to the
-canonical hourly UTC grid. Three design decisions are encoded in this DDL:
+This revision provisions two schemas rather than one, and the reason matters:
+
+``reference``
+    The shared dimension tables (plants, meters, shifts, targets). Silver and
+    Gold both carry foreign keys into them, so they must exist before either
+    layer does. Silver is the first to need them, so they are created here
+    rather than in a revision of their own, which would have meant renumbering
+    the medallion migrations. Bronze has no use for them: it stores what arrived
+    and resolves nothing.
+
+``silver``
+    Readings that are validated, deduplicated and aligned to the canonical
+    hourly UTC grid.
+
+Three design decisions are encoded in the Silver DDL:
 
 Supersede, never delete
     A corrected reading does not overwrite its predecessor; it marks the old row
@@ -45,8 +58,136 @@ QUALITY_FLAGS = ("ok", "interpolated", "estimated", "suspect", "missing")
 
 
 def upgrade() -> None:
-    """Create the Silver schema and its tables."""
+    """Create the reference and Silver schemas and their tables."""
+    op.execute(f"CREATE SCHEMA IF NOT EXISTS {REFERENCE}")
     op.execute(f"CREATE SCHEMA IF NOT EXISTS {SILVER}")
+
+    # ------------------------------------------------------------------
+    # reference.plants
+    # ------------------------------------------------------------------
+    op.create_table(
+        "plants",
+        sa.Column(
+            "plant_id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column("code", sa.String(32), nullable=False, unique=True),
+        sa.Column("name", sa.String(200), nullable=False),
+        sa.Column("timezone", sa.String(64), nullable=False, server_default="UTC"),
+        sa.Column("country", sa.String(2), nullable=True),
+        sa.Column("floor_area_m2", sa.Numeric(14, 2), nullable=True),
+        sa.Column("commissioned_on", sa.Date(), nullable=True),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.CheckConstraint("floor_area_m2 IS NULL OR floor_area_m2 > 0", name="ck_plants_area"),
+        schema=REFERENCE,
+    )
+
+    # ------------------------------------------------------------------
+    # reference.meters
+    # ------------------------------------------------------------------
+    op.create_table(
+        "meters",
+        sa.Column(
+            "meter_id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column("plant_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("tag", sa.String(64), nullable=False),
+        sa.Column("commodity", sa.String(20), nullable=False),
+        sa.Column("unit", sa.String(16), nullable=False),
+        sa.Column("multiplier", sa.Numeric(18, 6), nullable=False, server_default=sa.text("1.0")),
+        sa.Column("is_virtual", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.Column("parent_meter_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("installed_on", sa.Date(), nullable=True),
+        sa.Column("removed_on", sa.Date(), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.ForeignKeyConstraint(["plant_id"], [f"{REFERENCE}.plants.plant_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["parent_meter_id"], [f"{REFERENCE}.meters.meter_id"], ondelete="SET NULL"
+        ),
+        sa.UniqueConstraint("plant_id", "tag", name="uq_meters_plant_tag"),
+        sa.CheckConstraint(
+            "commodity IN ('electricity', 'gas', 'steam', 'water', 'production')",
+            name="ck_meters_commodity",
+        ),
+        sa.CheckConstraint("multiplier > 0", name="ck_meters_multiplier"),
+        schema=REFERENCE,
+    )
+
+    # ------------------------------------------------------------------
+    # reference.shifts
+    # ------------------------------------------------------------------
+    op.create_table(
+        "shifts",
+        sa.Column(
+            "shift_id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column("plant_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("name", sa.String(50), nullable=False),
+        sa.Column("starts_at", sa.Time(), nullable=False),
+        sa.Column("ends_at", sa.Time(), nullable=False),
+        sa.Column("weekdays", postgresql.ARRAY(sa.SmallInteger()), nullable=False),
+        sa.Column("valid_from", sa.Date(), nullable=False),
+        sa.Column("valid_to", sa.Date(), nullable=True),
+        sa.ForeignKeyConstraint(["plant_id"], [f"{REFERENCE}.plants.plant_id"], ondelete="CASCADE"),
+        sa.UniqueConstraint("plant_id", "name", "valid_from", name="uq_shifts_plant_name_from"),
+        schema=REFERENCE,
+    )
+
+    # ------------------------------------------------------------------
+    # reference.targets - temporally versioned
+    # ------------------------------------------------------------------
+    op.create_table(
+        "targets",
+        sa.Column(
+            "target_id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column("plant_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("kpi_key", sa.String(64), nullable=False),
+        sa.Column("value", sa.Numeric(18, 6), nullable=False),
+        sa.Column("unit", sa.String(32), nullable=False),
+        sa.Column("valid_from", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("valid_to", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("direction", sa.String(10), nullable=False, server_default="lower"),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.ForeignKeyConstraint(["plant_id"], [f"{REFERENCE}.plants.plant_id"], ondelete="CASCADE"),
+        sa.CheckConstraint("direction IN ('lower', 'higher')", name="ck_targets_direction"),
+        sa.CheckConstraint("valid_to IS NULL OR valid_to > valid_from", name="ck_targets_validity"),
+        sa.UniqueConstraint("plant_id", "kpi_key", "valid_from", name="uq_targets_scope_from"),
+        schema=REFERENCE,
+    )
 
     quality_list = ", ".join(f"'{flag}'" for flag in QUALITY_FLAGS)
 
@@ -202,5 +343,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Drop the Silver schema."""
+    """Drop the Silver and reference schemas.
+
+    Silver goes first because it holds a foreign key into ``reference``. Gold,
+    the other layer that references it, is already gone by the time this runs.
+    """
     op.execute(f"DROP SCHEMA IF EXISTS {SILVER} CASCADE")
+    op.execute(f"DROP SCHEMA IF EXISTS {REFERENCE} CASCADE")
