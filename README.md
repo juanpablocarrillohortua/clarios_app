@@ -450,6 +450,65 @@ again changes nothing. Run it after every `make equs-load`. The target runs
 `energy equs build-silver` inside the api container; `--examples N` sets how many
 examples of each finding are listed.
 
+#### Equivalent batteries: refresh, read, close, report
+
+Gold computes the equivalent batteries (EQ) as views over Silver, so after new
+workbooks arrive **one command** brings everything up to date:
+
+```bash
+make refresh-all            # land data/raw_excels, build Silver, refresh Gold, print column H
+make refresh                # only refresh Gold: the two conversion tables and their statistics
+```
+
+Both print the time of each step and then column H of RESUMEN EQU for the latest
+month with production (`MONTH=YYYY-MM` picks another). `make refresh` takes a few
+seconds; `make refresh-all` a few minutes, most of it the load and the Silver
+build. A refresh never changes a closed month, takes a lock so two never overlap,
+and does not block anyone reading meanwhile.
+
+| Target | Runs | What for |
+|---|---|---|
+| `make refresh` | `energy equs refresh-gold` | Bring `gold.v_resumen_equ` (column H) up to date |
+| `make refresh-all` | `energy equs load-all`, then `refresh-gold --with-silver` | The whole chain from the workbooks |
+| `make resumen MONTH=2026-09` | `energy equs resumen-equ --month 2026-09` | Column H of a month: each driver's quantity (D), factor (G) and EQ (H), then the totals and EQUS POLY. `FORMAT=json` or `csv`; `SOURCE=closed` reads the close |
+| `make close MONTH=2026-09` | `energy equs close-month 2026-09` | Freeze the month as the official close, after the data-quality checks. `ACCEPT_WARNINGS=1` closes despite a blocking check and records it; `RECLOSE=1` replaces an earlier close, keeping it in the history |
+| `make report START=2026-09-01 END=2026-09-30` | `equs-report --start … --end …` | EQ of any range of days as JSON laid out like RESUMEN EQU. `OUTPUT=file.json` writes it to a file |
+| `make help` | — | Every target with its description |
+
+A target that needs `MONTH`, `START` or `END` stops with a usage line when it is
+missing. The targets only call the CLI; run the CLI directly for the other options
+(`energy equs refresh-gold --help`, `equs-report --help`). Exit codes: 0 success,
+1 invalid arguments or a refused request (a month already closed, a blocking
+check), 2 a database error, 3 another refresh or close held the lock too long.
+
+`equs-report` is also a Python function:
+
+```python
+from energy.pipelines.flows.equs_report import build_report
+
+with engine.connect() as connection:
+    report = build_report(connection, "2026-03-15", "2026-04-10", source="live", by_month=True)
+```
+
+The JSON follows
+[`equs_report.schema.json`](src/energy/pipelines/flows/equs_report.schema.json); its
+sections, plant labels, factors and rules all come from the database. Every target
+runs inside the api container by default; `RUNNER=host` runs it on your machine
+against `DATABASE_URL`. Three settings tune Gold (see `.env.example`):
+`EQUS_VARIATION_THRESHOLD`, `EQUS_LOCK_TIMEOUT_SECONDS` and `EQUS_TIMEZONE`. The
+views, the checks and the close are described in
+**[docs/data_dictionary.md](docs/data_dictionary.md#the-equs-gold-objects)**.
+
+Two more pages explain the numbers:
+
+- **[docs/equs_calculation_explained.md](docs/equs_calculation_explained.md)**
+  walks the calculation from the QAD exports to column H, table by table, for
+  readers who know the workbook but not the database. It is also in Spanish:
+  [docs/equs_calculation_explained.es.md](docs/equs_calculation_explained.es.md).
+- **[docs/equs_resumen_call_chain.md](docs/equs_resumen_call_chain.md)** follows
+  `make resumen` through every file and function, and shows how to get the same
+  result from Python without the command line.
+
 Confirm the schema:
 
 ```bash
@@ -732,7 +791,7 @@ the full field-by-field reference is in
 | `reference` | `plants`, `meters`, `shifts`, `targets` | Human-maintained dimensions. `targets` is time-versioned so a new target cannot retroactively change how last year was judged. |
 | `bronze` | `ingestion_runs`, `raw_files`, `raw_readings`, and the EQUS landing tables `raw_rct_wo`, `raw_facturas`, `raw_product_struc`, `raw_item_master`, `raw_manual_sheets` | Append-only landing area. Raw records kept whole in JSONB. Two-year retention on `raw_readings`. |
 | `silver` | `readings`, `quarantine`, `consolidation_audit`; and 18 EQUS tables (among them `item_master`, `bom_estructura`, `reporte_qad`, `unit_ship`, `factores_equ`, `instrucc`) with the materialized views `td_form` and `td_deco` | Validated readings on the canonical hourly UTC grid, plus the rejected rows and the record of how source conflicts were resolved. The EQUS tables are the typed, deduplicated version of the Bronze workbooks, with the equation stored as data. |
-| `gold` | `kpi_hourly`, `kpi_daily`, `plant_daily_summary` | Published KPIs, replaced per period. |
+| `gold` | `kpi_hourly`, `kpi_daily`, `plant_daily_summary`; the EQUS views (among them `v_resumen_equ`, `v_equs_batt_mes`, `inyeccion` and six `dq_*` checks), range functions, layout tables, and the frozen close `resumen_equ` with `cierre_mes` and `resumen_equ_historial` | Published KPIs, replaced per period. The EQUS views apply the equation stored in Silver; a closed month is frozen and changes only by a reclose. |
 
 ### Provenance carried by every Bronze row
 

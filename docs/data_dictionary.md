@@ -22,7 +22,7 @@ exists and what it guarantees. New to the project? Start with the
 | `reference` | Shared dimensions | Human-maintained, slowly changing |
 | `bronze` | Raw landing area | Append-only, immutable |
 | `silver` | Validated readings; EQUS tables | Readings: insert + supersede, never delete. EQUS: rebuilt from Bronze |
-| `gold` | Published KPIs | Replaced per period |
+| `gold` | Published KPIs; EQUS Gold | KPIs: replaced per period. EQUS: views over Silver, plus the frozen monthly close, changed only by a reclose |
 
 ---
 
@@ -676,10 +676,11 @@ is 116 EQ over FY26 and is reported by every build until someone decides.
 
 ---
 
-## `gold` — published KPIs
+## `gold` — published KPIs and EQUS Gold
 
 Created by [`0004_create_gold_schema.py`](../migrations/versions/0004_create_gold_schema.py).
-Written **only** by `pipelines/tasks/compute_kpis.py`.
+Two families live here: the energy KPI tables below, written **only** by
+`pipelines/tasks/compute_kpis.py`, and [the EQUS Gold objects](#the-equs-gold-objects).
 
 ### `gold.kpi_hourly` — hypertable
 
@@ -735,6 +736,195 @@ pivot over the long KPI tables.
 | `baseline_kwh` | `DOUBLE PRECISION` | yes | Baseline prediction for the day. |
 | `deviation_pct` | `DOUBLE PRECISION` | yes | Signed deviation. **Positive means worse** (consumed more than predicted). |
 | `coverage` | `DOUBLE PRECISION` | no | `[0, 1]`. |
+
+### The EQUS Gold objects
+
+The Gold layer of the equivalent-batteries (EQ) calculation, also created by revision
+0004. It **applies** the equation that Silver stores as data
+(`silver.factores_equ`, `silver.instrucc`, `silver.equs_version`): the views filter
+production and invoice rows with the rules, sum what each driver's `fuente` says,
+and multiply by the factor of the version in force. No factor, weight, Campo Equs
+value or product line is written in any view. The only literals are the
+transaction type `RCT-WO`, the channel `Venta`, warehouse `1010`, the product-line
+range `2101`–`3104` of data-quality check 1, and the four values of `fuente`. A
+migration test reads the configuration and fails if any of its values appears in
+a view.
+
+Everything is a plain view or SQL function and reads Silver live. Nothing in Gold
+is materialized: a whole fiscal year computes in under two seconds. The only
+materialized objects the calculation depends on are `silver.td_form` and
+`silver.td_deco`. The only tables are the layout of the report and the frozen
+close.
+
+Two companion pages:
+
+- [equs_calculation_explained.md](equs_calculation_explained.md) walks from the
+  exports to `v_resumen_equ` in plain language, following one receipt through
+  every step.
+- [equs_resumen_call_chain.md](equs_resumen_call_chain.md) traces `make resumen`
+  through the code and shows how to call it from Python.
+
+#### Layout tables (seeded by the migration)
+
+| Table | Key | Columns | Holds |
+|---|---|---|---|
+| `secciones_reporte` | `proceso` | `planta`, `area_planta` (FK → `silver.planta`, nullable), `orden` | Column F of RESUMEN EQU. `OREC` → OREC; `ENSAMBLE` → ENSAMBLE; `FORMACION` and `DECORADO` → F&A; `SHIPPING` → DESPACHOS (no plant area); `INFO` → INFORMATIVOS; `POLY` → EQUS POLY, area `Componentes`. `proceso` is checked against the processes of `factores_equ` plus `POLY`: no table has the process as its key, so it cannot be a foreign key. |
+| `filas_resumen_equ` | `cuenta_stats` | `fila` (unique) | The row of each driver (2–18) and plastic-injection account (20–30) in RESUMEN EQU, which is the order the report and `resumen-equ` print. |
+| `controles_calidad` | `vista` | `descripcion`, `bloqueante`, `orden` | The data-quality views; checks 1–3 block a close. |
+
+The migration also inserts the four plant areas the sections point at (`OREC`,
+`Ensamble`, `F&A`, `Componentes`) into `silver.planta`, exactly as the Silver build
+would, so the foreign key holds on a database that was never built. Downgrading
+0004 removes them again while nothing in Silver points at them.
+
+#### Calculation views
+
+| View | One row per | Columns | Excel equivalent |
+|---|---|---|---|
+| `v_reporte_qad` | production receipt (`RCT-WO`) | every `silver.reporte_qad` column, plus `mes`, `linea_de_productos` (item master), `campo_equs_eq` (the receipt's Campo Equs, or the item master's only when the receipt has none; `N/A` is a value), `mat_activo` = quantity × `td_form.pasta_pos`, `comp_deco` = quantity × `td_deco.comp_deco`, and for warehouse 1010 only `new_equ` (category), `cuenta`, `factor_equ`, `valor_equ` = quantity × factor | Sheet REPORTE QAD with columns AZ, AY, BE, BG, BF |
+| `v_reporte_qad_regla` | receipt × rule it matches, every version | `fecha_efectiva`, `mes`, the rule (`version`, `cuenta_stats`, `regla_n`, `signo`), `proceso`, `fuente`, `en_vigor`, `valor` (quantity, `mat_activo` or `comp_deco` as `fuente` says, times the sign) | The filters of the pivots that feed column D |
+| `v_unit_ship_regla` | invoice line × rule it matches | the same, for `fuente = FACTURACION`: channel Venta in any case, product line and Campo Equs through the item master; a rule with `prefijo_linea` never matches an invoice. Credit notes subtract (shipping is net, open question 6). | Pivot TD_UNIT_Ship |
+| `lineas_de_pdcto` | month × product line × Campo Equs | `descripcion`, `cantidad`, `mat_activo`, `comp_deco` | Pivot LINEAS DE PDCTO, per month |
+| `v_cantidad_cuenta` | version × driver × month | `cantidad` (Q_k), `en_vigor` | Column D of RESUMEN EQU, for every version |
+| `v_resumen_equ` | month × driver, version in force | `version`, `proceso`, `descripcion`, `cantidad`, `factor`, `equs` = cantidad × factor, `suma_eq` | **Column H of RESUMEN EQU** |
+| `v_equs_batt_mes` | month | `equs_orec`, `equs_ensamble`, `equs_formacion`, `equs_decorado`, `equs_shipping`, `equs_batt` | Rows 36–45 |
+| `inyeccion` | month × account × category | `piezas`, `valor_equ` (EQUS POLY, warehouse 1010; not added to EQUS BATT) | Pivot INYECCION, rows 20–34 |
+| `v_costo_por_eq` | month × process | `equs`, `costo_cop` (summed over plant areas), `cop_por_eq` (null without cost or EQ) | New |
+
+A driver with no rule, or whose rules matched nothing in the month, has no row in
+`v_cantidad_cuenta` or `v_resumen_equ` (`GRIDS_REG_POS` and `CARTON_BATT` in
+September 2026; `15BATPRD` always, because EQUS_CONTEXT gives it no rule). The
+range functions below list every driver, with 0.
+
+**The version in force.** `gold.en_vigor(vigente_desde, vigente_hasta, mes)` is the
+only definition: a version is in force in a month when its validity contains the
+month's first day. Every view and function asks it.
+
+#### Range functions
+
+All take `(p_desde date, p_hasta date)`, both included, and compare with
+`fecha_efectiva`. They sum the same two pairing views as `v_cantidad_cuenta`, so a
+whole month by range equals the month's view exactly.
+
+| Function | Returns |
+|---|---|
+| `versiones_rango` | `(mes, version, nombre)` for each month the range touches; `version` null where none covers it, two rows where two overlap. |
+| `resumen_equ_rango_mes` | `(mes, version, cuenta_stats, cantidad, equs)`: every driver of the version in force in each month, 0 when nothing matched. Each row uses the version of its own month. |
+| `resumen_equ_rango` | `(version, cuenta_stats, cantidad, equs)`: the same, for the whole range. A range across a version change returns rows for both versions. |
+| `resumen_equ_cierre_mes` | The frozen close in the shape of `resumen_equ_rango_mes`. |
+| `inyeccion_rango_mes`, `inyeccion_rango` | `(mes, cuenta, categoria, area_planta, piezas, piezas_con_equ, factor_equ, equs)`: EQUS POLY. `piezas_con_equ` leaves out categories whose factor is 0 (the workbook's D32). |
+| `calidad_datos_rango` | `(vista, descripcion, bloqueante, filas)`: the rows of each check inside the range. |
+
+#### Data-quality views (EQUS_CONTEXT section 8)
+
+Each returns the offending rows with their `fecha_efectiva` (check 6: `mes`), so they
+can be counted for any range.
+
+| View | Check | Blocks a close | FY26 | September 2026 |
+|---|---|---|---|---|
+| `dq_sin_regla` | Production of product lines 2101–3104 that no rule of the version in force takes | yes | 0 | 0 |
+| `dq_doble_regla` | Receipts two or more rules of one process take | yes | 0 | 0 |
+| `dq_sin_conversor` | Receipts of a `MAT_ACTIVO` driver without paste, or of a `COMP_DECO` driver without decoration pieces | yes | 34 | 0 |
+| `dq_categoria_poly` | Receipts whose Campo Equs differs from the Clasif_Poly category of the item, for items whose category carries EQ | no | 1,588 | 141 |
+| `dq_linea_sin_planta` | Receipts on production lines with no plant area | no | 1,429 (`FADECO05` 1,284, `POLINY05` 130, `MAQBUJEO` 15) | 0 |
+| `dq_variacion` | Drivers whose monthly quantity moved more than the threshold against the previous month, or started or stopped | no | 73 | 7 |
+
+- **Check 3** finds its drivers by `fuente`, not by product line. Its 34 FY26 rows are
+  16 imported batteries (line 3104) whose structure gives 0 decoration pieces; none
+  falls in September, so September closes without accepting warnings.
+- **Check 4** compares the two columns and names no category. EQUS_CONTEXT
+  section 7 counts "about 1,495" rows: those are exactly the covers and handles of
+  lines 1200 and 1202. The view also finds the 93 receipts of `150000015`, truck
+  handles (`ACCMED`, line 1305), whose category carries EQ just the same.
+- **Check 6** reads its threshold from the session setting `equs.umbral_variacion`
+  (a fraction; 0.30 when unset). The commands set it from `EQUS_VARIATION_THRESHOLD`.
+- Check 7 of section 8 (structure links repeated by business key) is counted by the
+  Silver build's report, per sheet, and has no Gold view.
+
+#### The frozen close
+
+| Table | Key | Columns |
+|---|---|---|
+| `resumen_equ` | `(mes, version, cuenta_stats)` | `cantidad`, `equs`, `fecha_calculo` (default `now()`), `closed_by`. FK `(version, cuenta_stats)` → `silver.factores_equ`, so a version a close used cannot be deleted. `mes` is a first day. |
+| `cierre_mes` | `cierre_id` (identity) | `mes`, `cerrado_en`, `closed_by`, `recierre`, `advertencias_aceptadas`, `calidad_datos` (JSONB: the rows of each check the close saw). One row per close **and** reclose. |
+| `resumen_equ_historial` | `(cierre_id, version, cuenta_stats)` | The rows a reclose replaced, as they were, under the `cierre_mes` row of that reclose. |
+
+`energy equs close-month YYYY-MM` (`make close MONTH=…`):
+
+1. takes the refresh lock and refreshes `td_form` and `td_deco`;
+2. counts every data-quality check for the month and prints the counts;
+3. refuses with exit 1 if a blocking check has rows, unless `--accept-warnings`, which
+   is then recorded in `cierre_mes.advertencias_aceptadas`;
+4. in one transaction: refuses if the month is closed and `--reclose` was not given;
+   writes the `cierre_mes` row; on a reclose copies the old rows to
+   `resumen_equ_historial`; upserts the month's `v_resumen_equ` rows into
+   `resumen_equ` and deletes rows the new close no longer has;
+5. prints the EQ of each process, EQUS BATT, EQUS POLY (live: the close does not
+   freeze it) and the change against the previous closed month.
+
+It also refuses a month with no production, or with no version or two versions in
+force. **Nothing recomputes a closed month implicitly**: refreshes never touch these
+tables.
+
+#### The date-range report
+
+`equs-report --start YYYY-MM-DD --end YYYY-MM-DD [--source live|closed] [--by-month]
+[--output FILE] [--dsn URL]` (`make report START=… END=… [OUTPUT=…]`), or
+`energy.pipelines.flows.equs_report.build_report(conn, start, end, source, by_month)`
+from Python. It returns JSON laid out like RESUMEN EQU: `rango`, `fuente`,
+`generado_en`, `versiones`, `plantas` → `procesos` → `subsecciones` (one per
+cuenta STATS, with its row `fila`), `equs_batt`, `equs_poly`, `informativos`,
+`calidad_datos`, `advertencias`; with `--by-month`, `por_mes` everywhere. The JSON
+Schema is
+[`equs_report.schema.json`](../src/energy/pipelines/flows/equs_report.schema.json).
+
+- Every driver of the version(s) in force appears, even at 0. Across two versions a
+  subsection's `factor` is null and `por_version` gives each.
+- Totals are added from unrounded values. Quantities are rounded to 6 decimals, the
+  terms of the equation to 10, EQ to 6; whole numbers are written as integers.
+- `--source closed` reads `resumen_equ` and accepts only whole months that are all
+  closed. EQUS POLY is still computed, with a warning.
+- Warnings (`advertencias[].codigo`): `mes_parcial`, `varias_versiones`,
+  `calidad_bloqueante`, `difiere_del_cierre` (a closed month's live EQ moved more than
+  0.01 since its close), `poly_en_vivo`.
+- Exit codes: 0 success; 1 invalid arguments or an unanswerable range (a month no
+  version covers, the closed source over a partial or unclosed month); 2 database
+  error.
+
+#### Refreshing
+
+`v_resumen_equ` reads Silver live. It is stale only when Silver is behind Bronze or a
+conversion table is behind the structure. `energy equs refresh-gold [--with-silver]
+[--month YYYY-MM] [--no-concurrently] [--format table|json] [--lock-timeout S]`
+(`make refresh`; `make refresh-all` first lands `data/raw_excels`):
+
+1. takes a session advisory lock (key 7215590330) under `lock_timeout`. A second
+   refresh or close waits up to `EQUS_LOCK_TIMEOUT_SECONDS` (600) and then exits 3;
+2. with `--with-silver`, builds Silver from Bronze in its own transaction;
+3. refreshes `silver.td_form`, then `silver.td_deco`, each `CONCURRENTLY` in
+   autocommit, so readers are never blocked (plain refresh when refused, or with
+   `--no-concurrently`);
+4. runs `ANALYZE` on the two views and the Silver tables the calculation reads;
+5. prints the time of each step and column H of `--month`, or of the latest month with
+   production.
+
+`energy equs resumen-equ --month YYYY-MM [--format table|json|csv] [--source
+live|closed]` (`make resumen MONTH=…`) prints that table on its own: one row per
+cuenta STATS in the order of RESUMEN EQU with columns D, G and H, then EQUS BATT,
+each plant, FORMACION and DECORADO, then the EQUS POLY categories and EQUS POLY.
+
+Exit codes of the three commands: 0 success, 1 invalid arguments or a refused
+request, 2 database error, 3 lock not released in time.
+
+#### With the FY26 workbooks
+
+September 2026 reproduces EQUS_CONTEXT section 9.1 to the cent: OREC 71,040.72,
+assembly 85,014.78, formation 27,940.86, decoration 23,615.00, shipping 7,978.97,
+**EQUS BATT 215,590.33**, **EQUS POLY 503,033.19** (1,737,504 pieces, 1,631,925 of
+categories with EQ). Every month of section 9.2 matches to the cent, and FY26 is
+2,310,724. Against column H of the workbook itself, only the rows section 9 explains
+differ: POS_ACT_MTL (the plate listed twice in PLACAS), COMP_DEC (the TERM-PRT
+protectors) and the totals that carry them (H36, H40, H44, H45).
 
 ---
 

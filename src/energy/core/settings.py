@@ -11,9 +11,11 @@ the environment is read once per process.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, PostgresDsn, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -244,6 +246,40 @@ class DataSettings(BaseSettings):
         return "UTC"
 
 
+class EqusSettings(BaseSettings):
+    """The Gold layer of the equivalent-batteries (EQUS) calculation."""
+
+    model_config = _BASE_CONFIG
+
+    # Presentation only: the time a report says it was made. The data itself
+    # has no time of day.
+    timezone: str = Field(default="America/Bogota", validation_alias="EQUS_TIMEZONE")
+    # Data-quality check 6 flags a driver whose monthly quantity moved more
+    # than this fraction against the month before.
+    variation_threshold: Decimal = Field(
+        default=Decimal("0.30"), ge=0, validation_alias="EQUS_VARIATION_THRESHOLD"
+    )
+    # How long a refresh or close waits for another one to finish.
+    lock_timeout_seconds: float = Field(
+        default=600, gt=0, validation_alias="EQUS_LOCK_TIMEOUT_SECONDS"
+    )
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        """Reject a time zone the IANA database does not know.
+
+        Raises:
+            ValueError: if the name is unknown.
+        """
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            msg = f"unknown time zone {value!r}"
+            raise ValueError(msg) from exc
+        return value
+
+
 class Settings(BaseSettings):
     """Root configuration object composing every settings group."""
 
@@ -262,6 +298,7 @@ class Settings(BaseSettings):
     prefect: PrefectSettings = Field(default_factory=PrefectSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     data: DataSettings = Field(default_factory=DataSettings)
+    equs: EqusSettings = Field(default_factory=EqusSettings)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -294,6 +331,7 @@ __all__ = [
     "DataSettings",
     "DatabaseSettings",
     "Environment",
+    "EqusSettings",
     "LogFormat",
     "LogLevel",
     "LoggingSettings",

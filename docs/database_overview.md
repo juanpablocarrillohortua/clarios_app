@@ -5,11 +5,11 @@ how the pieces relate and where to look next. For every column of every table, s
 the [data dictionary](data_dictionary.md).
 
 **Where things stand.** The tables described here exist, and the migrations that
-create them are tested. Two steps of the equivalent-batteries work are built: a
-loader lands the workbooks in Bronze (section 3), and a build turns them into typed
-Silver tables (section 5). Nothing fills the energy tables or Gold yet, so on a
-fresh database they are empty. Sections marked *planned* describe tables that do
-not exist yet.
+create them are tested. The equivalent-batteries work is built end to end: a loader
+lands the workbooks in Bronze (section 3), a build turns them into typed Silver
+tables (section 5), and Gold computes the equivalent batteries as views, checks the
+data and freezes the monthly close (section 6). Nothing fills the energy tables
+yet, so on a fresh database they are empty.
 
 ---
 
@@ -58,6 +58,8 @@ flowchart LR
         direction TB
         GK["kpi_hourly, kpi_daily"]
         GS["plant_daily_summary"]
+        EG["EQUS views<br/>v_resumen_equ, checks"]
+        EC["EQUS close<br/>resumen_equ"]
     end
 
     REF[("reference<br/>plants, meters,<br/>shifts, targets")]
@@ -68,7 +70,8 @@ flowchart LR
     Q --> LT
     H --> LT
     LT --> ES
-    ES -. "planned" .-> EQ["EQUS Gold<br/>(not built yet)"]
+    ES --> EG
+    EG -. "close-month" .-> EC
     REF -. "looked up by" .-> SR
     REF -. "looked up by" .-> GK
 ```
@@ -77,7 +80,7 @@ flowchart LR
 |---|---|---|
 | `bronze` | An exact copy of what each source sent. | Never. Rows are only added. |
 | `silver` | The same data, typed, checked and de-duplicated. | A correction replaces a row but keeps the old one. |
-| `gold` | The figures that reports and dashboards show. | Recomputed per period. |
+| `gold` | The figures that reports and dashboards show. | KPIs are recomputed per period. EQUS figures are views; a closed month is frozen and changes only by a reclose. |
 | `reference` | Plants, meters, shifts and targets. | Maintained by people. |
 
 The rule behind the layers: **never repair data where it lands**. Bronze keeps the
@@ -622,6 +625,78 @@ backed by reliable readings. Read it before trusting the value next to it. In
 `plant_daily_summary`, a positive `deviation_pct` means the plant used **more**
 energy than expected.
 
+### Equivalent batteries (EQUS)
+
+The last step of moving the calculation out of Excel. Gold **applies** the
+equation that Silver keeps as data: every view filters receipts and invoices with
+the rules of `silver.instrucc`, sums what each driver asks for, and multiplies by
+its factor in `silver.factores_equ`, for the version of the equation in force that
+month. No number of the equation is written in a view, so a new standard or a new
+rule is a new version in Silver and Gold needs no change.
+
+```mermaid
+flowchart TD
+    subgraph S["silver"]
+        direction TB
+        RQ["reporte_qad<br/>production receipts"]
+        US["unit_ship<br/>invoice lines"]
+        TF["td_form, td_deco<br/>paste and pieces per battery"]
+        CP["clasif_poly<br/>plastic categories"]
+        RU["factores_equ, instrucc,<br/>equs_version"]
+    end
+    subgraph G["gold"]
+        direction TB
+        VR["v_reporte_qad<br/>REPORTE QAD with its calculated columns"]
+        PR["v_reporte_qad_regla, v_unit_ship_regla<br/>each row paired with the rules it matches"]
+        CC["v_cantidad_cuenta<br/>column D"]
+        RE["v_resumen_equ<br/>column H"]
+        BM["v_equs_batt_mes<br/>rows 36 to 45"]
+        IN["inyeccion<br/>EQUS POLY"]
+        DQ["dq_* views<br/>six checks"]
+        FN["range functions<br/>any dates"]
+        CL[("resumen_equ<br/>frozen close")]
+    end
+    RQ --> VR
+    TF --> VR
+    CP --> VR
+    VR --> PR
+    US --> PR
+    RU --> PR
+    PR --> CC --> RE --> BM
+    VR --> IN
+    PR --> FN
+    VR --> DQ
+    RE -- "close-month" --> CL
+```
+
+| Object | What it holds | In the workbook |
+|---|---|---|
+| `v_reporte_qad` | Each production receipt with its kg of paste, decoration pieces and plastic EQ | Sheet REPORTE QAD and its columns AY, AZ, BE, BF, BG |
+| `v_resumen_equ` | Quantity, factor and EQ of each driver and month | **Column H of RESUMEN EQU** |
+| `v_equs_batt_mes` | EQ of each process and EQUS BATT, by month | Rows 36 to 45 |
+| `inyeccion` | EQUS POLY by month and category | Pivot INYECCION |
+| `lineas_de_pdcto` | Production by product line and Campo Equs | Pivot LINEAS DE PDCTO |
+| `v_costo_por_eq` | Conversion cost per EQ | New |
+| `dq_*` | Six data-quality checks; three of them block a close | New |
+| `resumen_equ` | The official close of each month | "ESTA SE COPIA" |
+
+**Three ways to read it.**
+
+- **Column H of one month, now:** `make resumen MONTH=2026-09`. The same as
+  `SELECT * FROM gold.v_resumen_equ WHERE mes = '2026-09-01'`.
+- **Any range of days:** `make report START=2026-03-15 END=2026-04-10` writes JSON
+  laid out like RESUMEN EQU, with warnings when the range cuts a month or spans two
+  versions of the equation.
+- **The official number:** `make close MONTH=2026-09` freezes the month after the
+  data-quality checks pass. A closed month never changes by itself; only a
+  reclose replaces it, and the replaced values are kept.
+
+**Keeping it current.** The views read Silver live, so they are up to date as soon
+as Silver is. `make refresh-all` does everything after new workbooks arrive: load,
+build Silver, refresh the two conversion tables, refresh statistics, and print
+column H of the latest month. `make refresh` does the last three only. A refresh
+never touches a closed month, and two refreshes never run at once.
+
 ---
 
 ## 7. Which tables are time-partitioned
@@ -654,38 +729,30 @@ flowchart LR
     m1["0001<br/>extensions<br/>timescaledb, pgcrypto"]
     m2["0002<br/>bronze<br/>8 tables"]
     m3["0003<br/>reference + silver<br/>4 + 21 tables, 2 views,<br/>version 1 of the equation"]
-    m4["0004<br/>gold<br/>3 tables"]
+    m4["0004<br/>gold<br/>3 + 6 tables, 15 views,<br/>8 functions"]
     m5["0005<br/>hypertables,<br/>compression, retention"]
     m1 --> m2 --> m3 --> m4 --> m5
 ```
 
+Revisions 0002, 0003 and 0004 were rewritten in place while the EQUS layers were
+built. A database migrated before a rewrite is brought up to date by going down to
+the revision before the rewritten one and up again: for the Gold rewrite,
+`alembic -c pyproject.toml downgrade 0003` and then `make db-upgrade`. That leaves
+Bronze and Silver as they are, but it drops `gold`, closed months included.
+
 ---
 
-## 9. Planned: the EQUS calculation in Gold (not built yet)
-
-Bronze and Silver are the first two steps of moving the equivalent-batteries
-calculation out of Excel. The last layer is designed in
-[EQUS_CONTEXT.md](EQUS_CONTEXT.md) and has no tables yet. Silver already holds
-everything it needs: the tests compute the equivalent batteries of every month of
-fiscal year 2026 from Silver alone and get the documented figures.
+## 9. The monthly close, step by step
 
 ```mermaid
-flowchart LR
-    B["bronze<br/>five landing tables<br/>(built)"]
-    subgraph S["silver (built)"]
-        direction TB
-        S1["catalogues<br/>items, lines, plant areas"]
-        S2["movements<br/>production receipts, invoice lines"]
-        S3["product structures<br/>and the two conversion tables"]
-        S4["calculation rules<br/>factors and versions"]
-    end
-    subgraph G["gold (planned)"]
-        direction TB
-        G1["equivalent batteries<br/>per driver and month"]
-        G2["data-quality checks"]
-        G3["frozen monthly close"]
-    end
-    B --> S -.-> G
+flowchart TD
+    A["make refresh-all<br/>new workbooks landed, Silver built,<br/>conversion tables refreshed"] --> B["make resumen MONTH=…<br/>look at column H"]
+    B --> C["make close MONTH=…"]
+    C --> D["data-quality checks of the month"]
+    D -- "a blocking check has rows" --> E["refused (exit 1)<br/>fix the data, or close again with ACCEPT_WARNINGS=1"]
+    D -- "clean, or accepted" --> F["column H frozen in gold.resumen_equ<br/>one transaction, recorded in gold.cierre_mes"]
+    F --> G["later changes to Silver<br/>move the views, never the close"]
+    G -- "the close must change" --> H["make close MONTH=… RECLOSE=1<br/>old values kept in resumen_equ_historial"]
 ```
 
 ---
@@ -697,8 +764,8 @@ The database publishes no port to your machine, so open `psql` inside its contai
 ```bash
 make up                                          # start the stack
 make db-upgrade                                  # apply the migrations
-make equs-load                                   # land the EQUS workbooks
-make equs-silver                                 # build EQUS Silver from them
+make refresh-all                                 # land the EQUS workbooks, build Silver, refresh Gold
+make resumen MONTH=2026-09                       # column H of RESUMEN EQU for a month
 docker compose exec db psql -U energy -d energy  # open a SQL prompt
 ```
 
@@ -751,6 +818,21 @@ FROM silver.reporte_qad
 WHERE fecha_efectiva >= DATE '2026-09-01' AND fecha_efectiva < DATE '2026-10-01'
 GROUP BY campo_equs
 ORDER BY cantidad DESC;
+
+-- Gold: column H of RESUMEN EQU for a month
+SELECT proceso, cuenta_stats, cantidad, factor, equs
+FROM gold.v_resumen_equ
+WHERE mes = DATE '2026-09-01'
+ORDER BY proceso, cuenta_stats;
+
+-- Gold: equivalent batteries by month
+SELECT * FROM gold.v_equs_batt_mes ORDER BY mes;
+
+-- Gold: any range of days, both ends included
+SELECT * FROM gold.resumen_equ_rango(DATE '2026-03-15', DATE '2026-04-10');
+
+-- Gold: the data-quality checks of a month
+SELECT * FROM gold.calidad_datos_rango(DATE '2026-09-01', DATE '2026-09-30');
 ```
 
 ---
@@ -772,6 +854,9 @@ ORDER BY cantidad DESC;
 | **Hypertable** | A table that TimescaleDB splits into chunks by time. |
 | **Migration** | A numbered file that changes the shape of the database. |
 | **Coverage** | The share of a period that is backed by reliable data, from 0 to 1. |
+| **Column H** | The column of sheet RESUMEN EQU that holds the EQ of each driver; `gold.v_resumen_equ` in the database. |
+| **Close** | The official EQ of a month, frozen in `gold.resumen_equ` so that later corrections to the data do not change a published number. |
+| **Version (of the equation)** | A set of factors and rules with a validity period. Each month is computed with the version in force that month. |
 
 ## Related documents
 

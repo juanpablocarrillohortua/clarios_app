@@ -51,9 +51,29 @@ else
 ALEMBIC := $(DC) run --rm --no-deps api alembic -c pyproject.toml
 endif
 
+# The EQUS commands run the same way: inside the api container by default, on
+# the host with RUNNER=host. The workbooks are not part of the image, so their
+# directory is mounted for the commands that read them - read-only, because the
+# loader must never modify a source file. Override with
+# `make equs-load EQUS_DIR=/some/other/dir`. On the host, ENERGY can name another
+# interpreter, for example ENERGY="python -m energy".
+EQUS_DIR ?= $(CURDIR)/data/raw_excels
+ifeq ($(RUNNER),host)
+ENERGY ?= $(PY) energy
+EQUS_REPORT ?= $(PY) equs-report
+ENERGY_EXCELS = $(ENERGY)
+EXCELS_DIR = $(EQUS_DIR)
+else
+ENERGY ?= $(DC) run --rm --no-deps api energy
+EQUS_REPORT ?= $(DC) run --rm --no-deps -T api equs-report
+ENERGY_EXCELS = $(DC) run --rm --no-deps -v "$(EQUS_DIR):/app/data/raw_excels:ro" api energy
+EXCELS_DIR = /app/data/raw_excels
+endif
+
 .PHONY: help install up down logs restart format format-check lint typecheck \
         security test test-unit test-integration check db-upgrade db-downgrade \
-        db-revision db-reset seed equs-load equs-silver clean
+        db-revision db-reset seed equs-load equs-silver refresh refresh-all resumen \
+        close report clean
 
 # -----------------------------------------------------------------------------
 # Meta
@@ -152,17 +172,40 @@ seed: ## Load reference data and synthetic sample data
 	$(DC) run --rm --no-deps api python scripts/seed_reference_data.py
 	$(DC) run --rm --no-deps api python scripts/generate_synthetic_data.py
 
-# The workbooks are not part of the image, so their directory is mounted for the
-# run - read-only, because the loader must never modify a source file. Override
-# with `make equs-load EQUS_DIR=/some/other/dir`.
-EQUS_DIR ?= $(CURDIR)/data/raw_excels
-
+# -----------------------------------------------------------------------------
+# Equivalent batteries (EQUS). Each target is one or two CLI calls: the CLI owns
+# every rule, and the connection comes from the settings the CLI reads.
+# -----------------------------------------------------------------------------
 equs-load: ## Land the EQUS workbooks of data/raw_excels in Bronze
-	$(DC) run --rm --no-deps -v "$(EQUS_DIR):/app/data/raw_excels:ro" api \
-		energy equs load-all --dir /app/data/raw_excels
+	$(ENERGY_EXCELS) equs load-all --dir $(EXCELS_DIR)
 
 equs-silver: ## Build EQUS Silver from Bronze and print the data-quality report
-	$(DC) run --rm --no-deps api energy equs build-silver
+	$(ENERGY) equs build-silver
+
+refresh: ## Bring gold.v_resumen_equ up to date, print column H [MONTH=YYYY-MM]
+	$(ENERGY) equs refresh-gold $(if $(MONTH),--month $(MONTH))
+
+refresh-all: ## Land data/raw_excels, build Silver, refresh Gold [MONTH=YYYY-MM]
+	$(ENERGY_EXCELS) equs load-all --dir $(EXCELS_DIR)
+	$(ENERGY) equs refresh-gold --with-silver $(if $(MONTH),--month $(MONTH))
+
+resumen: ## Column H of a month: MONTH=YYYY-MM [FORMAT=json|csv] [SOURCE=closed]
+	@test -n "$(MONTH)" || { echo "error: MONTH is required, for example: make resumen MONTH=2026-09" >&2; exit 1; }
+	$(ENERGY) equs resumen-equ --month $(MONTH) $(if $(FORMAT),--format $(FORMAT)) $(if $(SOURCE),--source $(SOURCE))
+
+close: ## Freeze a month's close: MONTH=YYYY-MM [ACCEPT_WARNINGS=1] [RECLOSE=1]
+	@test -n "$(MONTH)" || { echo "error: MONTH is required, for example: make close MONTH=2026-09" >&2; exit 1; }
+	$(ENERGY) equs close-month $(MONTH) $(if $(filter 1 yes true,$(ACCEPT_WARNINGS)),--accept-warnings) $(if $(filter 1 yes true,$(RECLOSE)),--reclose) $(if $(CLOSED_BY),--closed-by "$(CLOSED_BY)")
+
+# In the container, the directory of OUTPUT is mounted so the file lands on the host.
+report: ## EQ of a date range as JSON: START=YYYY-MM-DD END=YYYY-MM-DD [OUTPUT=file]
+	@test -n "$(START)" -a -n "$(END)" || { echo "error: START and END are required, for example: make report START=2026-09-01 END=2026-09-30" >&2; exit 1; }
+ifeq ($(RUNNER),host)
+	$(EQUS_REPORT) --start $(START) --end $(END) $(if $(OUTPUT),--output "$(OUTPUT)")
+else
+	$(DC) run --rm --no-deps -T $(if $(OUTPUT),-v "$(abspath $(dir $(OUTPUT))):/app/out") api \
+		equs-report --start $(START) --end $(END) $(if $(OUTPUT),--output "/app/out/$(notdir $(OUTPUT))")
+endif
 
 # -----------------------------------------------------------------------------
 # Housekeeping

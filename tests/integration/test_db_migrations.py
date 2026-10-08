@@ -14,6 +14,7 @@ is discovered during an incident, which is the worst possible moment.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import pytest
@@ -64,11 +65,50 @@ EQUS_SILVER_TABLES: tuple[str, ...] = (
 )
 ENERGY_SILVER_TABLES: tuple[str, ...] = ("readings", "quarantine", "consolidation_audit")
 
+# The Gold layer of the equivalent-batteries calculation.
+EQUS_GOLD_TABLES: tuple[str, ...] = (
+    "secciones_reporte",
+    "filas_resumen_equ",
+    "controles_calidad",
+    "resumen_equ",
+    "cierre_mes",
+    "resumen_equ_historial",
+)
+EQUS_GOLD_VIEWS: tuple[str, ...] = (
+    "v_reporte_qad",
+    "v_reporte_qad_regla",
+    "v_unit_ship_regla",
+    "lineas_de_pdcto",
+    "v_cantidad_cuenta",
+    "v_resumen_equ",
+    "v_equs_batt_mes",
+    "inyeccion",
+    "v_costo_por_eq",
+)
+EQUS_DQ_VIEWS: tuple[str, ...] = (
+    "dq_sin_regla",
+    "dq_doble_regla",
+    "dq_sin_conversor",
+    "dq_categoria_poly",
+    "dq_linea_sin_planta",
+    "dq_variacion",
+)
+EQUS_GOLD_FUNCTIONS: tuple[str, ...] = (
+    "en_vigor",
+    "versiones_rango",
+    "resumen_equ_rango_mes",
+    "resumen_equ_rango",
+    "resumen_equ_cierre_mes",
+    "inyeccion_rango_mes",
+    "inyeccion_rango",
+    "calidad_datos_rango",
+)
+
 EXPECTED_TABLES: dict[str, set[str]] = {
     "reference": {"plants", "meters", "shifts", "targets"},
     BRONZE_SCHEMA: {"raw_readings", "ingestion_runs", "raw_files", *LANDING_TABLES},
     SILVER_SCHEMA: {*ENERGY_SILVER_TABLES, *EQUS_SILVER_TABLES},
-    GOLD_SCHEMA: {"kpi_hourly", "kpi_daily", "plant_daily_summary"},
+    GOLD_SCHEMA: {"kpi_hourly", "kpi_daily", "plant_daily_summary", *EQUS_GOLD_TABLES},
 }
 
 # Index name -> the payload key it is built on. The keys are header texts of the
@@ -746,6 +786,249 @@ class TestSilverRevision:
             run_id=run_id,
         )
         assert "fk_bom_estructura_articulo_componente" in unknown_item
+
+
+@pytest.fixture
+def gold_connection(gold_engine: Engine) -> Connection:
+    """Return a connection whose writes are rolled back when the test ends."""
+    connection = gold_engine.connect()
+    transaction = connection.begin()
+    try:
+        yield connection
+    finally:
+        transaction.rollback()
+        connection.close()
+
+
+def _definitions(connection: Connection) -> dict[str, str]:
+    """Return the text of every view and function of the gold schema, by name."""
+    views = connection.execute(
+        text("SELECT viewname, definition FROM pg_views WHERE schemaname = 'gold'")
+    ).all()
+    functions = connection.execute(
+        text(
+            "SELECT p.proname, p.prosrc FROM pg_proc AS p "
+            "JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = 'gold'"
+        )
+    ).all()
+    return {row[0]: row[1] for row in [*views, *functions]}
+
+
+class TestGoldRevision:
+    """Revision 0004 for the equivalent-batteries Gold layer: objects, layout and rules."""
+
+    def test_creates_the_equs_objects_beside_the_energy_tables(
+        self, gold_connection: Connection, gold_engine: Engine
+    ) -> None:
+        """Six tables, fifteen views and eight functions; nothing materialized."""
+        inspector = inspect(gold_engine)
+        assert set(inspector.get_table_names(schema=GOLD_SCHEMA)) == EXPECTED_TABLES[GOLD_SCHEMA]
+        assert set(inspector.get_view_names(schema=GOLD_SCHEMA)) == {
+            *EQUS_GOLD_VIEWS,
+            *EQUS_DQ_VIEWS,
+        }
+        assert inspector.get_materialized_view_names(schema=GOLD_SCHEMA) == []
+        functions = {
+            row[0]
+            for row in gold_connection.execute(
+                text(
+                    "SELECT p.proname FROM pg_proc AS p "
+                    "JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = 'gold'"
+                )
+            )
+        }
+        assert functions == set(EQUS_GOLD_FUNCTIONS)
+
+    def test_no_view_writes_a_constant_of_the_equation(self, gold_connection: Connection) -> None:
+        """Factors, weights, Campo Equs values and product lines come from Silver.
+
+        The values are read from the seeded configuration itself, so a value
+        added later is checked too. The only literals allowed are RCT-WO, the
+        channel Venta, warehouse 1010 and the product-line range of check 1.
+        """
+        rules = gold_connection.execute(
+            text(
+                "SELECT linea_de_productos, campo_equs, campo_equs_excluir, prefijo_linea "
+                "FROM silver.instrucc"
+            )
+        ).all()
+        words = {value for row in rules for value in row if value}
+        numbers = {
+            str(value.normalize())
+            for row in gold_connection.execute(
+                text(
+                    "SELECT estandar_por_bat, multiplicador, peso FROM silver.factores_equ "
+                    "WHERE peso > 0"
+                )
+            )
+            for value in row
+            if value not in (0, 1)
+        }
+        categories = {
+            row[0]
+            for row in gold_connection.execute(text("SELECT campo_equs FROM silver.campo_equs"))
+        }
+        assert {"OXIDO", "TRUCK-B", "2201", "3104", "RCREFI"} <= words
+        assert {"6.08", "0.074", "2.15", "3.39", "4.29", "12.8"} <= numbers
+
+        allowed = {("dq_sin_regla", "3104")}
+        found = [
+            (name, literal)
+            for name, body in _definitions(gold_connection).items()
+            for literal in sorted(words | categories)
+            if f"'{literal}'" in body and (name, literal) not in allowed
+        ] + [
+            (name, number)
+            for name, body in _definitions(gold_connection).items()
+            for number in sorted(numbers)
+            if re.search(rf"(?<![\d.]){re.escape(number)}(?![\d])", body)
+        ]
+        assert found == []
+
+    def test_the_layout_of_resumen_equ_is_data(self, gold_connection: Connection) -> None:
+        """Column F of RESUMEN EQU, the rows of its drivers and the checks before a close."""
+        sections = gold_connection.execute(
+            text("SELECT proceso, planta, area_planta FROM gold.secciones_reporte ORDER BY orden")
+        ).all()
+        assert [tuple(row) for row in sections] == [
+            ("OREC", "OREC", "OREC"),
+            ("ENSAMBLE", "ENSAMBLE", "Ensamble"),
+            ("FORMACION", "F&A", "F&A"),
+            ("DECORADO", "F&A", "F&A"),
+            ("SHIPPING", "DESPACHOS", None),
+            ("INFO", "INFORMATIVOS", None),
+            ("POLY", "EQUS POLY", "Componentes"),
+        ]
+        rows = dict(
+            gold_connection.execute(text("SELECT cuenta_stats, fila FROM gold.filas_resumen_equ"))
+            .tuples()
+            .all()
+        )
+        assert rows["OXPROD_KG"] == 2
+        assert rows["UNITSHIP"] == 16
+        assert rows["LEADPROD"] == 18
+        assert rows["CONTPROD_CAR"] == 20
+        assert rows["Med_Comp_Prod"] == 30
+        drivers = {
+            row[0]
+            for row in gold_connection.execute(text("SELECT cuenta_stats FROM silver.factores_equ"))
+        }
+        assert drivers <= set(rows)
+
+        checks = gold_connection.execute(
+            text("SELECT vista, bloqueante FROM gold.controles_calidad ORDER BY orden")
+        ).all()
+        assert [row[0] for row in checks] == list(EQUS_DQ_VIEWS)
+        assert [row[0] for row in checks if row[1]] == list(EQUS_DQ_VIEWS[:3])
+
+    def test_the_plant_areas_of_the_sections_exist_before_any_build(
+        self, gold_connection: Connection
+    ) -> None:
+        """The sections point at silver.planta, which the migration fills for them."""
+        areas = {
+            row[0] for row in gold_connection.execute(text("SELECT planta FROM silver.planta"))
+        }
+        assert areas == {"OREC", "Ensamble", "F&A", "Componentes"}
+        bad_area = _rejected(
+            gold_connection,
+            "UPDATE gold.secciones_reporte SET area_planta = 'Nowhere' WHERE proceso = 'OREC'",
+        )
+        assert "fk_secciones_reporte_area_planta" in bad_area
+        bad_process = _rejected(
+            gold_connection,
+            "INSERT INTO gold.secciones_reporte VALUES ('PINTURA', 'PINTURA', NULL, 9)",
+        )
+        assert "ck_secciones_reporte_proceso" in bad_process
+
+    def test_a_close_names_its_factor_and_its_month(self, gold_connection: Connection) -> None:
+        """The frozen close points at silver.factores_equ and is keyed by first days."""
+        unknown = _rejected(
+            gold_connection,
+            "INSERT INTO gold.resumen_equ (mes, version, cuenta_stats, cantidad, equs, closed_by) "
+            "VALUES ('2026-09-01', 1, 'NO_SUCH_DRIVER', 1, 1, 'test')",
+        )
+        assert "fk_resumen_equ_factor" in unknown
+        mid_month = _rejected(
+            gold_connection,
+            "INSERT INTO gold.resumen_equ (mes, version, cuenta_stats, cantidad, equs, closed_by) "
+            "VALUES ('2026-09-15', 1, 'OXPROD_KG', 1, 1, 'test')",
+        )
+        assert "ck_resumen_equ_primer_dia" in mid_month
+        gold_connection.execute(
+            text(
+                "INSERT INTO gold.resumen_equ (mes, version, cuenta_stats, cantidad, equs, "
+                "closed_by) VALUES ('2026-09-01', 1, 'OXPROD_KG', 1, 1, 'test')"
+            )
+        )
+        # A version a close uses can no longer be deleted.
+        in_use = _rejected(gold_connection, "DELETE FROM silver.factores_equ WHERE version = 1")
+        assert "fk_resumen_equ_factor" in in_use or "fk_instrucc_factor" in in_use
+
+    def test_an_empty_database_answers_every_question(self, gold_connection: Connection) -> None:
+        """No production yet: every view runs and the range functions give zeros."""
+        for view in (*EQUS_GOLD_VIEWS, *EQUS_DQ_VIEWS):
+            # The names are this module's own constants.
+            gold_connection.execute(text(f"SELECT count(*) FROM gold.{view}"))  # noqa: S608
+        drivers = gold_connection.execute(
+            text(
+                "SELECT count(*), sum(cantidad), sum(equs) "
+                "FROM gold.resumen_equ_rango('2026-09-01', '2026-09-30')"
+            )
+        ).one()
+        assert tuple(drivers) == (16, 0, 0)
+        versions = gold_connection.execute(
+            text("SELECT mes, version FROM gold.versiones_rango('2025-09-15', '2025-10-02')")
+        ).all()
+        assert [(row[0].isoformat(), row[1]) for row in versions] == [
+            ("2025-09-01", None),
+            ("2025-10-01", 1),
+        ]
+        quality = gold_connection.execute(
+            text("SELECT vista, filas FROM gold.calidad_datos_rango('2026-09-01', '2026-09-30')")
+        ).all()
+        assert [tuple(row) for row in quality] == [(view, 0) for view in EQUS_DQ_VIEWS]
+
+
+def test_gold_downgrades_to_silver_and_up_again(database_url: str) -> None:
+    """Revision 0004 alone goes down and up, and takes back the plant areas it added."""
+    import os  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from alembic import command  # noqa: PLC0415
+    from alembic.config import Config  # noqa: PLC0415
+
+    previous = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = database_url
+    root = Path(__file__).resolve().parent.parent.parent
+    config = Config(toml_file=str(root / "pyproject.toml"))
+    config.set_main_option("script_location", str(root / "migrations"))
+
+    engine = create_engine(database_url, future=True)
+    try:
+        command.upgrade(config, "head")
+        command.downgrade(config, "-1")
+        command.upgrade(config, "head")
+        command.downgrade(config, "0003")
+        with engine.connect() as connection:
+            areas = connection.execute(text("SELECT count(*) FROM silver.planta")).scalar_one()
+        assert GOLD_SCHEMA not in set(inspect(engine).get_schema_names())
+        assert areas == 0
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            version = connection.execute(
+                text("SELECT version_num FROM public.alembic_version")
+            ).scalar_one()
+        assert version == "0005"
+    finally:
+        with engine.begin() as connection:
+            for schema in reversed(ALL_SCHEMAS):
+                connection.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            connection.execute(text("DROP TABLE IF EXISTS public.alembic_version"))
+        engine.dispose()
+        if previous is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous
 
 
 def test_silver_readings_enforces_grid_alignment(migrated_engine: Engine) -> None:

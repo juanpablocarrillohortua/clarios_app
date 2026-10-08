@@ -1,0 +1,309 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:clarios-energy:equs-report",
+  "title": "EQUS date-range report",
+  "description": "The equivalent batteries (EQ) of a range of days, organised like sheet RESUMEN EQU of the EQUS BATT workbook. Written by equs-report (energy.pipelines.flows.equs_report.build_report). Keys are Spanish to match the workbook and the database. Quantities are rounded to 6 decimals, factors and the terms of the equation to 10, EQ to 6; totals are added before rounding.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rango",
+    "fuente",
+    "generado_en",
+    "versiones",
+    "plantas",
+    "equs_batt",
+    "equs_poly",
+    "informativos",
+    "calidad_datos",
+    "advertencias"
+  ],
+  "properties": {
+    "rango": {
+      "description": "The days asked for, both ends included, and the months they touch.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["desde", "hasta", "dias", "meses"],
+      "properties": {
+        "desde": {"$ref": "#/$defs/dia"},
+        "hasta": {"$ref": "#/$defs/dia"},
+        "dias": {"type": "integer", "minimum": 1},
+        "meses": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/mes"}}
+      }
+    },
+    "fuente": {
+      "description": "live: computed from Silver now. closed: the frozen monthly close (EQUS POLY is still computed).",
+      "enum": ["live", "closed"]
+    },
+    "generado_en": {
+      "description": "When the report was made, with the plant's UTC offset.",
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}([+-]\\d{2}:\\d{2}|Z)$"
+    },
+    "versiones": {
+      "description": "The versions of the equation applied, and the months each was applied to.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "nombre", "meses"],
+        "properties": {
+          "version": {"type": "integer"},
+          "nombre": {"type": ["string", "null"]},
+          "meses": {"type": "array", "items": {"$ref": "#/$defs/mes"}}
+        }
+      }
+    },
+    "plantas": {
+      "description": "Column F of RESUMEN EQU: OREC, ENSAMBLE, F&A, DESPACHOS, in that order.",
+      "type": "array",
+      "items": {"$ref": "#/$defs/planta"}
+    },
+    "equs_batt": {
+      "description": "EQUS BATT: the sum of every driver that adds to the total (row 36).",
+      "type": "number"
+    },
+    "por_mes": {
+      "description": "With --by-month: EQUS BATT and EQUS POLY of each month of the range.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mes", "equs_batt", "equs_poly"],
+        "properties": {
+          "mes": {"$ref": "#/$defs/mes"},
+          "equs_batt": {"type": "number"},
+          "equs_poly": {"type": "number"}
+        }
+      }
+    },
+    "equs_poly": {"$ref": "#/$defs/poly"},
+    "informativos": {
+      "description": "The drivers that do not add to EQUS BATT (rows 11 to 13 and 18).",
+      "type": "array",
+      "items": {"$ref": "#/$defs/informativo"}
+    },
+    "calidad_datos": {
+      "description": "How many rows each data-quality view (gold.dq_*) returns inside the range.",
+      "type": "object",
+      "propertyNames": {"pattern": "^dq_[a-z_]+$"},
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "advertencias": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/advertencia"}
+    }
+  },
+  "$defs": {
+    "dia": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+    "mes": {"type": "string", "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"},
+    "numero_o_nulo": {"type": ["number", "null"]},
+    "fila": {
+      "description": "The row of RESUMEN EQU, when the layout lists it.",
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "mes_equs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mes", "equs"],
+      "properties": {"mes": {"$ref": "#/$defs/mes"}, "equs": {"type": "number"}}
+    },
+    "planta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["planta", "area_planta", "peso", "equs", "procesos"],
+      "properties": {
+        "planta": {"type": "string"},
+        "area_planta": {
+          "description": "The plant area of sheet Comparativo lineas; null for DESPACHOS.",
+          "type": ["string", "null"]
+        },
+        "peso": {
+          "description": "The weight of the plant in the conversion cost; null when the versions of the range differ.",
+          "$ref": "#/$defs/numero_o_nulo"
+        },
+        "equs": {"type": "number"},
+        "procesos": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/proceso"}},
+        "por_mes": {"type": "array", "items": {"$ref": "#/$defs/mes_equs"}}
+      }
+    },
+    "proceso": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proceso", "peso", "equs", "subsecciones"],
+      "properties": {
+        "proceso": {"type": "string"},
+        "peso": {"$ref": "#/$defs/numero_o_nulo"},
+        "equs": {"type": "number"},
+        "subsecciones": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/subseccion"}},
+        "por_mes": {"type": "array", "items": {"$ref": "#/$defs/mes_equs"}}
+      }
+    },
+    "subseccion": {
+      "description": "One cuenta STATS row of RESUMEN EQU: column D is cantidad, G factor, H equs.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fila",
+        "cuenta_stats",
+        "descripcion",
+        "unidad",
+        "fuente",
+        "cantidad",
+        "estandar_por_bat",
+        "multiplicador",
+        "peso",
+        "factor",
+        "equs"
+      ],
+      "properties": {
+        "fila": {"$ref": "#/$defs/fila"},
+        "cuenta_stats": {"type": "string"},
+        "descripcion": {"type": ["string", "null"]},
+        "unidad": {"enum": ["KG", "UN"]},
+        "fuente": {"enum": ["PRODUCCION", "MAT_ACTIVO", "COMP_DECO", "FACTURACION"]},
+        "cantidad": {"type": "number"},
+        "estandar_por_bat": {"$ref": "#/$defs/numero_o_nulo"},
+        "multiplicador": {"$ref": "#/$defs/numero_o_nulo"},
+        "peso": {"$ref": "#/$defs/numero_o_nulo"},
+        "factor": {
+          "description": "Null when the range spans more than one version; por_version then gives each.",
+          "$ref": "#/$defs/numero_o_nulo"
+        },
+        "equs": {"type": "number"},
+        "por_version": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "version",
+              "cantidad",
+              "estandar_por_bat",
+              "multiplicador",
+              "peso",
+              "factor",
+              "equs"
+            ],
+            "properties": {
+              "version": {"type": "integer"},
+              "cantidad": {"type": "number"},
+              "estandar_por_bat": {"type": "number"},
+              "multiplicador": {"type": "number"},
+              "peso": {"type": "number"},
+              "factor": {"type": "number"},
+              "equs": {"type": "number"}
+            }
+          }
+        },
+        "por_mes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mes", "cantidad", "equs"],
+            "properties": {
+              "mes": {"$ref": "#/$defs/mes"},
+              "cantidad": {"type": "number"},
+              "equs": {"type": "number"}
+            }
+          }
+        }
+      },
+      "if": {"properties": {"factor": {"type": "null"}}, "required": ["factor"]},
+      "then": {"required": ["por_version"]},
+      "else": {"not": {"required": ["por_version"]}}
+    },
+    "poly": {
+      "description": "EQUS POLY (rows 20 to 34), the plastic-injection indicator of warehouse 1010. It does not add to EQUS BATT.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["area_planta", "piezas", "piezas_con_equ", "equs", "subsecciones"],
+      "properties": {
+        "area_planta": {"type": ["string", "null"]},
+        "piezas": {
+          "description": "Every piece produced, including categories whose factor is 0.",
+          "type": "number"
+        },
+        "piezas_con_equ": {
+          "description": "The pieces of categories whose factor is not 0: cell D32 of RESUMEN EQU.",
+          "type": "number"
+        },
+        "equs": {"type": "number"},
+        "subsecciones": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["fila", "cuenta", "categoria", "piezas", "factor_equ", "equs"],
+            "properties": {
+              "fila": {"$ref": "#/$defs/fila"},
+              "cuenta": {"type": ["string", "null"]},
+              "categoria": {"type": ["string", "null"]},
+              "piezas": {"type": "number"},
+              "factor_equ": {"$ref": "#/$defs/numero_o_nulo"},
+              "equs": {"type": "number"},
+              "por_mes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["mes", "piezas", "equs"],
+                  "properties": {
+                    "mes": {"$ref": "#/$defs/mes"},
+                    "piezas": {"type": "number"},
+                    "equs": {"type": "number"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "informativo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fila", "cuenta_stats", "descripcion", "unidad", "cantidad"],
+      "properties": {
+        "fila": {"$ref": "#/$defs/fila"},
+        "cuenta_stats": {"type": "string"},
+        "descripcion": {"type": ["string", "null"]},
+        "unidad": {"enum": ["KG", "UN"]},
+        "cantidad": {"type": "number"},
+        "por_mes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mes", "cantidad", "equs"],
+            "properties": {
+              "mes": {"$ref": "#/$defs/mes"},
+              "cantidad": {"type": "number"},
+              "equs": {"type": "number"}
+            }
+          }
+        }
+      }
+    },
+    "advertencia": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["codigo", "mensaje"],
+      "properties": {
+        "codigo": {
+          "enum": [
+            "mes_parcial",
+            "varias_versiones",
+            "calidad_bloqueante",
+            "difiere_del_cierre",
+            "poly_en_vivo"
+          ]
+        },
+        "mensaje": {"type": "string"},
+        "meses": {"type": "array", "items": {"$ref": "#/$defs/mes"}}
+      }
+    }
+  }
+}

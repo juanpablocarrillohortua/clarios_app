@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from energy.core.settings import ArchiveSettings, DashSettings
+from energy.core.settings import ArchiveSettings, DashSettings, EqusSettings
 
 pytestmark = pytest.mark.unit
 
@@ -91,3 +91,37 @@ def test_archive_backend_rejects_an_unknown_value(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(ValidationError):
         ArchiveSettings(_env_file=None)
+
+
+def test_equs_gold_settings_have_working_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 30 % variation threshold, ten minutes for the lock, the plant's time zone."""
+    from decimal import Decimal  # noqa: PLC0415
+
+    for name in ("EQUS_VARIATION_THRESHOLD", "EQUS_LOCK_TIMEOUT_SECONDS", "EQUS_TIMEZONE"):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = EqusSettings(_env_file=None)
+
+    assert settings.variation_threshold == Decimal("0.30")
+    assert settings.lock_timeout_seconds == 600
+    assert settings.timezone == "America/Bogota"
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("EQUS_TIMEZONE", "Mars/Olympus_Mons"),
+        ("EQUS_LOCK_TIMEOUT_SECONDS", "0"),
+        ("EQUS_VARIATION_THRESHOLD", "-0.1"),
+    ],
+)
+def test_equs_gold_settings_reject_what_cannot_work(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    """An unknown time zone, a lock that never waits, a negative threshold."""
+    from pydantic import ValidationError  # noqa: PLC0415
+
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValidationError):
+        EqusSettings(_env_file=None)

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TextIO
 
 import structlog
 
@@ -91,6 +91,7 @@ def configure_logging(
     level: str = "INFO",
     json_output: bool = False,
     force: bool = False,
+    stream: TextIO | None = None,
 ) -> None:
     """Configure structlog and the standard library logging module.
 
@@ -103,6 +104,9 @@ def configure_logging(
         json_output: emit JSON lines instead of coloured console output. Use
             ``True`` in every deployed environment.
         force: reconfigure even if logging was already configured. Used by tests.
+        stream: where log lines go; standard output when ``None``. A command
+            whose standard output is its result (a JSON report, a table to pipe)
+            sends them to standard error instead.
     """
     global _configured  # noqa: PLW0603
     if _configured and not force:
@@ -112,7 +116,7 @@ def configure_logging(
 
     logging.basicConfig(
         format="%(message)s",
-        stream=sys.stdout,
+        stream=stream or sys.stdout,
         level=numeric_level,
         force=True,
     )
@@ -130,11 +134,12 @@ def configure_logging(
     _configured = True
 
 
-def configure_from_settings(force: bool = False) -> None:
+def configure_from_settings(force: bool = False, stream: TextIO | None = None) -> None:
     """Configure logging from the process settings.
 
     Args:
         force: reconfigure even if logging was already configured.
+        stream: where log lines go; standard output when ``None``.
     """
     from energy.core.settings import get_settings  # noqa: PLC0415
 
@@ -143,6 +148,7 @@ def configure_from_settings(force: bool = False) -> None:
         level=settings.logging.level,
         json_output=settings.logging.format == "json",
         force=force,
+        stream=stream,
     )
 
 

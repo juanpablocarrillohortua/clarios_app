@@ -23,12 +23,19 @@ for the design, and [CONTRIBUTING.md](CONTRIBUTING.md) for conventions.
 **Equivalent batteries (EQUS).** The plant's Excel calculation of equivalent
 batteries is being moved into this database. [docs/EQUS_CONTEXT.md](docs/EQUS_CONTEXT.md)
 is the source of truth for its rules and target schema; read it before touching
-anything EQUS. Its Bronze layer is built (revision `0002`) and has a loader
-(`make equs-load`, or `energy equs load` / `load-all`). Its Silver layer is built
-too (inside revision `0003`) and has a build (`make equs-silver`, or
-`energy equs build-silver`). Its Gold is not.
+anything EQUS. All three layers are built. Bronze (revision `0002`) has a loader
+(`make equs-load`, or `energy equs load` / `load-all`). Silver (inside revision
+`0003`) has a build (`make equs-silver`, or `energy equs build-silver`). Gold
+(inside revision `0004`) is views, data-quality checks and a frozen monthly close,
+with `make refresh` / `refresh-all` / `resumen` / `close` / `report`.
 [docs/database_overview.md](docs/database_overview.md) shows every schema with
 diagrams.
+[docs/equs_calculation_explained.md](docs/equs_calculation_explained.md) explains
+the calculation to non-technical readers, with a Spanish translation in
+[docs/equs_calculation_explained.es.md](docs/equs_calculation_explained.es.md).
+[docs/equs_resumen_call_chain.md](docs/equs_resumen_call_chain.md) traces
+`make resumen` through the code. Keep all three in step with any change to the
+Gold views or to that call chain, and change both languages together.
 
 ---
 
@@ -42,7 +49,7 @@ Definition-of-Done item is verified against a running stack.
 | `make up` | **Exit 0 - all 7 services healthy** (api, caddy, dash, db, minio, prefect-server, prefect-worker) |
 | Port policy | Only caddy publishes (8080/8443); everything else internal |
 | `make db-upgrade` | **Exit 0** - Alembic at head `0005` against live TimescaleDB |
-| Schemas / tables | `bronze, gold, reference, silver`; 36 tables (8 + 3 + 4 + 21) and 2 materialized views |
+| Schemas / tables | `bronze, gold, reference, silver`; 42 tables (8 + 9 + 4 + 21), 2 materialized views, 15 views and 8 functions in `gold` |
 | Extensions | timescaledb **2.30.1**, pgcrypto 1.3 |
 | Hypertables | All 5 registered: `raw_readings, readings, kpi_hourly, kpi_daily, plant_daily_summary` |
 | Timescale policies | 3 compression + 1 retention job created (no warnings) |
@@ -54,7 +61,7 @@ Definition-of-Done item is verified against a running stack.
 | `make test` | **525 passed, 39 skipped** (about 22 minutes with the workbooks present) |
 | Coverage | **95.72%** (threshold 70%) |
 | `make test-integration` | **118 passed** against real TimescaleDB and MinIO, with the workbooks present |
-| No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer |
+| No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer. One deliberate exception, asked for on 2026-10-08: `docs/equs_calculation_explained.es.md`, the Spanish translation of the non-technical explanation |
 
 The table count and the `make check`, test and coverage rows were re-verified on
 2026-10-07, after the EQUS Silver layer was built; the other rows date from
@@ -201,10 +208,55 @@ test raising would fail the suite. Keep that distinction.
   it writes itself and runs everywhere; `test_equs_silver_build.py` needs the
   real workbooks and checks section 9 of EQUS_CONTEXT to the cent, plus the
   pivots of the workbooks themselves. The equivalent batteries of a month are
-  computed there by a test query; that query is what Gold will own.
+  computed there by a test query that predates Gold; Gold's views now own it.
 - Developing against a throwaway database from the host: use `127.0.0.1`, not
   `localhost`, in `DATABASE_URL`. With `localhost` every connection first tries
   IPv6 and each Alembic command takes minutes.
+
+**EQUS Gold** (built 2026-10-08, inside revision `0004`):
+
+- **No number of the equation in a view.** The views apply `silver.factores_equ`,
+  `instrucc` and `equs_version`. Allowed literals: `RCT-WO`, channel `Venta`,
+  warehouse `1010`, the `2101`–`3104` range of check 1, and the four `fuente`
+  values. `TestGoldRevision.test_no_view_writes_a_constant_of_the_equation` reads
+  the configuration and fails if a value of it appears in a view or function.
+- **One definition of everything that could diverge.** `gold.en_vigor` is the only
+  "version in force in a month" rule (the version whose validity contains the
+  month's first day). `v_reporte_qad_regla` and `v_unit_ship_regla` pair rows with
+  rules; `v_cantidad_cuenta` and every range function sum those two, so a month and
+  a range covering it cannot disagree.
+- **Nothing in Gold is materialized.** A fiscal year computes in about a second.
+  The only stale objects are `silver.td_form` and `td_deco`; `refresh-gold`
+  refreshes them `CONCURRENTLY` in autocommit and runs `ANALYZE`. If a view is ever
+  materialized, the refresh must cover it.
+- **The close is frozen.** `gold.resumen_equ` changes only through
+  `close-month --reclose`, which copies the old rows to `resumen_equ_historial`;
+  every close and reclose is a row of `cierre_mes` with the data-quality counts and
+  whether blocking warnings were accepted. Refreshes never touch these tables.
+- **Layout is data.** `gold.secciones_reporte` (column F of RESUMEN EQU, plant
+  areas) and `gold.filas_resumen_equ` (row numbers) drive the report's order and
+  labels; `domain/equs_gold.py` only nests and rounds.
+- **Refresh and close share an advisory lock** (key 7215590330), taken under
+  `lock_timeout`; a second one waits up to `EQUS_LOCK_TIMEOUT_SECONDS` and exits 3.
+- **Exit codes of the Gold commands and `equs-report`:** 0, 1 invalid or refused,
+  2 database, 3 lock. `main()` runs Typer with `standalone_mode=False` and maps
+  usage errors to 1 (Typer 0.27 bundles its own Click: catch `typer.TyperException`,
+  not `click.UsageError`). CLI logs go to stderr; stdout carries only the result.
+- **Check 4 finds 1,588 FY26 rows, not "about 1,495".** The 1,495 are exactly the
+  covers and handles of product lines 1200 and 1202; the other 93 are `150000015`,
+  truck handles (ACCMED, line 1305). Matching 1,495 would need product lines in the
+  view. **Check 3 finds 34 FY26 rows** (16 imported batteries with 0 decoration
+  pieces), none in September: closing those months needs `--accept-warnings`.
+- `make` targets only call the CLI. `RUNNER=host` runs them on the host and
+  `ENERGY=` names the interpreter (the tests pass `ENERGY="<python> -m energy"`).
+- Tests: `test_equs_gold_rules.py` builds a small world in Silver and runs
+  everywhere (including the lock, two refreshes at once, a reader during a
+  refresh, and the make targets' guards); `test_equs_gold_build.py` needs the
+  workbooks and reconciles row by row with column H of RESUMEN EQU read from the
+  workbook, asserting each known difference at its exact value.
+- The engine's connect hook (`db/session.py`) commits its `SET TIME ZONE`. It
+  used to leave the connection in a transaction, which made autocommit connections
+  impossible and let the pool's rollback undo the setting after the first use.
 
 **EQUS Bronze loader** (built 2026-10-07):
 
@@ -273,10 +325,14 @@ test raising would fail the suite. Keep that distinction.
 
 All deliberate; each is explained where it lives.
 
-0. **Revision `0003` also creates the EQUS Silver layer** (decided 2026-10-07),
-   beside the energy `silver` tables, rather than a later revision. It was
-   rewritten in place, so a database already at head is migrated with
-   `alembic downgrade 0002` and then `upgrade head`, which leaves Bronze alone.
+0. **Revisions `0003` and `0004` also create the EQUS Silver and Gold layers**
+   (decided 2026-10-07 and 2026-10-08), beside the energy tables, rather than later
+   revisions. Both were rewritten in place. A database whose `0004` predates EQUS
+   Gold is migrated with `alembic downgrade 0003` and then `upgrade head`, which
+   leaves Bronze and Silver alone (and drops `gold`, closed months included); one
+   whose `0003` predates EQUS Silver goes down to `0002` instead. `0004` also
+   inserts the four plant areas its sections point at into `silver.planta`, as the
+   Silver build would.
 1. **`reference` schema is created in `0003_create_silver_schema.py`.** Silver and
    Gold carry foreign keys into `plants`/`meters`, so it must exist first, and
    Silver is the first layer to need it. Renumbering the five specified

@@ -10,6 +10,8 @@ code a shell or a scheduler will see.
 
 from __future__ import annotations
 
+import json
+import sys
 from datetime import date
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -19,7 +21,12 @@ from typer.testing import CliRunner
 
 import energy.__main__ as cli
 from energy.domain.equs_silver import LineWithoutPlant, SilverBuildReport, StructureSheet
-from energy.domain.exceptions import PipelineError
+from energy.domain.exceptions import (
+    CloseRefusedError,
+    LockTimeoutError,
+    PipelineError,
+    RepositoryError,
+)
 from energy.domain.landing import SheetSpec
 from energy.pipelines.flows.equs_bronze_load import ROUTES, LoadAllResult, RouteOutcome
 from energy.services.bronze_loader import LoadResult, SheetOutcome
@@ -397,3 +404,280 @@ def test_build_silver_exits_non_zero_when_it_cannot_build(
     assert result.exit_code == 1
     assert "no completed load" in result.output
     assert "Silver built" not in result.output
+
+
+# -----------------------------------------------------------------------------
+# EQUS Gold: refresh-gold, resumen-equ, close-month, equs-report
+# -----------------------------------------------------------------------------
+def _gold_report(source: str = "live") -> dict[str, Any]:
+    """Return a small report of September 2026, built as the real one is."""
+    from datetime import UTC, datetime  # noqa: PLC0415
+    from decimal import Decimal  # noqa: PLC0415
+
+    from energy.domain.equs_gold import (  # noqa: PLC0415
+        DateRange,
+        Driver,
+        DriverAmount,
+        QualityCount,
+        ReportData,
+        VersionMonth,
+        nest_report,
+    )
+
+    month = date(2026, 9, 1)
+    driver = Driver(
+        version=1, version_name="STD FY26", cuenta_stats="OXPROD_KG", descripcion="Oxido",
+        proceso="OREC", unidad="KG", fuente="PRODUCCION", estandar_por_bat=Decimal("6.08"),
+        multiplicador=Decimal(1), peso=Decimal("0.074"),
+        factor=Decimal(1) / Decimal("6.08") * Decimal("0.074"), suma_eq=True, fila=2,
+        planta="OREC", area_planta="OREC", orden=1, peso_proceso=Decimal("0.346"),
+    )  # fmt: skip
+    quantity = Decimal(1162129)
+    return nest_report(
+        ReportData(
+            period=DateRange.of_month(month),
+            source="closed" if source == "closed" else "live",
+            generated_at=datetime(2026, 10, 7, tzinfo=UTC),
+            versions=(VersionMonth(month, 1, "STD FY26"),),
+            drivers=(driver,),
+            amounts=(DriverAmount(month, 1, "OXPROD_KG", quantity, quantity * driver.factor),),
+            poly=(),
+            quality=(QualityCount("dq_sin_regla", "no rule", bloqueante=True, filas=0),),
+        )
+    )
+
+
+@pytest.fixture
+def gold(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Replace the Gold flows, recording how they are called."""
+    from decimal import Decimal  # noqa: PLC0415
+
+    from energy.domain.equs_gold import (  # noqa: PLC0415
+        CloseSummary,
+        FrozenMonth,
+        QualityCount,
+        RefreshStep,
+        column_h,
+    )
+    from energy.services.equs_gold import RefreshOutcome  # noqa: PLC0415
+
+    recorded: dict[str, Any] = {}
+
+    def fail_if_asked() -> None:
+        if "raise" in recorded:
+            raise recorded["raise"]
+
+    def fake_refresh_gold(**options: Any) -> RefreshOutcome:
+        recorded["refresh"] = options
+        fail_if_asked()
+        return RefreshOutcome((RefreshStep("refresh silver.td_form", 0.25, "concurrently"),))
+
+    def fake_resumen_equ(month: date, *, source: str = "live") -> tuple[Any, Any]:
+        recorded["resumen"] = (month, source)
+        fail_if_asked()
+        report = _gold_report(source)
+        return report, column_h(report)
+
+    def fake_close_month(month: date, **options: Any) -> CloseSummary:
+        recorded["close"] = (month, options)
+        options["on_quality"]((QualityCount("dq_sin_regla", "no rule", bloqueante=True, filas=0),))
+        fail_if_asked()
+        return CloseSummary(
+            frozen=FrozenMonth(month, 1, 13, reclosed=False, replaced=0, accepted_warnings=False),
+            quality=(),
+            processes=(("OREC", Decimal(71040)),),
+            equs_batt=Decimal(71040),
+            equs_poly=Decimal(503033),
+        )
+
+    def fake_report_for(start: str, end: str, source: str, by_month: bool, *, dsn: Any) -> Any:
+        recorded["report"] = (start, end, source, by_month, dsn)
+        fail_if_asked()
+        return _gold_report(source)
+
+    monkeypatch.setattr(cli, "refresh_gold", fake_refresh_gold)
+    monkeypatch.setattr(cli, "resumen_equ", fake_resumen_equ)
+    monkeypatch.setattr(cli, "close_month", fake_close_month)
+    monkeypatch.setattr(cli, "latest_production_month", lambda: date(2026, 9, 1))
+    monkeypatch.setattr(cli, "report_for", fake_report_for)
+    return recorded
+
+
+def test_help_lists_the_gold_commands() -> None:
+    """Refresh, read and close are discoverable beside the loads."""
+    result = runner.invoke(cli.build_app(), ["equs", "--help"])
+
+    assert result.exit_code == 0
+    for command in ("refresh-gold", "resumen-equ", "close-month"):
+        assert command in result.output
+
+
+def test_resumen_equ_prints_column_h(gold: dict[str, Any]) -> None:
+    """A table by default: the driver, then the totals."""
+    result = runner.invoke(cli.build_app(), ["equs", "resumen-equ", "--month", "2026-09"])
+
+    assert result.exit_code == 0, result.output
+    assert gold["resumen"] == (date(2026, 9, 1), "live")
+    assert "Column H of RESUMEN EQU, 2026-09 (live)" in result.output
+    assert "OXPROD_KG" in result.output
+    assert "1,162,129" in result.output
+    assert "0.0121710526" in result.output
+    assert "14,144.33" in result.output
+    assert "EQUS BATT" in result.output
+
+
+def test_resumen_equ_writes_json_and_csv(gold: dict[str, Any]) -> None:
+    """The same rows, for a machine."""
+    as_json = runner.invoke(
+        cli.build_app(),
+        ["equs", "resumen-equ", "--month", "2026-09", "--format", "json", "--source", "closed"],
+    )
+    assert as_json.exit_code == 0, as_json.output
+    payload = json.loads(as_json.output)
+    assert payload["mes"] == "2026-09"
+    assert payload["fuente"] == "closed"
+    assert payload["filas"][0]["nombre"] == "OXPROD_KG"
+    assert gold["resumen"][1] == "closed"
+
+    as_csv = runner.invoke(
+        cli.build_app(), ["equs", "resumen-equ", "--month", "2026-09", "--format", "CSV"]
+    )
+    assert as_csv.exit_code == 0, as_csv.output
+    lines = as_csv.output.splitlines()
+    assert lines[0] == "tipo,fila,nombre,proceso,planta,categoria,cantidad,factor,equs"
+    assert lines[1].startswith("cuenta,2,OXPROD_KG,OREC,OREC,,1162129,0.0121710526,")
+
+
+@pytest.mark.usefixtures("gold")
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["equs", "resumen-equ"],
+        ["equs", "resumen-equ", "--month", "2026-13"],
+        ["equs", "resumen-equ", "--month", "2026-09", "--format", "xml"],
+        ["equs", "resumen-equ", "--month", "2026-09", "--source", "frozen"],
+        ["equs", "close-month"],
+        ["equs", "refresh-gold", "--month", "September"],
+    ],
+)
+def test_invalid_arguments_exit_1(arguments: list[str]) -> None:
+    """Exit 1, with the reason, and nothing done."""
+    result = runner.invoke(cli.build_app(), arguments)
+
+    assert result.exit_code == 1
+    assert "error:" in result.output
+
+
+@pytest.mark.parametrize(("error", "code"), [("database", 2), ("lock", 3), ("refused", 1)])
+def test_the_exit_code_says_what_went_wrong(gold: dict[str, Any], error: str, code: int) -> None:
+    """2 for the database, 3 for the lock, 1 for a refused request."""
+    gold["raise"] = {
+        "database": RepositoryError("could not reach the database"),
+        "lock": LockTimeoutError("another refresh is running"),
+        "refused": CloseRefusedError("the month is already closed"),
+    }[error]
+
+    for arguments in (
+        ["equs", "refresh-gold"],
+        ["equs", "close-month", "2026-09"],
+        ["equs", "resumen-equ", "--month", "2026-09"],
+    ):
+        result = runner.invoke(cli.build_app(), arguments)
+        assert result.exit_code == code, (arguments, result.output)
+    report = runner.invoke(cli.build_report_app(), ["--start", "2026-09-01", "--end", "2026-09-30"])
+    assert report.exit_code == code
+
+
+def test_close_month_prints_the_checks_and_the_close(gold: dict[str, Any]) -> None:
+    """The options reach the close; the counts print before the result."""
+    result = runner.invoke(
+        cli.build_app(),
+        [
+            "equs", "close-month", "2026-09", "--accept-warnings", "--reclose",
+            "--closed-by", "planner", "--lock-timeout", "5",
+        ],
+    )  # fmt: skip
+
+    assert result.exit_code == 0, result.output
+    month, options = gold["close"]
+    assert month == date(2026, 9, 1)
+    assert options["accept_warnings"] is True
+    assert options["reclose"] is True
+    assert options["closed_by"] == "planner"
+    assert options["lock_timeout"] == 5
+    assert result.output.index("Data-quality checks") < result.output.index("Closed 2026-09")
+    assert "EQUS POLY" in result.output
+
+
+def test_refresh_gold_prints_its_steps_then_column_h(gold: dict[str, Any]) -> None:
+    """Each step with its time, then the latest month's column H."""
+    result = runner.invoke(cli.build_app(), ["equs", "refresh-gold", "--no-concurrently"])
+
+    assert result.exit_code == 0, result.output
+    assert gold["refresh"] == {"with_silver": False, "concurrently": False, "lock_timeout": None}
+    assert "refresh silver.td_form" in result.output
+    assert "0.25 s" in result.output
+    assert gold["resumen"] == (date(2026, 9, 1), "live")
+    assert "Column H of RESUMEN EQU, 2026-09" in result.output
+
+
+def test_refresh_gold_writes_json(gold: dict[str, Any]) -> None:
+    """The steps and the month's rows, for a machine."""
+    result = runner.invoke(
+        cli.build_app(),
+        ["equs", "refresh-gold", "--with-silver", "--month", "2026-08", "--format", "json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["pasos"][0]["paso"] == "refresh silver.td_form"
+    assert payload["pasos"][-1]["paso"] == "compute column H"
+    assert payload["resumen"]["filas"][0]["nombre"] == "OXPROD_KG"
+    assert gold["refresh"]["with_silver"] is True
+    assert gold["resumen"][0] == date(2026, 8, 1)
+
+
+def test_equs_report_writes_json_to_stdout_or_a_file(gold: dict[str, Any], tmp_path: Path) -> None:
+    """The dictionary as JSON; --output writes it to a file instead."""
+    app = cli.build_report_app()
+    printed = runner.invoke(app, ["--start", "2026-09-01", "--end", "2026-09-30", "--by-month"])
+    assert printed.exit_code == 0, printed.output
+    assert json.loads(printed.output)["equs_batt"] > 0
+    assert gold["report"] == ("2026-09-01", "2026-09-30", "live", True, None)
+
+    target = tmp_path / "september.json"
+    written = runner.invoke(
+        app,
+        ["--start", "2026-09-01", "--end", "2026-09-30", "--source", "closed",
+         "--output", str(target), "--dsn", "postgresql://u:p@h/db"],
+    )  # fmt: skip
+    assert written.exit_code == 0, written.output
+    assert json.loads(target.read_text(encoding="utf-8"))["fuente"] == "closed"
+    assert gold["report"][2:] == ("closed", False, "postgresql://u:p@h/db")
+
+
+@pytest.mark.usefixtures("gold")
+def test_equs_report_needs_both_dates() -> None:
+    """Exit 1 without --end."""
+    result = runner.invoke(cli.build_report_app(), ["--start", "2026-09-01"])
+
+    assert result.exit_code == 1
+    assert "--start and --end are both required" in result.output
+
+
+@pytest.mark.parametrize(
+    ("entry", "argv", "code"),
+    [
+        ("main", ["energy", "equs", "resumen-equ", "--no-such-option"], 1),
+        ("report_main", ["equs-report", "--start", "2026-09-01", "--bogus"], 1),
+        ("main", ["energy", "equs", "--help"], 0),
+    ],
+)
+def test_a_malformed_command_line_exits_1_not_2(
+    monkeypatch: pytest.MonkeyPatch, entry: str, argv: list[str], code: int
+) -> None:
+    """Exit 2 belongs to database errors, so usage errors give 1."""
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as finished:
+        getattr(cli, entry)()
+    assert finished.value.code == code

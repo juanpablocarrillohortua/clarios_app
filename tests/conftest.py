@@ -286,6 +286,20 @@ def silver_engine(database_url: str) -> Iterator[Engine]:
     yield from _engine_at(database_url, SILVER_REVISION)
 
 
+@pytest.fixture(scope="class")
+def gold_engine(database_url: str) -> Iterator[Engine]:
+    """Return an engine bound to a database migrated to head, Gold included.
+
+    Class-scoped, for the same reason as :func:`bronze_engine`. Each class gets
+    a database of its own, so a class that commits a close does not leak it
+    into another.
+
+    Yields:
+        An engine for that database.
+    """
+    yield from _engine_at(database_url, "head")
+
+
 # =============================================================================
 # API
 # =============================================================================

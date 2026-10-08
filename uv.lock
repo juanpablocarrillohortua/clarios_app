@@ -412,6 +412,7 @@ analytics = [
 dev = [
     { name = "bandit" },
     { name = "hypothesis" },
+    { name = "jsonschema" },
     { name = "mypy" },
     { name = "pandas-stubs" },
     { name = "pip-audit" },
@@ -460,6 +461,7 @@ provides-extras = ["analytics"]
 dev = [
     { name = "bandit", extras = ["toml"], specifier = ">=1.8" },
     { name = "hypothesis", specifier = ">=6.122" },
+    { name = "jsonschema", specifier = ">=4.23" },
     { name = "mypy", specifier = ">=1.13" },
     { name = "pandas-stubs", specifier = ">=2.2" },
     { name = "pip-audit", specifier = ">=2.7" },
