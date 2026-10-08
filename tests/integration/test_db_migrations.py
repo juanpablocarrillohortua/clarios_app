@@ -36,10 +36,38 @@ LANDING_TABLES: tuple[str, ...] = (
     "raw_manual_sheets",
 )
 
+# The Silver tables of the equivalent-batteries calculation, by what they hold.
+EQUS_CATALOGUES: tuple[str, ...] = (
+    "planta",
+    "almacen",
+    "lineas_produccion",
+    "linea_de_productos",
+    "campo_equs",
+    "grupo_fam",
+    "item_master",
+    "costo_std",
+    "vendido_a",
+)
+EQUS_STRUCTURES: tuple[str, ...] = (
+    "bom_estructura",
+    "element_deco",
+    "clasif_poly",
+    "costo_conversion",
+)
+EQUS_MOVEMENTS: tuple[str, ...] = ("reporte_qad", "unit_ship")
+EQUS_CONFIGURATION: tuple[str, ...] = ("equs_version", "factores_equ", "instrucc")
+EQUS_SILVER_TABLES: tuple[str, ...] = (
+    *EQUS_CATALOGUES,
+    *EQUS_STRUCTURES,
+    *EQUS_MOVEMENTS,
+    *EQUS_CONFIGURATION,
+)
+ENERGY_SILVER_TABLES: tuple[str, ...] = ("readings", "quarantine", "consolidation_audit")
+
 EXPECTED_TABLES: dict[str, set[str]] = {
     "reference": {"plants", "meters", "shifts", "targets"},
     BRONZE_SCHEMA: {"raw_readings", "ingestion_runs", "raw_files", *LANDING_TABLES},
-    SILVER_SCHEMA: {"readings", "quarantine", "consolidation_audit"},
+    SILVER_SCHEMA: {*ENERGY_SILVER_TABLES, *EQUS_SILVER_TABLES},
     GOLD_SCHEMA: {"kpi_hourly", "kpi_daily", "plant_daily_summary"},
 }
 
@@ -403,6 +431,321 @@ class TestBronzeRevision:
             {"raw_file_id": raw_file_id},
         ).scalar_one()
         assert uploaded_by == "steward"
+
+
+@pytest.fixture
+def silver_connection(silver_engine: Engine) -> Connection:
+    """Return a connection whose writes are rolled back when the test ends."""
+    connection = silver_engine.connect()
+    transaction = connection.begin()
+    try:
+        yield connection
+    finally:
+        transaction.rollback()
+        connection.close()
+
+
+def _rejected(connection: Connection, statement: str, **parameters: object) -> str:
+    """Run a statement that must be refused and return the database's message."""
+    from sqlalchemy.exc import DBAPIError  # noqa: PLC0415
+
+    savepoint = connection.begin_nested()
+    try:
+        connection.execute(text(statement), parameters)
+    except DBAPIError as error:
+        savepoint.rollback()
+        return str(error.orig)
+    savepoint.rollback()
+    pytest.fail(f"the database accepted: {statement}")
+
+
+class TestSilverRevision:
+    """Revision 0003 for the equivalent-batteries tables: structure, rules and seed."""
+
+    def test_creates_the_equs_tables_beside_the_energy_ones(self, silver_engine: Engine) -> None:
+        """Eighteen EQUS tables and two materialized views, and no Gold yet."""
+        inspector = inspect(silver_engine)
+
+        assert GOLD_SCHEMA not in inspector.get_schema_names()
+        tables = set(inspector.get_table_names(schema=SILVER_SCHEMA))
+        assert tables == EXPECTED_TABLES[SILVER_SCHEMA]
+        assert len(EQUS_SILVER_TABLES) == 18
+        assert set(inspector.get_materialized_view_names(schema=SILVER_SCHEMA)) == {
+            "td_form",
+            "td_deco",
+        }
+
+    def test_tables_are_keyed_by_what_the_business_calls_them(self, silver_engine: Engine) -> None:
+        """Natural keys, and item codes as text: 21500000A is a real item."""
+        inspector = inspect(silver_engine)
+        keys = {
+            table: inspector.get_pk_constraint(table, schema=SILVER_SCHEMA)["constrained_columns"]
+            for table in EQUS_SILVER_TABLES
+        }
+
+        assert keys["item_master"] == ["numero_articulo"]
+        assert keys["reporte_qad"] == ["numero_de_transaccion"]
+        assert keys["unit_ship"] == ["num_fact", "orden", "linea"]
+        assert keys["costo_std"] == ["numero_articulo", "vigente_desde"]
+        assert keys["costo_conversion"] == ["mes", "planta", "proceso"]
+        assert keys["factores_equ"] == ["version", "cuenta_stats"]
+        assert keys["instrucc"] == ["version", "cuenta_stats", "regla_n"]
+        assert keys["bom_estructura"] == ["bom_id"]
+        assert all(keys.values())
+
+        columns = {
+            column["name"]: str(column["type"])
+            for column in inspector.get_columns("item_master", schema=SILVER_SCHEMA)
+        }
+        assert columns["numero_articulo"] == "TEXT"
+
+    def test_every_reference_is_a_foreign_key(self, silver_engine: Engine) -> None:
+        """The structure points at the item master twice; lineage points at Bronze."""
+        inspector = inspect(silver_engine)
+
+        def targets(table: str) -> set[tuple[str, str, str]]:
+            return {
+                (key["constrained_columns"][0], key["referred_schema"], key["referred_table"])
+                for key in inspector.get_foreign_keys(table, schema=SILVER_SCHEMA)
+            }
+
+        assert targets("bom_estructura") == {
+            ("articulo_matriz", "silver", "item_master"),
+            ("articulo_componente", "silver", "item_master"),
+            ("source_run_id", "bronze", "ingestion_runs"),
+        }
+        assert targets("reporte_qad") == {
+            ("numero_articulo", "silver", "item_master"),
+            ("almac", "silver", "almacen"),
+            ("linea_produccion", "silver", "lineas_produccion"),
+            ("source_run_id", "bronze", "ingestion_runs"),
+        }
+        assert targets("unit_ship") == {
+            ("vendido_a", "silver", "vendido_a"),
+            ("numero_articulo", "silver", "item_master"),
+            ("source_run_id", "bronze", "ingestion_runs"),
+        }
+        assert targets("item_master") == {
+            ("linea_de_productos", "silver", "linea_de_productos"),
+            ("campo_equs", "silver", "campo_equs"),
+            ("familia_placa", "silver", "grupo_fam"),
+        }
+        assert targets("lineas_produccion") == {
+            ("almac", "silver", "almacen"),
+            ("planta", "silver", "planta"),
+        }
+        assert targets("costo_std") == {("numero_articulo", "silver", "item_master")}
+        assert targets("element_deco") == {("numero_articulo", "silver", "item_master")}
+        assert targets("clasif_poly") == {("numero_articulo", "silver", "item_master")}
+        assert targets("costo_conversion") == {("planta", "silver", "planta")}
+        assert targets("factores_equ") == {("version", "silver", "equs_version")}
+        assert targets("instrucc") == {("version", "silver", "factores_equ")}
+
+    def test_indexes_the_calculation_reads_by_exist(self, silver_connection: Connection) -> None:
+        """Movements by date, item and line; structure by parent and by component."""
+        rows = silver_connection.execute(
+            text("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'silver'")
+        ).all()
+        definitions = {row.indexname: row.indexdef for row in rows}
+
+        assert "(articulo_matriz)" in definitions["ix_bom_estructura_matriz"]
+        assert "(articulo_componente)" in definitions["ix_bom_estructura_componente"]
+        assert "(fecha_efectiva, tipo_transaccion)" in definitions["ix_reporte_qad_fecha_tipo"]
+        assert "(numero_articulo)" in definitions["ix_reporte_qad_articulo"]
+        assert "(linea_produccion)" in definitions["ix_reporte_qad_linea"]
+        assert "(fecha_efectiva)" in definitions["ix_unit_ship_fecha"]
+        assert "(numero_articulo)" in definitions["ix_unit_ship_articulo"]
+        # What lets each conversion table be refreshed while it is being read.
+        assert definitions["uq_td_form_articulo"].startswith("CREATE UNIQUE INDEX")
+        assert definitions["uq_td_deco_articulo"].startswith("CREATE UNIQUE INDEX")
+
+    def test_conversion_tables_refresh_concurrently(self, silver_connection: Connection) -> None:
+        """Both views are created populated, which a concurrent refresh requires."""
+        silver_connection.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY silver.td_form"))
+        silver_connection.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY silver.td_deco"))
+
+    def test_version_one_reproduces_the_factors_of_the_workbook(
+        self, silver_connection: Connection
+    ) -> None:
+        """Sixteen drivers of one version, STD FY26, open-ended from October 2025."""
+        version = silver_connection.execute(
+            text("SELECT nombre, vigente_desde::text, vigente_hasta FROM silver.equs_version")
+        ).one()
+        assert tuple(version) == ("STD FY26", "2025-10-01", None)
+
+        rows = silver_connection.execute(
+            text(
+                "SELECT cuenta_stats, proceso, fuente, factor, peso, suma_eq "
+                "FROM silver.factores_equ WHERE version = 1"
+            )
+        ).all()
+        factors = {row.cuenta_stats: row for row in rows}
+
+        assert len(factors) == 16
+        assert float(factors["COSPRODU_TRUCK"].factor) == pytest.approx(0.7611, abs=1e-12)
+        assert float(factors["OXPROD_KG"].factor) == pytest.approx(0.0121711, abs=5e-8)
+        assert float(factors["POS_ACT_MTL"].factor) == pytest.approx(0.0430678, abs=5e-8)
+        # The other factors, as column G of sheet RESUMEN EQU shows them.
+        assert float(factors["GRIDS_REG_POS"].factor) == pytest.approx(0.03207471428571429)
+        assert float(factors["GRIDS_CAST"].factor) == pytest.approx(0.001805)
+        assert float(factors["GRIDS_NEG"].factor) == pytest.approx(0.022270476190476195)
+        assert float(factors["PLATEPRD_SLI"].factor) == pytest.approx(0.0021190476190476194)
+        assert float(factors["PLATEPRD_TRUCK"].factor) == pytest.approx(0.002415714285714286)
+        assert float(factors["COSPRODU_SLI"].factor) == pytest.approx(0.354)
+        assert float(factors["COMP_DEC"].factor) == pytest.approx(0.02634032634032634)
+        assert float(factors["CARTON_BATT"].factor) == pytest.approx(0.3371561771561772)
+        assert float(factors["UNITSHIP"].factor) == pytest.approx(0.041)
+
+        assert factors["UNITSHIP"].fuente == "FACTURACION"
+        assert factors["POS_ACT_MTL"].fuente == "MAT_ACTIVO"
+        assert factors["COMP_DEC"].fuente == "COMP_DECO"
+        informative = {name for name, row in factors.items() if not row.suma_eq}
+        assert informative == {"15BATPRD", "FORM_PRD_SLI", "FORM_PRD_TRUCK", "LEADPROD"}
+        assert all(factors[name].peso == 0 and factors[name].factor == 0 for name in informative)
+
+    def test_the_weights_of_the_processes_add_up_to_one(
+        self, silver_connection: Connection
+    ) -> None:
+        """Several drivers share one weight, so each (process, weight) counts once."""
+        rows = silver_connection.execute(
+            text(
+                "SELECT proceso, sum(peso) AS peso FROM ("
+                " SELECT DISTINCT proceso, peso FROM silver.factores_equ"
+                " WHERE version = 1 AND suma_eq) AS pares GROUP BY proceso"
+            )
+        ).all()
+        weights = {row.proceso: row.peso for row in rows}
+
+        assert {name: float(value) for name, value in weights.items()} == {
+            "OREC": pytest.approx(0.346),
+            "ENSAMBLE": pytest.approx(0.354),
+            "FORMACION": pytest.approx(0.146),
+            "DECORADO": pytest.approx(0.113),
+            "SHIPPING": pytest.approx(0.041),
+        }
+        assert sum(weights.values()) == 1
+
+    def test_the_rules_of_version_one(self, silver_connection: Connection) -> None:
+        """Seventeen rules, as EQUS_CONTEXT section 6.5 lists them."""
+        rows = silver_connection.execute(
+            text(
+                "SELECT cuenta_stats, regla_n, linea_de_productos, campo_equs, "
+                "campo_equs_excluir, prefijo_linea, signo FROM silver.instrucc "
+                "WHERE version = 1 ORDER BY cuenta_stats, regla_n"
+            )
+        ).all()
+        rules: dict[str, list[tuple[object, ...]]] = {}
+        for row in rows:
+            rules.setdefault(row.cuenta_stats, []).append(tuple(row)[2:6])
+
+        assert len(rows) == 17
+        assert {row.signo for row in rows} == {1}
+        assert rules["OXPROD_KG"] == [(None, "OXIDO", None, None)]
+        assert rules["GRIDS_CAST"] == [("2102", None, None, None)]
+        assert rules["COSPRODU_SLI"] == [("2201", None, "TRUCK-B", None)]
+        assert rules["COSPRODU_TRUCK"] == [("2201", "TRUCK-B", None, None)]
+        assert rules["COMP_DEC"] == [
+            ("3102", None, None, None),
+            ("3103", None, None, None),
+            ("3104", None, None, None),
+        ]
+        assert rules["UNITSHIP"] == [("3103", None, None, None), ("3104", None, None, None)]
+        assert rules["LEADPROD"] == [(None, None, None, "RCREFI")]
+        # A driver that is counted but has no rule contributes nothing.
+        assert "CARTON_BATT" not in rules
+        assert "15BATPRD" not in rules
+
+    def test_a_factor_cannot_be_written_by_hand(self, silver_connection: Connection) -> None:
+        """The factor follows its three terms; nobody can set it apart from them."""
+        message = _rejected(
+            silver_connection,
+            "UPDATE silver.factores_equ SET factor = 1 WHERE cuenta_stats = 'OXPROD_KG'",
+        )
+        assert "generated" in message
+
+        factor = silver_connection.execute(
+            text(
+                "UPDATE silver.factores_equ SET multiplicador = 2 "
+                "WHERE version = 1 AND cuenta_stats = 'COSPRODU_SLI' RETURNING factor"
+            )
+        ).scalar_one()
+        assert float(factor) == pytest.approx(0.708)
+
+    @pytest.mark.parametrize(
+        ("statement", "constraint"),
+        [
+            (
+                "UPDATE silver.factores_equ SET fuente = 'INVENTARIO' "
+                "WHERE cuenta_stats = 'UNITSHIP'",
+                "ck_factores_equ_fuente",
+            ),
+            (
+                # Zero is refused too, by the division inside the factor itself.
+                "UPDATE silver.factores_equ SET estandar_por_bat = -1 "
+                "WHERE cuenta_stats = 'UNITSHIP'",
+                "ck_factores_equ_estandar",
+            ),
+            (
+                "UPDATE silver.instrucc SET signo = 0 WHERE cuenta_stats = 'UNITSHIP'",
+                "ck_instrucc_signo",
+            ),
+            (
+                "INSERT INTO silver.item_master (numero_articulo, polaridad) VALUES ('X', '±')",
+                "ck_item_master_polaridad",
+            ),
+            (
+                "INSERT INTO silver.instrucc (version, cuenta_stats, regla_n) "
+                "VALUES (1, 'NO_SUCH_DRIVER', 1)",
+                "fk_instrucc_factor",
+            ),
+        ],
+    )
+    def test_checks_reject_what_the_calculation_cannot_use(
+        self, silver_connection: Connection, statement: str, constraint: str
+    ) -> None:
+        """Values outside the short lists of the specification are refused."""
+        assert constraint in _rejected(silver_connection, statement)
+
+    def test_a_structure_link_is_unique_by_its_business_key(
+        self, silver_connection: Connection
+    ) -> None:
+        """Parent, component, validity and quantity: a second copy is refused.
+
+        Two links with no dates at all are the same link, which is why the
+        constraint treats empty dates as equal.
+        """
+        run_id = _insert_run(silver_connection, "qad_product_struc")
+        silver_connection.execute(
+            text(
+                "INSERT INTO silver.item_master (numero_articulo, polaridad) "
+                "VALUES ('21500000A', '+'), ('21100000A', NULL)"
+            )
+        )
+        link = (
+            "INSERT INTO silver.bom_estructura "
+            "(articulo_matriz, articulo_componente, cantidad_por, calculo, source_sheet, "
+            " source_run_id) VALUES ('21500000A', '21100000A', :cantidad, :calculo, 'PLACAS', "
+            " :run_id)"
+        )
+        silver_connection.execute(
+            text(link), {"cantidad": 0.058, "calculo": "SI", "run_id": run_id}
+        )
+
+        repeated = _rejected(silver_connection, link, cantidad=0.058, calculo="SI", run_id=run_id)
+        assert "uq_bom_estructura_enlace" in repeated
+        # Another quantity is another link.
+        silver_connection.execute(text(link), {"cantidad": 0.06, "calculo": "SI", "run_id": run_id})
+
+        not_a_flag = _rejected(silver_connection, link, cantidad=1, calculo="X", run_id=run_id)
+        assert "ck_bom_estructura_calculo" in not_a_flag
+        unknown_item = _rejected(
+            silver_connection,
+            "INSERT INTO silver.bom_estructura (articulo_matriz, articulo_componente, "
+            "cantidad_por, source_sheet, source_run_id) "
+            "VALUES ('21500000A', 'NOT-AN-ITEM', 1, 'PLACAS', :run_id)",
+            run_id=run_id,
+        )
+        assert "fk_bom_estructura_articulo_componente" in unknown_item
 
 
 def test_silver_readings_enforces_grid_alignment(migrated_engine: Engine) -> None:

@@ -216,18 +216,18 @@ def migrated_database(database_url: str) -> Iterator[str]:
 
 
 BRONZE_REVISION = "0002"
+SILVER_REVISION = "0003"
 
 
-@pytest.fixture(scope="class")
-def bronze_engine(database_url: str) -> Iterator[Engine]:
-    """Return an engine bound to a database migrated to the Bronze revision only.
+def _engine_at(database_url: str, revision: str) -> Iterator[Engine]:
+    """Yield an engine for a database migrated to one revision, then empty it.
 
-    Class-scoped: applying the migrations is by far the slowest step of the
-    integration suite, and the Bronze tests only read the schema, land rows they
-    roll back, or build on one shared load, so a class can share one database.
+    Args:
+        database_url: the test database.
+        revision: the Alembic revision to stop at.
 
     Yields:
-        An engine for a database holding the ``bronze`` schema and nothing else.
+        An engine for that database.
     """
     from pathlib import Path  # noqa: PLC0415
 
@@ -243,20 +243,47 @@ def bronze_engine(database_url: str) -> Iterator[Engine]:
     config = Config(toml_file=str(root / "pyproject.toml"))
     config.set_main_option("script_location", str(root / "migrations"))
 
-    bronze = create_engine(database_url, future=True)
+    engine = create_engine(database_url, future=True)
     try:
-        command.upgrade(config, BRONZE_REVISION)
-        yield bronze
+        command.upgrade(config, revision)
+        yield engine
     finally:
-        with bronze.begin() as connection:
+        with engine.begin() as connection:
             for schema in reversed(ALL_SCHEMAS):
                 connection.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
             connection.execute(text("DROP TABLE IF EXISTS public.alembic_version"))
-        bronze.dispose()
+        engine.dispose()
         if previous is None:
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = previous
+
+
+@pytest.fixture(scope="class")
+def bronze_engine(database_url: str) -> Iterator[Engine]:
+    """Return an engine bound to a database migrated to the Bronze revision only.
+
+    Class-scoped: applying the migrations is by far the slowest step of the
+    integration suite, and the Bronze tests only read the schema, land rows they
+    roll back, or build on one shared load, so a class can share one database.
+
+    Yields:
+        An engine for a database holding the ``bronze`` schema and nothing else.
+    """
+    yield from _engine_at(database_url, BRONZE_REVISION)
+
+
+@pytest.fixture(scope="class")
+def silver_engine(database_url: str) -> Iterator[Engine]:
+    """Return an engine bound to a database migrated up to the Silver revision.
+
+    Class-scoped, for the same reason as :func:`bronze_engine`. The database
+    holds Bronze, the reference dimensions and Silver, and no Gold.
+
+    Yields:
+        An engine for that database.
+    """
+    yield from _engine_at(database_url, SILVER_REVISION)
 
 
 # =============================================================================

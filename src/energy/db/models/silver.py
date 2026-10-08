@@ -12,6 +12,14 @@ Responsibility:
     ``(meter_id, ts_utc)`` uniqueness among non-superseded rows, lives in
     ``migrations/versions/0003`` and ``0005``.
 
+    Revision 0003 also creates the Silver tables of the equivalent-batteries
+    (EQUS) calculation: catalogues, the product structure, production receipts
+    and invoice lines, the equation as data, and the materialized views
+    ``td_form`` and ``td_deco``. Those have no mapped class. They are filled in
+    SQL by :mod:`energy.adapters.postgres_equs_silver`, whose statements live in
+    :mod:`energy.adapters.equs_silver_sql`, and are described in
+    ``docs/data_dictionary.md``.
+
 Depends on:
     ``sqlmodel``, ``energy.core.constants``.
 

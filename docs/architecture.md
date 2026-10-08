@@ -372,6 +372,9 @@ internal.
 | Add a data source | `adapters/`, `config/sources.yaml` |
 | Land another EQUS workbook or sheet | the routing table in `pipelines/flows/equs_bronze_load.py` |
 | Change how a spreadsheet row is stored in Bronze | `domain/landing.py` — a contract: it changes every content hash |
+| Change a rule of the EQUS Silver build | `adapters/equs_silver_sql.py`, and its case in `tests/integration/test_equs_silver_rules.py` |
+| Add a check to the EQUS data-quality report | a `REPORT_*` query in `adapters/equs_silver_sql.py`, a field in `domain/equs_silver.py` |
+| Change a factor or a rule of the EQ equation | a new row in `silver.equs_version` and its rows in `factores_equ` and `instrucc`; never an edit to version 1 |
 | Change a KPI formula | `domain/kpi_formulas.py` |
 | Add a KPI | `config/kpis.yaml`, then `domain/kpi_formulas.py` if the maths is new |
 | Change what counts as valid data | `schemas/silver.py` |

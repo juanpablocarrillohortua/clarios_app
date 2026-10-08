@@ -434,6 +434,22 @@ database but not MinIO, pass `--archive-dir <directory>` (or set
 each table receives is described in
 **[docs/database_overview.md](docs/database_overview.md)**.
 
+```bash
+make equs-silver
+```
+
+Builds the EQUS Silver layer from what was landed: typed and deduplicated tables
+for items, product structures, production receipts and invoice lines, plus the
+two conversion tables the calculation needs (kg of paste per formed battery,
+decoration pieces per decorated battery). It takes about half a minute and
+prints a data-quality report: rows per table, what was dropped from each
+structure sheet, and what needs a person to look at.
+
+The build is one transaction, so Silver is never left half built, and running it
+again changes nothing. Run it after every `make equs-load`. The target runs
+`energy equs build-silver` inside the api container; `--examples N` sets how many
+examples of each finding are listed.
+
 Confirm the schema:
 
 ```bash
@@ -715,7 +731,7 @@ the full field-by-field reference is in
 |---|---|---|
 | `reference` | `plants`, `meters`, `shifts`, `targets` | Human-maintained dimensions. `targets` is time-versioned so a new target cannot retroactively change how last year was judged. |
 | `bronze` | `ingestion_runs`, `raw_files`, `raw_readings`, and the EQUS landing tables `raw_rct_wo`, `raw_facturas`, `raw_product_struc`, `raw_item_master`, `raw_manual_sheets` | Append-only landing area. Raw records kept whole in JSONB. Two-year retention on `raw_readings`. |
-| `silver` | `readings`, `quarantine`, `consolidation_audit` | Validated readings on the canonical hourly UTC grid, plus the rejected rows and the record of how source conflicts were resolved. |
+| `silver` | `readings`, `quarantine`, `consolidation_audit`; and 18 EQUS tables (among them `item_master`, `bom_estructura`, `reporte_qad`, `unit_ship`, `factores_equ`, `instrucc`) with the materialized views `td_form` and `td_deco` | Validated readings on the canonical hourly UTC grid, plus the rejected rows and the record of how source conflicts were resolved. The EQUS tables are the typed, deduplicated version of the Bronze workbooks, with the equation stored as data. |
 | `gold` | `kpi_hourly`, `kpi_daily`, `plant_daily_summary` | Published KPIs, replaced per period. |
 
 ### Provenance carried by every Bronze row
@@ -763,8 +779,9 @@ consolidation and quarantine tasks; the Prefect flows; watermarks; and the uploa
 and ingest endpoints.
 
 Built ahead of the rest for the equivalent-batteries work: the MinIO object
-storage adapter, and the loader that lands the EQUS workbooks in Bronze
-(`energy equs load`, `energy equs load-all`).
+storage adapter, the loader that lands the EQUS workbooks in Bronze
+(`energy equs load`, `energy equs load-all`), and the build that turns them into
+EQUS Silver (`energy equs build-silver`).
 
 ### ⬜ Phase 4 — KPI computation and the Gold layer
 

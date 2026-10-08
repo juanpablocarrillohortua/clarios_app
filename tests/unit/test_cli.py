@@ -18,6 +18,7 @@ import pytest
 from typer.testing import CliRunner
 
 import energy.__main__ as cli
+from energy.domain.equs_silver import LineWithoutPlant, SilverBuildReport, StructureSheet
 from energy.domain.exceptions import PipelineError
 from energy.domain.landing import SheetSpec
 from energy.pipelines.flows.equs_bronze_load import ROUTES, LoadAllResult, RouteOutcome
@@ -316,3 +317,83 @@ def test_load_all_refuses_a_directory_that_does_not_exist(
 
     assert result.exit_code == 1
     assert "loader" not in calls
+
+
+# -----------------------------------------------------------------------------
+# energy equs build-silver
+# -----------------------------------------------------------------------------
+def _silver_report() -> SilverBuildReport:
+    """Return a small report with one finding to print."""
+    return SilverBuildReport(
+        rows={"reporte_qad": 138_773, "td_form": 1_248},
+        structure=(StructureSheet("PLACAS", 220, 1, 1, 7, 0, 0, 211),),
+        receipts_left_out=0,
+        invoice_lines_left_out=0,
+        placeholders={"item_master": 0},
+        items_without_description=(),
+        lines_without_plant=tuple(LineWithoutPlant(f"LINEA{n:02d}", n) for n in range(1, 13)),
+        poly_factor_mismatches=(),
+        poly_repeated_items=(),
+        formed_without_paste=(),
+        decorated_without_pieces=(),
+        na_with_poly_category=(),
+        seconds=25.6,
+    )
+
+
+def test_help_lists_the_silver_build() -> None:
+    """The build is discoverable beside the two loads."""
+    result = runner.invoke(cli.build_app(), ["equs", "--help"])
+
+    assert result.exit_code == 0
+    assert "build-silver" in result.output
+
+
+def test_build_silver_prints_the_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The command builds once and prints what the build found."""
+    builds: list[int] = []
+
+    def fake_build_silver() -> SilverBuildReport:
+        builds.append(1)
+        return _silver_report()
+
+    monkeypatch.setattr(cli, "build_silver", fake_build_silver)
+
+    result = runner.invoke(cli.build_app(), ["equs", "build-silver"])
+
+    assert result.exit_code == 0, result.output
+    assert builds == [1]
+    assert "Rows per Silver table" in result.output
+    assert "reporte_qad              138,773" in result.output
+    assert "PLACAS" in result.output
+    assert "Production lines without plant area: 12" in result.output
+    # Ten examples by default, then the rest as a count.
+    assert "and 2 more" in result.output
+    assert "Silver built in 25.6 s." in result.output
+
+
+def test_build_silver_lists_as_many_examples_as_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--examples` sets how much of each finding is spelled out."""
+    monkeypatch.setattr(cli, "build_silver", _silver_report)
+
+    result = runner.invoke(cli.build_app(), ["equs", "build-silver", "--examples", "2"])
+
+    assert result.exit_code == 0, result.output
+    assert "LINEA01 (1 receipts), LINEA02 (2 receipts), and 10 more" in result.output
+
+
+def test_build_silver_exits_non_zero_when_it_cannot_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A build that was refused or failed must be visible to whatever ran it."""
+
+    def refuse() -> SilverBuildReport:
+        raise PipelineError("Bronze holds no completed load")
+
+    monkeypatch.setattr(cli, "build_silver", refuse)
+
+    result = runner.invoke(cli.build_app(), ["equs", "build-silver"])
+
+    assert result.exit_code == 1
+    assert "no completed load" in result.output
+    assert "Silver built" not in result.output

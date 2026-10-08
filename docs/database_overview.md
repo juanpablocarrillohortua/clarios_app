@@ -5,10 +5,11 @@ how the pieces relate and where to look next. For every column of every table, s
 the [data dictionary](data_dictionary.md).
 
 **Where things stand.** The tables described here exist, and the migrations that
-create them are tested. One loader is built: it lands the equivalent-batteries
-workbooks in Bronze (section 3). Nothing fills the other tables yet, so on a fresh
-database they are empty. Sections marked *planned* describe tables that do not
-exist yet.
+create them are tested. Two steps of the equivalent-batteries work are built: a
+loader lands the workbooks in Bronze (section 3), and a build turns them into typed
+Silver tables (section 5). Nothing fills the energy tables or Gold yet, so on a
+fresh database they are empty. Sections marked *planned* describe tables that do
+not exist yet.
 
 ---
 
@@ -50,6 +51,7 @@ flowchart LR
         direction TB
         SR["readings"]
         SQ["quarantine"]
+        ES["EQUS tables<br/>items, structures,<br/>movements, rules"]
     end
 
     subgraph gold["gold: published numbers"]
@@ -65,7 +67,8 @@ flowchart LR
     RR -. "rejected rows" .-> SQ
     Q --> LT
     H --> LT
-    LT -. "planned" .-> EQ["EQUS Silver and Gold<br/>(not built yet)"]
+    LT --> ES
+    ES -. "planned" .-> EQ["EQUS Gold<br/>(not built yet)"]
     REF -. "looked up by" .-> SR
     REF -. "looked up by" .-> GK
 ```
@@ -347,8 +350,14 @@ last year was judged.
 
 ## 5. Silver: cleaned and checked
 
-Silver today holds the energy readings. A solid line is a foreign key the database
-enforces. A dashed line is a link by value that the database does not enforce.
+Created by [`0003_create_silver_schema.py`](../migrations/versions/0003_create_silver_schema.py).
+Silver holds two families of tables that do not touch each other: the energy
+readings, and the equivalent-batteries (EQUS) tables.
+
+### Energy readings
+
+A solid line is a foreign key the database enforces. A dashed line is a link by
+value that the database does not enforce.
 
 ```mermaid
 erDiagram
@@ -407,6 +416,154 @@ Three things to remember:
   value. A zero would lower every average.
 - **Corrections do not overwrite.** The old row gets a `superseded_at` date and a new
   row is added.
+
+### Equivalent batteries (EQUS)
+
+Eighteen tables and two materialized views hold everything the calculation reads.
+Their names are Spanish because they mirror the Excel sheets and QAD headers the
+plant already uses. Every line in this diagram is a foreign key.
+
+```mermaid
+erDiagram
+    item_master ||--o{ bom_estructura : "is parent in"
+    item_master ||--o{ bom_estructura : "is component in"
+    item_master ||--o{ reporte_qad : "produced"
+    item_master ||--o{ unit_ship : "invoiced"
+    item_master ||--o| element_deco : "may be a decoration piece"
+    item_master ||--o| clasif_poly : "may be a plastic piece"
+    item_master ||--o{ costo_std : "cost history"
+    linea_de_productos ||--o{ item_master : "classifies"
+    campo_equs ||--o{ item_master : "categorises"
+    lineas_produccion ||--o{ reporte_qad : "reported by"
+    almacen ||--o{ reporte_qad : "received in"
+    almacen ||--o{ lineas_produccion : "houses"
+    planta ||--o{ lineas_produccion : "groups"
+    vendido_a ||--o{ unit_ship : "bought"
+    equs_version ||--|{ factores_equ : "has"
+    factores_equ ||--o{ instrucc : "is fed by"
+
+    item_master {
+        text numero_articulo PK
+        text descripcion
+        text linea_de_productos FK
+        text campo_equs FK
+        char polaridad
+    }
+    bom_estructura {
+        bigint bom_id PK
+        text articulo_matriz FK
+        text articulo_componente FK
+        numeric cantidad_por
+        date fin_efectivo
+        text calculo
+        text source_sheet
+        uuid source_run_id FK
+    }
+    reporte_qad {
+        bigint numero_de_transaccion PK
+        date fecha_efectiva
+        text numero_articulo FK
+        text linea_produccion FK
+        numeric cambiar_cantidad_de_ubic
+        text campo_equs
+        uuid source_run_id FK
+    }
+    unit_ship {
+        text num_fact PK
+        text orden PK
+        int linea PK
+        date fecha_efectiva
+        text numero_articulo FK
+        numeric cantidad_fac
+        uuid source_run_id FK
+    }
+    equs_version {
+        int version PK
+        text nombre
+        date vigente_desde
+        date vigente_hasta
+    }
+    factores_equ {
+        int version PK
+        text cuenta_stats PK
+        text proceso
+        text fuente
+        numeric estandar_por_bat
+        numeric multiplicador
+        numeric peso
+        numeric factor
+    }
+    instrucc {
+        int version PK
+        text cuenta_stats PK
+        int regla_n PK
+        text linea_de_productos
+        text campo_equs
+        text prefijo_linea
+    }
+    lineas_produccion {
+        text linea PK
+        text planta FK
+        text almac FK
+    }
+```
+
+| Group | Tables | What they hold |
+|---|---|---|
+| Catalogues | `item_master`, `linea_de_productos`, `campo_equs`, `lineas_produccion`, `planta`, `almacen`, `vendido_a`, `costo_std`, `grupo_fam` | Who and what the movements refer to: items, product lines, categories, production lines, plant areas, warehouses, customers. |
+| Structures | `bom_estructura`, `element_deco`, `clasif_poly`, `costo_conversion` | What each product is made of, which components are decoration pieces, and the factor of each plastic piece. |
+| Movements | `reporte_qad`, `unit_ship` | One row per production receipt and per invoice line. |
+| The equation | `equs_version`, `factores_equ`, `instrucc` | The standards, multipliers and weights of each driver, and which rows feed it, with dates of validity. |
+| Conversions | `td_form`, `td_deco` (materialized views) | Kg of positive paste per formed battery, and decoration pieces per decorated battery. |
+
+Three things to remember:
+
+- **The equation is data, not code.** `EQ = quantity x (multiplier / standard) x weight`.
+  The three numbers of each driver are rows of `factores_equ`, and the factor is
+  computed by the database from them. To change a standard, add a version; do not
+  edit a past one, or past months change.
+- **`N/A` is a value.** In `campo_equs` it means "not applicable". It is never empty.
+- **Item codes are text.** `21500000A` is a real item.
+
+`grupo_fam` and `costo_conversion` are empty: the workbooks that feed them have not
+been delivered.
+
+### How Bronze becomes Silver
+
+```mermaid
+flowchart TD
+    B["Bronze rows of completed runs"]
+    B --> S["Snapshots<br/>structures, catalogues<br/>latest run of each sheet"]
+    B --> M["Movements<br/>receipts, invoice lines<br/>every run, newest copy of each"]
+    S --> C1["Drop what is not a link<br/>pasted header rows, rows without a component"]
+    C1 --> C2["Keep each link once<br/>same parent, component, dates and quantity"]
+    M --> I["Describe every item code seen anywhere<br/>first source that knows each attribute wins"]
+    C2 --> I
+    I --> W["Write Silver<br/>catalogues, then structures, then movements"]
+    W --> V["Refresh td_form and td_deco"]
+    V --> R["Data-quality report"]
+    W -- "any step fails" --> X["Undo everything: Silver is left as it was"]
+```
+
+Run it after loading the workbooks:
+
+```bash
+make equs-silver
+```
+
+It takes about half a minute and prints a report: rows per table, what was dropped
+from each structure sheet, and the checks that need a person (production lines
+without a plant area, batteries produced without a conversion, items QAD does not
+classify). Four properties are worth knowing:
+
+- **All or nothing.** The whole build is one transaction.
+- **Safe to repeat.** Building twice from the same Bronze gives the same Silver, row
+  for row.
+- **Snapshots are replaced, movements accumulate.** The product structure is whatever
+  the latest load says. A receipt, once in Silver, stays.
+- **Nothing is dropped to make a reference hold.** If a receipt names an item that no
+  source describes, the item is created with the description `(sin descripción)` and
+  listed in the report.
 
 ---
 
@@ -496,7 +653,7 @@ alter tables by hand.
 flowchart LR
     m1["0001<br/>extensions<br/>timescaledb, pgcrypto"]
     m2["0002<br/>bronze<br/>8 tables"]
-    m3["0003<br/>reference + silver<br/>4 + 3 tables"]
+    m3["0003<br/>reference + silver<br/>4 + 21 tables, 2 views,<br/>version 1 of the equation"]
     m4["0004<br/>gold<br/>3 tables"]
     m5["0005<br/>hypertables,<br/>compression, retention"]
     m1 --> m2 --> m3 --> m4 --> m5
@@ -504,16 +661,18 @@ flowchart LR
 
 ---
 
-## 9. Planned: the EQUS calculation (not built yet)
+## 9. Planned: the EQUS calculation in Gold (not built yet)
 
-Bronze is the first step of moving the equivalent-batteries calculation out of
-Excel. The next two layers are designed in [EQUS_CONTEXT.md](EQUS_CONTEXT.md) and
-have no tables yet.
+Bronze and Silver are the first two steps of moving the equivalent-batteries
+calculation out of Excel. The last layer is designed in
+[EQUS_CONTEXT.md](EQUS_CONTEXT.md) and has no tables yet. Silver already holds
+everything it needs: the tests compute the equivalent batteries of every month of
+fiscal year 2026 from Silver alone and get the documented figures.
 
 ```mermaid
 flowchart LR
     B["bronze<br/>five landing tables<br/>(built)"]
-    subgraph S["silver (planned)"]
+    subgraph S["silver (built)"]
         direction TB
         S1["catalogues<br/>items, lines, plant areas"]
         S2["movements<br/>production receipts, invoice lines"]
@@ -526,7 +685,7 @@ flowchart LR
         G2["data-quality checks"]
         G3["frozen monthly close"]
     end
-    B -.-> S -.-> G
+    B --> S -.-> G
 ```
 
 ---
@@ -539,6 +698,7 @@ The database publishes no port to your machine, so open `psql` inside its contai
 make up                                          # start the stack
 make db-upgrade                                  # apply the migrations
 make equs-load                                   # land the EQUS workbooks
+make equs-silver                                 # build EQUS Silver from them
 docker compose exec db psql -U energy -d energy  # open a SQL prompt
 ```
 
@@ -572,6 +732,25 @@ SELECT content_hash, count(*)
 FROM bronze.raw_product_struc
 GROUP BY content_hash
 HAVING count(*) > 1;
+
+-- Silver: what a formed battery is made of, one level down
+SELECT b.articulo_componente, m.descripcion, b.cantidad_por, b.fin_efectivo
+FROM silver.bom_estructura AS b
+JOIN silver.item_master AS m ON m.numero_articulo = b.articulo_componente
+WHERE b.articulo_matriz = '231000001';
+
+-- Silver: the factor of every driver of the equation
+SELECT proceso, cuenta_stats, estandar_por_bat, multiplicador, peso, factor
+FROM silver.factores_equ
+WHERE version = 1
+ORDER BY proceso, cuenta_stats;
+
+-- Silver: production of a month by category
+SELECT campo_equs, sum(cambiar_cantidad_de_ubic) AS cantidad
+FROM silver.reporte_qad
+WHERE fecha_efectiva >= DATE '2026-09-01' AND fecha_efectiva < DATE '2026-10-01'
+GROUP BY campo_equs
+ORDER BY cantidad DESC;
 ```
 
 ---
@@ -583,6 +762,10 @@ HAVING count(*) > 1;
 | **QAD** | The plant's ERP system. Its reports are exported to Excel. |
 | **EQUS** | Equivalent batteries: production expressed in standard batteries, so that months with a different product mix can be compared. |
 | **Run** | One execution of a load. Every Bronze row points at the run that wrote it. |
+| **Driver** | One line of the EQ calculation (*cuenta STATS*): for example kg of oxide, or assembled truck batteries. Each has a factor. |
+| **Product structure** | The list of what an item is made of (BOM). One row is one parent-to-component link. |
+| **Conversion table** | `td_form` or `td_deco`: how many kg of paste, or how many decoration pieces, one battery stands for. |
+| **Materialized view** | A query whose result is stored like a table and recomputed on request. |
 | **Payload** | The JSON column that holds a source row exactly as it arrived. |
 | **Provenance** | The columns that say where a row came from: run, file, sheet, row number. |
 | **Content hash** | A fixed-length fingerprint (SHA-256) of a file or a row. Equal content gives an equal hash. |

@@ -53,7 +53,7 @@ endif
 
 .PHONY: help install up down logs restart format format-check lint typecheck \
         security test test-unit test-integration check db-upgrade db-downgrade \
-        db-revision db-reset seed equs-load clean
+        db-revision db-reset seed equs-load equs-silver clean
 
 # -----------------------------------------------------------------------------
 # Meta
@@ -160,6 +160,9 @@ EQUS_DIR ?= $(CURDIR)/data/raw_excels
 equs-load: ## Land the EQUS workbooks of data/raw_excels in Bronze
 	$(DC) run --rm --no-deps -v "$(EQUS_DIR):/app/data/raw_excels:ro" api \
 		energy equs load-all --dir /app/data/raw_excels
+
+equs-silver: ## Build EQUS Silver from Bronze and print the data-quality report
+	$(DC) run --rm --no-deps api energy equs build-silver
 
 # -----------------------------------------------------------------------------
 # Housekeeping

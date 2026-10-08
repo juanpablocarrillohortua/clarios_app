@@ -28,6 +28,7 @@ from typing import Annotated
 import typer
 
 from energy.core.logging import configure_from_settings
+from energy.domain.equs_silver import DEFAULT_EXAMPLES, describe
 from energy.domain.exceptions import EnergyError
 from energy.domain.landing import DEFAULT_PLANT_CODE, LANDING_SOURCES, parse_sheet_spec
 from energy.pipelines.flows.equs_bronze_load import (
@@ -37,6 +38,7 @@ from energy.pipelines.flows.equs_bronze_load import (
     load_all,
     load_workbook,
 )
+from energy.pipelines.flows.equs_silver_build import build_silver
 from energy.services.bronze_loader import LoadResult
 
 _DATE_FORMAT = "%Y-%m-%d"
@@ -321,12 +323,39 @@ def equs_load_all(
         raise typer.Exit(code=1)
 
 
+def equs_build_silver(
+    examples: Annotated[
+        int,
+        typer.Option(
+            "--examples",
+            min=0,
+            help="How many examples of each finding to list.",
+        ),
+    ] = DEFAULT_EXAMPLES,
+) -> None:
+    """Bring Silver up to date with Bronze and print the data-quality report.
+
+    Typed, deduplicated tables are rebuilt from the rows the completed loads
+    landed. It is one transaction, and running it again changes nothing.
+    """
+    try:
+        report = build_silver()
+    except EnergyError as error:
+        raise _fail(error) from error
+
+    for line in describe(report, examples=examples):
+        typer.echo(line)
+    typer.echo("")
+    typer.echo(f"Silver built in {report.seconds:.1f} s.")
+
+
 def build_app() -> typer.Typer:
     """Build the Typer application with every implemented command.
 
     Returns:
-        The application. ``energy equs load`` lands one workbook and
-        ``energy equs load-all`` lands a directory of them.
+        The application. ``energy equs load`` lands one workbook,
+        ``energy equs load-all`` lands a directory of them and
+        ``energy equs build-silver`` builds Silver from what was landed.
     """
     app = typer.Typer(
         name="energy",
@@ -335,11 +364,15 @@ def build_app() -> typer.Typer:
         add_completion=False,
     )
     equs = typer.Typer(
-        help="Equivalent-batteries (EQUS) data: land the source workbooks in Bronze.",
+        help=(
+            "Equivalent-batteries (EQUS) data: land the source workbooks in Bronze "
+            "and build Silver from them."
+        ),
         no_args_is_help=True,
     )
     equs.command("load")(equs_load)
     equs.command("load-all")(equs_load_all)
+    equs.command("build-silver")(equs_build_silver)
     app.add_typer(equs, name="equs")
     return app
 

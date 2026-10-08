@@ -24,9 +24,11 @@ for the design, and [CONTRIBUTING.md](CONTRIBUTING.md) for conventions.
 batteries is being moved into this database. [docs/EQUS_CONTEXT.md](docs/EQUS_CONTEXT.md)
 is the source of truth for its rules and target schema; read it before touching
 anything EQUS. Its Bronze layer is built (revision `0002`) and has a loader
-(`make equs-load`, or `energy equs load` / `load-all`); its Silver and Gold are
-not. [docs/database_overview.md](docs/database_overview.md) shows every schema
-with diagrams.
+(`make equs-load`, or `energy equs load` / `load-all`). Its Silver layer is built
+too (inside revision `0003`) and has a build (`make equs-silver`, or
+`energy equs build-silver`). Its Gold is not.
+[docs/database_overview.md](docs/database_overview.md) shows every schema with
+diagrams.
 
 ---
 
@@ -40,7 +42,7 @@ Definition-of-Done item is verified against a running stack.
 | `make up` | **Exit 0 - all 7 services healthy** (api, caddy, dash, db, minio, prefect-server, prefect-worker) |
 | Port policy | Only caddy publishes (8080/8443); everything else internal |
 | `make db-upgrade` | **Exit 0** - Alembic at head `0005` against live TimescaleDB |
-| Schemas / tables | `bronze, gold, reference, silver`; 18 tables (8 + 3 + 4 + 3) |
+| Schemas / tables | `bronze, gold, reference, silver`; 36 tables (8 + 3 + 4 + 21) and 2 materialized views |
 | Extensions | timescaledb **2.30.1**, pgcrypto 1.3 |
 | Hypertables | All 5 registered: `raw_readings, readings, kpi_hourly, kpi_daily, plant_daily_summary` |
 | Timescale policies | 3 compression + 1 retention job created (no warnings) |
@@ -48,15 +50,14 @@ Definition-of-Done item is verified against a running stack.
 | `/api/ready` payload | `degraded` (connectivity+extensions healthy, Silver empty) - correct, returns 200 not 503 |
 | Placeholder endpoint | `/api/kpis/summary` -> **501** with `code=not_implemented` |
 | `X-Request-Id` | Present and propagated |
-| `make check` | **Exit 0** - format, lint, mypy strict (91 files), bandit, pip-audit, tests |
-| `make test` | **438 passed, 39 skipped** |
-| Coverage | **95.54%** (threshold 70%) |
-| `make test-integration` | **56 passed** against real TimescaleDB and MinIO, with the workbooks present |
-| No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports |
+| `make check` | **Exit 0** - format, lint, mypy strict (97 files), bandit, pip-audit, tests |
+| `make test` | **525 passed, 39 skipped** (about 22 minutes with the workbooks present) |
+| Coverage | **95.72%** (threshold 70%) |
+| `make test-integration` | **118 passed** against real TimescaleDB and MinIO, with the workbooks present |
+| No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer |
 
-The table count was re-verified on 2026-10-06, after revision `0002` was rewritten
-for the EQUS Bronze layer, and the `make check`, test and coverage rows on
-2026-10-07, after the Bronze loader was built; the other rows date from
+The table count and the `make check`, test and coverage rows were re-verified on
+2026-10-07, after the EQUS Silver layer was built; the other rows date from
 2026-09-19.
 
 **Integration tests can be skipped silently.** They start a TimescaleDB container
@@ -163,6 +164,48 @@ test raising would fail the suite. Keep that distinction.
   energy-readings run needs a later revision that extends the list.
 - Migrations do not import application code.
 
+**EQUS Silver** (built 2026-10-07, inside revision `0003`):
+
+- Everything EQUS is in `silver`, named as EQUS_CONTEXT section 6 names it (decided
+  2026-10-07). `reference` stays the hand-maintained energy dimensions; do not
+  move the EQUS catalogues there. `silver.planta` (plant areas) is unrelated to
+  `reference.plants` (sites).
+- Eighteen tables and the materialized views `td_form` and `td_deco`. Natural
+  keys, Spanish names, item codes as text, every number `NUMERIC`.
+- **The build is SQL.** `adapters/equs_silver_sql.py` holds the statements in
+  order; `adapters/postgres_equs_silver.py` runs them in one transaction through
+  the raw driver cursor (several hold more than one command, which only the
+  simple query protocol accepts, so nothing is bound into them). Staging is in
+  `eq_*` temporary tables dropped on commit.
+- The statements are fixed text: no f-strings, no bound values. The placeholder
+  `(sin descripción)` is written out in them and a unit test keeps it equal to
+  `SIN_DESCRIPCION`.
+- Snapshots (structures, catalogues) use the latest completed run of each sheet
+  and are replaced; movements use every completed run, keep the newest copy of
+  each natural key and are upserted, never deleted. Catalogues that movements
+  point at are upserted and never deleted either.
+- A structure link is unique by business key (parent, component, validity
+  dates, quantity), across sheets, and the table has that unique constraint.
+- **`calculo`: a blank in sheet BAT FOR counts as `SI`**, as EQUS_CONTEXT
+  specifies. One formed battery (`231001483`) therefore adds the paste of two
+  assembled batteries where the workbook counts one. The documented targets of
+  section 9 include it, so "fixing" it breaks the acceptance tests. It is in the
+  build's report; the business has not decided.
+- **The documented "790 duplicates in Datos" is not a business-key count.** By
+  business key it is 70; 790 is exact repeated rows, 740 of them junk rows that
+  hold only a `1`. The tests assert both numbers and say why.
+- The three tables of the equation (`equs_version`, `factores_equ`, `instrucc`)
+  are seeded by the migration and never written by the build. A new rule is a
+  new version, not an edit: an edit changes every past month.
+- Tests: `tests/integration/test_equs_silver_rules.py` states each rule on rows
+  it writes itself and runs everywhere; `test_equs_silver_build.py` needs the
+  real workbooks and checks section 9 of EQUS_CONTEXT to the cent, plus the
+  pivots of the workbooks themselves. The equivalent batteries of a month are
+  computed there by a test query; that query is what Gold will own.
+- Developing against a throwaway database from the host: use `127.0.0.1`, not
+  `localhost`, in `DATABASE_URL`. With `localhost` every connection first tries
+  IPv6 and each Alembic command takes minutes.
+
 **EQUS Bronze loader** (built 2026-10-07):
 
 - Layout follows the hexagon: payload rules in `domain/landing.py` and
@@ -230,6 +273,10 @@ test raising would fail the suite. Keep that distinction.
 
 All deliberate; each is explained where it lives.
 
+0. **Revision `0003` also creates the EQUS Silver layer** (decided 2026-10-07),
+   beside the energy `silver` tables, rather than a later revision. It was
+   rewritten in place, so a database already at head is migrated with
+   `alembic downgrade 0002` and then `upgrade head`, which leaves Bronze alone.
 1. **`reference` schema is created in `0003_create_silver_schema.py`.** Silver and
    Gold carry foreign keys into `plants`/`meters`, so it must exist first, and
    Silver is the first layer to need it. Renumbering the five specified
