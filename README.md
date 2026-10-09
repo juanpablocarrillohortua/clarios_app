@@ -286,6 +286,11 @@ with `openssl rand -hex 32`.
 | `MINIO_BUCKET_REPORTS` | Bucket for generated reports | `reports` | No |
 | `ARCHIVE_BACKEND` | Where source files are archived: `minio`, or `local` for a directory | `minio` | No |
 | `ARCHIVE_DIR` | Directory used when `ARCHIVE_BACKEND=local` | `data/bronze_archive` | No |
+| **Power BI (reporting)** |
+| `REPORTING_DB_USER` | Read-only login Power BI connects with | `powerbi` | No |
+| `REPORTING_DB_PASSWORD` | Its password | *(none)* | For `make powerbi` |
+| `REPORTING_BIND_ADDRESS` | Where the opt-in bridge listens | `127.0.0.1` | No |
+| `REPORTING_PORT` | Host port of the bridge | `5433` | No |
 | **Orchestration** |
 | `PREFECT_API_URL` | Prefect API the worker talks to | `http://prefect-server:4200/api` | No |
 | `PREFECT_SERVER_API_HOST` | Server bind interface | `0.0.0.0` | No |
@@ -360,7 +365,9 @@ curl -fsS localhost:8080/api/ready | jq
 > application containers are reachable only on the internal network. That is why
 > `make db-upgrade` runs Alembic inside the api container rather than from your
 > shell. To reach them directly while developing, copy
-> `docker-compose.override.yml.example` to `docker-compose.override.yml`.
+> `docker-compose.override.yml.example` to `docker-compose.override.yml`. The
+> one opt-in exception is the read-only port for Power BI that `make powerbi`
+> opens; see [docs/powerbi.md](docs/powerbi.md).
 
 ### Step 5 — Apply migrations and load data
 
@@ -368,8 +375,9 @@ curl -fsS localhost:8080/api/ready | jq
 make db-upgrade
 ```
 
-This applies revisions 0001–0005: the extensions, the four schemas, and the
-TimescaleDB hypertables with their compression and retention policies.
+This applies revisions 0001–0006: the extensions, the four schemas of the
+medallion, the TimescaleDB hypertables with their compression and retention
+policies, and the read-only `reporting` views BI tools connect to.
 
 ```bash
 make seed
@@ -508,6 +516,26 @@ Two more pages explain the numbers:
 - **[docs/equs_resumen_call_chain.md](docs/equs_resumen_call_chain.md)** follows
   `make resumen` through every file and function, and shows how to get the same
   result from Python without the command line.
+
+#### Power BI
+
+Power BI Desktop on this machine reads the same numbers straight from the
+database, through a read-only login and an opt-in port:
+
+```bash
+# once: put REPORTING_DB_PASSWORD=<your password> in .env
+make powerbi          # create or renew the login, open 127.0.0.1:5433
+make powerbi-down     # close the port again
+```
+
+`make powerbi` prints the server, database and user to type into **Get data →
+PostgreSQL database**. The login reads the twelve views of schema `reporting`
+(column H by month, EQUS BATT, EQUS POLY, data quality, the closes, and
+receipt-level detail) and nothing else. Its sessions are read-only. The bridge
+listens on 127.0.0.1 only, because the database speaks no TLS.
+
+The views, a model with its relationships, starter DAX measures and
+troubleshooting are in **[docs/powerbi.md](docs/powerbi.md)**.
 
 Confirm the schema:
 
@@ -781,7 +809,8 @@ the port is missing something — raise it rather than working around it.
 
 ## Database schema
 
-Four schemas in one PostgreSQL 16 + TimescaleDB database. Start with the guided
+Four schemas in one PostgreSQL 16 + TimescaleDB database, plus `reporting`, the
+read-only views BI tools connect to. Start with the guided
 tour and its diagrams in **[docs/database_overview.md](docs/database_overview.md)**;
 the full field-by-field reference is in
 **[docs/data_dictionary.md](docs/data_dictionary.md)**.
@@ -792,6 +821,7 @@ the full field-by-field reference is in
 | `bronze` | `ingestion_runs`, `raw_files`, `raw_readings`, and the EQUS landing tables `raw_rct_wo`, `raw_facturas`, `raw_product_struc`, `raw_item_master`, `raw_manual_sheets` | Append-only landing area. Raw records kept whole in JSONB. Two-year retention on `raw_readings`. |
 | `silver` | `readings`, `quarantine`, `consolidation_audit`; and 18 EQUS tables (among them `item_master`, `bom_estructura`, `reporte_qad`, `unit_ship`, `factores_equ`, `instrucc`) with the materialized views `td_form` and `td_deco` | Validated readings on the canonical hourly UTC grid, plus the rejected rows and the record of how source conflicts were resolved. The EQUS tables are the typed, deduplicated version of the Bronze workbooks, with the equation stored as data. |
 | `gold` | `kpi_hourly`, `kpi_daily`, `plant_daily_summary`; the EQUS views (among them `v_resumen_equ`, `v_equs_batt_mes`, `inyeccion` and six `dq_*` checks), range functions, layout tables, and the frozen close `resumen_equ` with `cierre_mes` and `resumen_equ_historial` | Published KPIs, replaced per period. The EQUS views apply the equation stored in Silver; a closed month is frozen and changes only by a reclose. |
+| `reporting` | Twelve views, among them `equs_mensual`, `equs_batt_mensual`, `equs_poly_mensual`, `calidad_datos_mensual`, `cierres`, `aporte_cuenta` and `recibos_produccion` | Read-only views for BI tools such as Power BI, readable by the role `reporting_reader` and nothing else. They restate Gold; nothing is stored. |
 
 ### Provenance carried by every Bronze row
 

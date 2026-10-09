@@ -3,7 +3,8 @@
 Layer: core
 
 Settings are grouped into nested models (database, API, MinIO, archive, Prefect,
-Dash, logging, data) so that each layer depends only on the slice it needs. Values come
+Dash, logging, data, EQUS, reporting) so that each layer depends only on the
+slice it needs. Values come
 from environment variables first and from ``.env`` second; there are no hardcoded
 credentials and no runtime mutation. Call :func:`get_settings` - it is cached, so
 the environment is read once per process.
@@ -11,6 +12,7 @@ the environment is read once per process.
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
@@ -26,6 +28,9 @@ LogFormat = Literal["console", "json"]
 ArchiveBackend = Literal["minio", "local"]
 
 _ENV_FILE = ".env"
+
+# A PostgreSQL role name that needs no quoting: at most 63 bytes.
+_ROLE_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 _BASE_CONFIG = SettingsConfigDict(
     env_file=_ENV_FILE,
@@ -280,6 +285,42 @@ class EqusSettings(BaseSettings):
         return value
 
 
+class ReportingSettings(BaseSettings):
+    """The read-only login BI tools such as Power BI use, and the port they reach it on.
+
+    The login can read the views of schema ``reporting`` and nothing else.
+    ``energy reporting create-reader`` creates it, or changes its password; the
+    ``reporting-bridge`` container of the compose stack publishes the port.
+    """
+
+    model_config = _BASE_CONFIG
+
+    db_user: str = Field(default="powerbi", validation_alias="REPORTING_DB_USER")
+    # No default: a reader with a known password would be readable by anyone.
+    db_password: SecretStr | None = Field(default=None, validation_alias="REPORTING_DB_PASSWORD")
+    # Where the bridge listens. The database speaks no TLS, so the default keeps
+    # the port on this machine.
+    bind_address: str = Field(default="127.0.0.1", validation_alias="REPORTING_BIND_ADDRESS")
+    port: int = Field(default=5433, ge=1, le=65535, validation_alias="REPORTING_PORT")
+
+    @field_validator("db_user")
+    @classmethod
+    def _plain_role_name(cls, value: str) -> str:
+        """Accept only a plain, lower-case PostgreSQL role name.
+
+        Raises:
+            ValueError: if the name needs quoting, or uses the ``pg_`` prefix
+                PostgreSQL reserves for its own roles.
+        """
+        if not _ROLE_NAME.fullmatch(value) or value.startswith("pg_"):
+            msg = (
+                f"REPORTING_DB_USER must be a plain role name (lower-case letters, digits "
+                f"and underscores, not starting with pg_), got {value!r}"
+            )
+            raise ValueError(msg)
+        return value
+
+
 class Settings(BaseSettings):
     """Root configuration object composing every settings group."""
 
@@ -299,6 +340,7 @@ class Settings(BaseSettings):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     data: DataSettings = Field(default_factory=DataSettings)
     equs: EqusSettings = Field(default_factory=EqusSettings)
+    reporting: ReportingSettings = Field(default_factory=ReportingSettings)
 
     @computed_field  # type: ignore[prop-decorator]
     @property

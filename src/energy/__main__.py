@@ -12,9 +12,10 @@ Responsibility:
     pipelines use, so a command and a scheduled run can never behave
     differently.
 
-    The ``equs`` commands are implemented, and so is ``equs-report``, a command
-    of its own. The other commands are placeholders for the phase named in each,
-    and are not registered until they are built.
+    The ``equs`` commands are implemented, and so are ``equs-report``, a command
+    of its own, and ``reporting create-reader``, which gives a BI tool such as
+    Power BI its read-only login. The other commands are placeholders for the
+    phase named in each, and are not registered until they are built.
 
     Every command logs to standard error, so that standard output carries only
     its result: a table, CSV or JSON that can be piped.
@@ -22,9 +23,10 @@ Responsibility:
     Exit codes of the EQUS Gold commands (``refresh-gold``, ``resumen-equ``,
     ``close-month``, ``equs-report``): 0 success; 1 invalid arguments, or a
     request refused (a month already closed, a blocking data-quality check);
-    2 a database error; 3 the refresh lock was not released in time. A
-    malformed command line exits 1 too, rather than Click's usual 2, so that 2
-    always means the database.
+    2 a database error; 3 the refresh lock was not released in time.
+    ``reporting create-reader`` uses the same codes. A malformed command line
+    exits 1 too, rather than Click's usual 2, so that 2 always means the
+    database.
 
 Depends on:
     ``energy.core``, ``energy.domain``, ``energy.pipelines.flows``, ``typer``.
@@ -44,6 +46,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final
 import typer
 
 from energy.core.logging import configure_from_settings
+from energy.core.settings import get_settings
 from energy.domain.equs_gold import (
     COLUMN_H_FIELDS,
     REPORT_SOURCES,
@@ -59,6 +62,7 @@ from energy.domain.exceptions import (
     RepositoryError,
 )
 from energy.domain.landing import DEFAULT_PLANT_CODE, LANDING_SOURCES, parse_sheet_spec
+from energy.domain.reporting import describe_reader
 from energy.pipelines.flows.equs_bronze_load import (
     DEFAULT_DIRECTORY,
     RouteOutcome,
@@ -74,6 +78,7 @@ from energy.pipelines.flows.equs_gold import (
 )
 from energy.pipelines.flows.equs_report import report_for
 from energy.pipelines.flows.equs_silver_build import build_silver
+from energy.pipelines.flows.reporting_access import create_reader
 from energy.services.bronze_loader import LoadResult
 
 if TYPE_CHECKING:
@@ -722,6 +727,23 @@ def equs_report(
     typer.echo(f"Report written to {output}.", err=True)
 
 
+def reporting_create_reader() -> None:
+    """Create the read-only login Power BI connects with, or renew its password.
+
+    The login is REPORTING_DB_USER (default powerbi) with the password
+    REPORTING_DB_PASSWORD. It can read the views of schema reporting and nothing
+    else, and every session it opens is read-only. Running it again only renews
+    the password and the settings.
+    """
+    try:
+        access = create_reader()
+    except EnergyError as error:
+        raise _stop(error) from error
+    reporting = get_settings().reporting
+    for line in describe_reader(access, host=reporting.bind_address, port=reporting.port):
+        typer.echo(line)
+
+
 def build_app() -> typer.Typer:
     """Build the Typer application with every implemented command.
 
@@ -730,8 +752,9 @@ def build_app() -> typer.Typer:
         ``energy equs load-all`` lands a directory of them,
         ``energy equs build-silver`` builds Silver from what was landed,
         ``energy equs refresh-gold`` brings Gold up to date,
-        ``energy equs resumen-equ`` prints column H of a month and
-        ``energy equs close-month`` freezes a month.
+        ``energy equs resumen-equ`` prints column H of a month,
+        ``energy equs close-month`` freezes a month and
+        ``energy reporting create-reader`` gives Power BI its read-only login.
     """
     app = typer.Typer(
         name="energy",
@@ -753,6 +776,15 @@ def build_app() -> typer.Typer:
     equs.command("resumen-equ")(equs_resumen_equ)
     equs.command("close-month")(equs_close_month)
     app.add_typer(equs, name="equs")
+    reporting = typer.Typer(
+        help=(
+            "The read-only reporting schema BI tools such as Power BI connect to, "
+            "and the login they use."
+        ),
+        no_args_is_help=True,
+    )
+    reporting.command("create-reader")(reporting_create_reader)
+    app.add_typer(reporting, name="reporting")
     return app
 
 

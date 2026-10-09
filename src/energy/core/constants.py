@@ -14,15 +14,18 @@ from datetime import UTC, timedelta
 from typing import Final
 
 # -----------------------------------------------------------------------------
-# Database schemas (one per medallion layer, plus shared dimensions)
+# Database schemas (one per medallion layer, plus shared dimensions and the
+# read-only views BI tools connect to)
 # -----------------------------------------------------------------------------
 REFERENCE_SCHEMA: Final = "reference"
 BRONZE_SCHEMA: Final = "bronze"
 SILVER_SCHEMA: Final = "silver"
 GOLD_SCHEMA: Final = "gold"
+REPORTING_SCHEMA: Final = "reporting"
 
 MEDALLION_SCHEMAS: Final[tuple[str, ...]] = (BRONZE_SCHEMA, SILVER_SCHEMA, GOLD_SCHEMA)
-ALL_SCHEMAS: Final[tuple[str, ...]] = (REFERENCE_SCHEMA, *MEDALLION_SCHEMAS)
+# In dependency order: reporting reads gold, so it comes last and is dropped first.
+ALL_SCHEMAS: Final[tuple[str, ...]] = (REFERENCE_SCHEMA, *MEDALLION_SCHEMAS, REPORTING_SCHEMA)
 
 # -----------------------------------------------------------------------------
 # Canonical time grid
@@ -115,6 +118,7 @@ __all__ = [
     "QUALITY_FLAG_OK",
     "QUALITY_FLAG_SUSPECT",
     "REFERENCE_SCHEMA",
+    "REPORTING_SCHEMA",
     "REQUEST_ID_HEADER",
     "REQUEST_ID_LOG_KEY",
     "SECONDS_PER_HOUR",

@@ -349,9 +349,15 @@ flowchart TB
             PS["prefect-server"]
             PW["prefect-worker"]
         end
+
+        BRIDGE["reporting-bridge<br/>opt-in, 127.0.0.1:5433"]
     end
 
+    PBI["Power BI Desktop"]
+
     USER --> CADDY
+    PBI -.->|"make powerbi"| BRIDGE
+    BRIDGE -.->|"read-only login"| DB
     CADDY -->|/api/*| API
     CADDY -->|/| DASH
     CADDY -->|/prefect/*| PS
@@ -368,6 +374,11 @@ flowchart TB
 Caddy is the only service that publishes ports. Everything else is reachable only
 on the internal compose network, which is why `make db-upgrade` runs Alembic
 *inside* the api container rather than from the host.
+
+The one exception is opt-in. `reporting-bridge` (compose profile `reporting`,
+started by `make powerbi`) relays a database port for Power BI. It listens on
+127.0.0.1 by default, and the only login meant for it reads the `reporting` views
+and nothing else. `make up` never starts it. See [powerbi.md](powerbi.md).
 
 The MinIO **console** is proxied; the **S3 API** is not. Object storage
 credentials grant access to every archived source file, so that endpoint stays
@@ -389,6 +400,8 @@ internal.
 | Add a data-quality check before the close | a `dq_*` view, a row in `gold.controles_calidad` and a line in `gold.calidad_datos_rango` (a new migration) |
 | Change the layout of the EQUS report | the rows of `gold.secciones_reporte` and `gold.filas_resumen_equ`; `domain/equs_gold.py` only nests what they say |
 | Change what a refresh or a close does | `services/equs_gold.py` for the order of the steps, `adapters/postgres_equs_gold.py` for the SQL around them |
+| Show Power BI another figure | a view in schema `reporting`, in a new migration that also grants `SELECT` on it to `reporting_reader`; build it on Gold *views*, never Gold functions (they run with the reader's rights) |
+| Change what the Power BI login may do | `adapters/postgres_reporting.py` (its attributes and session settings); the views it reads are the migration's |
 | Change a KPI formula | `domain/kpi_formulas.py` |
 | Add a KPI | `config/kpis.yaml`, then `domain/kpi_formulas.py` if the maths is new |
 | Change what counts as valid data | `schemas/silver.py` |
@@ -401,6 +414,7 @@ internal.
 
 - [Database overview](database_overview.md) — the schemas and how they relate, with diagrams
 - [Data dictionary](data_dictionary.md) — table-by-table field reference
+- [Power BI](powerbi.md) — connecting Power BI to the read-only reporting views
 - [Runbook](runbook.md) — backups, restore, incident response
 - [ADR 0002](adr/0002-postgres-timescale-over-nosql.md) — why PostgreSQL + TimescaleDB
 - [ADR 0003](adr/0003-modular-monolith-over-microservices.md) — why a modular monolith

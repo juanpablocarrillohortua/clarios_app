@@ -20,7 +20,13 @@ from typing import TYPE_CHECKING
 import pytest
 from sqlalchemy import create_engine, inspect, text
 
-from energy.core.constants import ALL_SCHEMAS, BRONZE_SCHEMA, GOLD_SCHEMA, SILVER_SCHEMA
+from energy.core.constants import (
+    ALL_SCHEMAS,
+    BRONZE_SCHEMA,
+    GOLD_SCHEMA,
+    REPORTING_SCHEMA,
+    SILVER_SCHEMA,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Connection, Engine
@@ -104,6 +110,23 @@ EQUS_GOLD_FUNCTIONS: tuple[str, ...] = (
     "calidad_datos_rango",
 )
 
+# The views BI tools read (revision 0006), and the role that may read them.
+REPORTING_VIEWS: tuple[str, ...] = (
+    "cuentas",
+    "articulos",
+    "equs_mensual",
+    "equs_batt_mensual",
+    "equs_poly_mensual",
+    "aporte_cuenta",
+    "recibos_produccion",
+    "calidad_datos_mensual",
+    "cierres",
+    "cierres_calidad",
+    "equs_cerrado",
+    "equs_cerrado_historial",
+)
+READER_ROLE = "reporting_reader"
+
 EXPECTED_TABLES: dict[str, set[str]] = {
     "reference": {"plants", "meters", "shifts", "targets"},
     BRONZE_SCHEMA: {"raw_readings", "ingestion_runs", "raw_files", *LANDING_TABLES},
@@ -154,7 +177,7 @@ def test_migrations_apply_to_head(migrated_engine: Engine) -> None:
         version = connection.execute(
             text("SELECT version_num FROM public.alembic_version")
         ).scalar_one()
-    assert version == "0005"
+    assert version == "0006"
 
 
 def test_all_schemas_exist(migrated_engine: Engine) -> None:
@@ -989,6 +1012,56 @@ class TestGoldRevision:
         assert [tuple(row) for row in quality] == [(view, 0) for view in EQUS_DQ_VIEWS]
 
 
+class TestReportingRevision:
+    """Revision 0006: views for BI tools, readable by one role and nothing more."""
+
+    def test_holds_only_the_reporting_views(self, gold_engine: Engine) -> None:
+        """Twelve views, no table, and the fiscal-year function."""
+        inspector = inspect(gold_engine)
+        assert inspector.get_table_names(schema=REPORTING_SCHEMA) == []
+        assert set(inspector.get_view_names(schema=REPORTING_SCHEMA)) == set(REPORTING_VIEWS)
+        with gold_engine.connect() as connection:
+            functions = connection.execute(
+                text(
+                    "SELECT p.proname FROM pg_proc AS p "
+                    "JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = :s"
+                ),
+                {"s": REPORTING_SCHEMA},
+            ).scalars()
+            assert set(functions) == {"anio_fiscal"}
+
+    def test_the_reader_role_can_read_the_views_and_nothing_else(self, gold_engine: Engine) -> None:
+        """A role without login, granted the views, and no schema of the medallion."""
+        with gold_engine.connect() as connection:
+            can_login = connection.execute(
+                text("SELECT rolcanlogin FROM pg_roles WHERE rolname = :r"), {"r": READER_ROLE}
+            ).scalar_one()
+            assert can_login is False
+            for view in REPORTING_VIEWS:
+                granted = connection.execute(
+                    text("SELECT has_table_privilege(:r, :v, 'SELECT')"),
+                    {"r": READER_ROLE, "v": f"{REPORTING_SCHEMA}.{view}"},
+                ).scalar_one()
+                assert granted, view
+            for schema in (BRONZE_SCHEMA, SILVER_SCHEMA, GOLD_SCHEMA, "reference"):
+                usage = connection.execute(
+                    text("SELECT has_schema_privilege(:r, :s, 'USAGE')"),
+                    {"r": READER_ROLE, "s": schema},
+                ).scalar_one()
+                assert usage is False, schema
+
+    def test_an_empty_database_answers_every_view(self, gold_engine: Engine) -> None:
+        """No production yet: every view runs and returns nothing to report."""
+        with gold_engine.connect() as connection:
+            for view in REPORTING_VIEWS:
+                # The names are this module's own constants.
+                connection.execute(text(f"SELECT count(*) FROM {REPORTING_SCHEMA}.{view}"))  # noqa: S608
+            months = connection.execute(
+                text("SELECT count(*) FROM reporting.equs_mensual")
+            ).scalar_one()
+        assert months == 0
+
+
 def test_gold_downgrades_to_silver_and_up_again(database_url: str) -> None:
     """Revision 0004 alone goes down and up, and takes back the plant areas it added."""
     import os  # noqa: PLC0415
@@ -1011,14 +1084,16 @@ def test_gold_downgrades_to_silver_and_up_again(database_url: str) -> None:
         command.downgrade(config, "0003")
         with engine.connect() as connection:
             areas = connection.execute(text("SELECT count(*) FROM silver.planta")).scalar_one()
-        assert GOLD_SCHEMA not in set(inspect(engine).get_schema_names())
+        schemas = set(inspect(engine).get_schema_names())
+        assert GOLD_SCHEMA not in schemas
+        assert REPORTING_SCHEMA not in schemas
         assert areas == 0
         command.upgrade(config, "head")
         with engine.connect() as connection:
             version = connection.execute(
                 text("SELECT version_num FROM public.alembic_version")
             ).scalar_one()
-        assert version == "0005"
+        assert version == "0006"
     finally:
         with engine.begin() as connection:
             for schema in reversed(ALL_SCHEMAS):

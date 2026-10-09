@@ -30,7 +30,8 @@ The two meet in one indicator: energy used per equivalent battery.
 ## 2. Four schemas, one direction of travel
 
 Data moves through three layers, each stricter than the one before. A fourth schema
-holds the lists the others refer to.
+holds the lists the others refer to. A fifth, `reporting`, stores nothing: it is
+the read-only window BI tools such as Power BI look through (section 6).
 
 ```mermaid
 flowchart LR
@@ -63,6 +64,7 @@ flowchart LR
     end
 
     REF[("reference<br/>plants, meters,<br/>shifts, targets")]
+    RP["reporting<br/>read-only views<br/>for Power BI"]
 
     M --> RR --> SR --> GK
     SR --> GS
@@ -72,6 +74,8 @@ flowchart LR
     LT --> ES
     ES --> EG
     EG -. "close-month" .-> EC
+    EG --> RP
+    EC --> RP
     REF -. "looked up by" .-> SR
     REF -. "looked up by" .-> GK
 ```
@@ -82,6 +86,7 @@ flowchart LR
 | `silver` | The same data, typed, checked and de-duplicated. | A correction replaces a row but keeps the old one. |
 | `gold` | The figures that reports and dashboards show. | KPIs are recomputed per period. EQUS figures are views; a closed month is frozen and changes only by a reclose. |
 | `reference` | Plants, meters, shifts and targets. | Maintained by people. |
+| `reporting` | Flat views of the EQUS figures for Power BI. | Nothing is stored; the views read Gold. |
 
 The rule behind the layers: **never repair data where it lands**. Bronze keeps the
 evidence, Silver decides what is valid, Gold publishes. If a number looks wrong, you
@@ -697,6 +702,27 @@ build Silver, refresh the two conversion tables, refresh statistics, and print
 column H of the latest month. `make refresh` does the last three only. A refresh
 never touches a closed month, and two refreshes never run at once.
 
+### Reading it from Power BI
+
+Schema `reporting` (revision 0006) restates these figures as twelve flat views a
+BI tool can load and relate:
+
+| Group | Views |
+|---|---|
+| Monthly figures | `equs_mensual` (column H by month), `equs_batt_mensual`, `equs_poly_mensual`, `calidad_datos_mensual` |
+| The closes | `cierres`, `cierres_calidad`, `equs_cerrado`, `equs_cerrado_historial` |
+| The detail behind each driver | `aporte_cuenta`, `recibos_produccion` |
+| Dimensions | `cuentas`, `articulos` |
+
+It stores nothing. Every number comes from a Gold view, so Power BI and
+`make resumen` cannot disagree.
+
+Power BI connects with its own login, created by `make powerbi`. That login can
+read these views and nothing else, and its sessions are read-only. It arrives
+through `reporting-bridge`, an opt-in container that relays one port
+(127.0.0.1:5433) to the database. Step by step, with a model and starter
+measures: [powerbi.md](powerbi.md).
+
 ---
 
 ## 7. Which tables are time-partitioned
@@ -731,14 +757,17 @@ flowchart LR
     m3["0003<br/>reference + silver<br/>4 + 21 tables, 2 views,<br/>version 1 of the equation"]
     m4["0004<br/>gold<br/>3 + 6 tables, 15 views,<br/>8 functions"]
     m5["0005<br/>hypertables,<br/>compression, retention"]
-    m1 --> m2 --> m3 --> m4 --> m5
+    m6["0006<br/>reporting<br/>12 views for Power BI,<br/>role reporting_reader"]
+    m1 --> m2 --> m3 --> m4 --> m5 --> m6
 ```
 
 Revisions 0002, 0003 and 0004 were rewritten in place while the EQUS layers were
 built. A database migrated before a rewrite is brought up to date by going down to
 the revision before the rewritten one and up again: for the Gold rewrite,
-`alembic -c pyproject.toml downgrade 0003` and then `make db-upgrade`. That leaves
-Bronze and Silver as they are, but it drops `gold`, closed months included.
+`make db-downgrade` until `alembic current` says `0003`, then `make db-upgrade`.
+That leaves Bronze and Silver as they are, but it drops `gold`, closed months
+included. Revision 0006 was added as a new file, so `make db-upgrade` applies it
+to any database already at `0005`.
 
 ---
 
@@ -857,10 +886,13 @@ SELECT * FROM gold.calidad_datos_rango(DATE '2026-09-01', DATE '2026-09-30');
 | **Column H** | The column of sheet RESUMEN EQU that holds the EQ of each driver; `gold.v_resumen_equ` in the database. |
 | **Close** | The official EQ of a month, frozen in `gold.resumen_equ` so that later corrections to the data do not change a published number. |
 | **Version (of the equation)** | A set of factors and rules with a validity period. Each month is computed with the version in force that month. |
+| **Reporting login** | The read-only database user Power BI connects with (`powerbi` by default). It can read the `reporting` views and nothing else. |
+| **Bridge** | `reporting-bridge`, the opt-in container that relays one port to the database so Power BI can reach it. |
 
 ## Related documents
 
 - [Data dictionary](data_dictionary.md): every column of every table
 - [Architecture](architecture.md): how the code is organised around the database
 - [EQUS context](EQUS_CONTEXT.md): the business rules of the equivalent-batteries calculation
+- [Power BI](powerbi.md): connecting Power BI Desktop to the reporting views
 - [Runbook](runbook.md): backups, restore, incident response

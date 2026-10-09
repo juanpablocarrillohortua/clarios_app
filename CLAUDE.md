@@ -37,6 +37,12 @@ the calculation to non-technical readers, with a Spanish translation in
 `make resumen` through the code. Keep all three in step with any change to the
 Gold views or to that call chain, and change both languages together.
 
+**Power BI.** Revision `0006` adds schema `reporting`: twelve read-only views over
+Gold for BI tools, readable by the role `reporting_reader`. `make powerbi` creates
+the login (`energy reporting create-reader`) and starts `reporting-bridge`, an
+opt-in container publishing 127.0.0.1:5433. [docs/powerbi.md](docs/powerbi.md) is
+the guide.
+
 ---
 
 ## Build state as of 2026-09-19 - FULLY VERIFIED
@@ -47,9 +53,9 @@ Definition-of-Done item is verified against a running stack.
 | Check | Result |
 |---|---|
 | `make up` | **Exit 0 - all 7 services healthy** (api, caddy, dash, db, minio, prefect-server, prefect-worker) |
-| Port policy | Only caddy publishes (8080/8443); everything else internal |
-| `make db-upgrade` | **Exit 0** - Alembic at head `0005` against live TimescaleDB |
-| Schemas / tables | `bronze, gold, reference, silver`; 42 tables (8 + 9 + 4 + 21), 2 materialized views, 15 views and 8 functions in `gold` |
+| Port policy | Only caddy publishes (8080/8443); everything else internal. One opt-in exception: `reporting-bridge` (profile `reporting`, `make powerbi`) on 127.0.0.1:5433 |
+| `make db-upgrade` | **Exit 0** - Alembic at head `0006` against live TimescaleDB |
+| Schemas / tables | `bronze, gold, reference, reporting, silver`; 42 tables (8 + 9 + 4 + 21), 2 materialized views, 15 views and 8 functions in `gold`, 12 views and 1 function in `reporting` |
 | Extensions | timescaledb **2.30.1**, pgcrypto 1.3 |
 | Hypertables | All 5 registered: `raw_readings, readings, kpi_hourly, kpi_daily, plant_daily_summary` |
 | Timescale policies | 3 compression + 1 retention job created (no warnings) |
@@ -57,15 +63,18 @@ Definition-of-Done item is verified against a running stack.
 | `/api/ready` payload | `degraded` (connectivity+extensions healthy, Silver empty) - correct, returns 200 not 503 |
 | Placeholder endpoint | `/api/kpis/summary` -> **501** with `code=not_implemented` |
 | `X-Request-Id` | Present and propagated |
-| `make check` | **Exit 0** - format, lint, mypy strict (97 files), bandit, pip-audit, tests |
-| `make test` | **525 passed, 39 skipped** (about 22 minutes with the workbooks present) |
-| Coverage | **95.72%** (threshold 70%) |
-| `make test-integration` | **118 passed** against real TimescaleDB and MinIO, with the workbooks present |
+| `make check` | **Exit 0** - format, lint, mypy strict (107 files), bandit, pip-audit, tests (24 minutes) |
+| `make test` | **691 passed, 39 skipped** (about 21 minutes with the workbooks present) |
+| Coverage | **95.43%** (threshold 70%) |
+| `make test-integration` | **118 passed** against real TimescaleDB and MinIO, with the workbooks present (2026-10-07; not re-run on its own since) |
+| `make powerbi` | **Exit 0** in the stack: the bridge healthy on 127.0.0.1:5433; the login reads the reporting views from Windows through it, is refused on gold/silver and with a wrong password; `make powerbi-down` closes the port without touching the db container |
 | No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer. One deliberate exception, asked for on 2026-10-08: `docs/equs_calculation_explained.es.md`, the Spanish translation of the non-technical explanation |
 
-The table count and the `make check`, test and coverage rows were re-verified on
-2026-10-07, after the EQUS Silver layer was built; the other rows date from
-2026-09-19.
+The schema, `make check`, test, coverage and `make powerbi` rows were re-verified
+on 2026-10-08, after the EQUS Gold layer and the reporting schema were built,
+with `make check DATABASE_URL=<a reachable test database>` (the `.env` value
+otherwise wins and points at the compose-internal host). The integration row
+dates from 2026-10-07 and the other rows from 2026-09-19.
 
 **Integration tests can be skipped silently.** They start a TimescaleDB container
 and wait 120 s for it. On 2026-10-06, with the machine busy, the container needed
@@ -257,6 +266,52 @@ test raising would fail the suite. Keep that distinction.
 - The engine's connect hook (`db/session.py`) commits its `SET TIME ZONE`. It
   used to leave the connection in a transaction, which made autocommit connections
   impossible and let the pool's rollback undo the setting after the first use.
+
+**Reporting schema and Power BI** (built 2026-10-08, revision `0006`):
+
+- **`reporting` holds views only, and they restate Gold.** Every number comes
+  from a Gold view, so Power BI and `make resumen` cannot disagree.
+  - `equs_mensual` is `v_resumen_equ` plus a zero row for each driver nothing
+    fed.
+  - `aporte_cuenta` adds up to it exactly.
+  - `equs_poly_mensual` and `calidad_datos_mensual` repeat the grouping of the
+    range functions over every month.
+- **Never call a Gold function from a reporting view.** Views read their tables
+  with the owner's rights, but a function runs with the *caller's*: the reader
+  would get *permission denied*. Build on Gold views (`gold.en_vigor` is fine:
+  it touches no table and is inlined).
+- **A new reporting view grants itself.** Its revision must also
+  `GRANT SELECT … TO reporting_reader`. There are no default privileges.
+- **Roles are cluster-wide.** The revision creates `reporting_reader` only if
+  missing, and the downgrade drops it only when no other database still grants
+  it something. Tests that create a login drop it in their teardown.
+- **`ALL_SCHEMAS` includes `reporting`, last,** so the test teardown drops it
+  before `gold`.
+- **The login is not created by the migration.** `energy reporting
+  create-reader` reads `REPORTING_DB_USER` / `REPORTING_DB_PASSWORD`, hashes the
+  password client-side (SCRAM), creates or alters the login in one transaction,
+  and sets on the role:
+  - `default_transaction_read_only`;
+  - `search_path = reporting`;
+  - a 10-minute `statement_timeout`;
+  - `equs.umbral_variacion`, so the data-quality counts match the CLI's.
+
+  It refuses an existing role that may do more than read: a superuser, the
+  application's own role, or an owner of a schema or relation.
+- **The bridge is `alpine/socat`, under compose profile `reporting`.** `make up`
+  never starts it. `make powerbi` = `create-reader`, then `up --wait` the bridge;
+  `make powerbi-down` removes it. It defaults to 127.0.0.1 because the database
+  speaks no TLS, and to port 5433 because 5432 is often taken on the host
+  (here by another project's database).
+- **Tests:**
+  - `TestReportingSchema` in `test_equs_gold_rules.py`: the views against Gold
+    on the synthetic world, and the login's reach (permission denied on
+    bronze/silver/gold, read-only, password renewal, refusals);
+  - `TestReportingRevision` in `test_db_migrations.py`: the views, the role,
+    the grants;
+  - one test in `test_equs_gold_build.py` on the FY26 figures.
+- **Speed with FY26, warm:** every view answers in under a second, except
+  `calidad_datos_mensual` (about 3 s). Import mode is the documented one.
 
 **EQUS Bronze loader** (built 2026-10-07):
 

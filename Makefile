@@ -73,7 +73,7 @@ endif
 .PHONY: help install up down logs restart format format-check lint typecheck \
         security test test-unit test-integration check db-upgrade db-downgrade \
         db-revision db-reset seed equs-load equs-silver refresh refresh-all resumen \
-        close report clean
+        close report powerbi powerbi-down clean
 
 # -----------------------------------------------------------------------------
 # Meta
@@ -206,6 +206,16 @@ else
 	$(DC) run --rm --no-deps -T $(if $(OUTPUT),-v "$(abspath $(dir $(OUTPUT))):/app/out") api \
 		equs-report --start $(START) --end $(END) $(if $(OUTPUT),--output "/app/out/$(notdir $(OUTPUT))")
 endif
+
+# -----------------------------------------------------------------------------
+# Power BI: the read-only reporting login and the opt-in database port
+# -----------------------------------------------------------------------------
+powerbi: ## Create or renew the Power BI login and open the reporting port (127.0.0.1:5433)
+	$(ENERGY) reporting create-reader
+	$(DC) --profile reporting up -d --wait --no-deps reporting-bridge
+
+powerbi-down: ## Close the reporting port opened by make powerbi
+	$(DC) --profile reporting rm --stop --force reporting-bridge
 
 # -----------------------------------------------------------------------------
 # Housekeeping

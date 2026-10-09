@@ -23,6 +23,7 @@ exists and what it guarantees. New to the project? Start with the
 | `bronze` | Raw landing area | Append-only, immutable |
 | `silver` | Validated readings; EQUS tables | Readings: insert + supersede, never delete. EQUS: rebuilt from Bronze |
 | `gold` | Published KPIs; EQUS Gold | KPIs: replaced per period. EQUS: views over Silver, plus the frozen monthly close, changed only by a reclose |
+| `reporting` | Read-only views for BI tools such as Power BI | Views only; nothing is stored |
 
 ---
 
@@ -925,6 +926,72 @@ categories with EQ). Every month of section 9.2 matches to the cent, and FY26 is
 2,310,724. Against column H of the workbook itself, only the rows section 9 explains
 differ: POS_ACT_MTL (the plate listed twice in PLACAS), COMP_DEC (the TERM-PRT
 protectors) and the totals that carry them (H36, H40, H44, H45).
+
+---
+
+## `reporting` — read-only views for BI tools
+
+Created by [`0006_create_reporting_schema.py`](../migrations/versions/0006_create_reporting_schema.py).
+How to connect Power BI to these views is in [powerbi.md](powerbi.md).
+
+Twelve views and one function, no table. They restate EQUS Gold, and the Silver
+tables Gold reads, as flat tables a BI tool can load and relate.
+
+- **Nothing is calculated twice.** Every number comes from a Gold view.
+  - `equs_mensual` is `gold.v_resumen_equ` with a zero for each driver nothing
+    fed.
+  - `aporte_cuenta` is the two Gold pairing views, row by row, so the detail adds
+    up to the month exactly.
+  - `equs_poly_mensual` and `calidad_datos_mensual` repeat the grouping of
+    `gold.inyeccion_rango_mes` and `gold.calidad_datos_rango` over every month.
+- **They read as their owner.** A view reads its tables with the privileges of
+  the role that owns it, so the reader needs no privilege on `gold` or `silver`.
+  For the same reason no view calls a Gold *function*: a function runs with the
+  rights of whoever queries it.
+- **Keys a BI tool can relate.** Power BI relates tables on one column, so every
+  view keyed by a driver carries `cuenta_id` = `version:cuenta_stats` (for
+  example `1:OXPROD_KG`).
+- **Time columns.** Every month-based view has `mes`, the first day of the month,
+  and `anio_fiscal` = `reporting.anio_fiscal(mes)`. The fiscal year runs from
+  October to September and is named after the year it closes in: FY26 is
+  October 2025 to September 2026.
+
+| View | One row per | Columns | Source |
+|---|---|---|---|
+| `cuentas` | version × driver | `cuenta_id`, `version`, `version_nombre`, `vigente_desde`, `vigente_hasta`, `cuenta_stats`, `descripcion`, `proceso`, `planta`, `area_planta`, `orden_proceso`, `fila`, `unidad`, `fuente`, `estandar_por_bat`, `multiplicador`, `peso`, `factor`, `suma_eq` | `silver.factores_equ`, `equs_version`, `gold.secciones_reporte`, `filas_resumen_equ` |
+| `articulos` | item | `numero_articulo`, `descripcion`, `descripcion2`, `unidad_de_medida`, `linea_de_productos`, `linea_de_productos_descripcion`, `campo_equs`, `tipo_de_articulo`, `grpo`, `familia_placa`, `peso_neto`, `estado` | `silver.item_master`, `linea_de_productos` |
+| `equs_mensual` | month × driver of the version in force, 0 included | `mes`, `anio_fiscal`, `cuenta_id`, `version`, `cuenta_stats`, `descripcion`, `proceso`, `planta`, `area_planta`, `fila`, `unidad`, `cantidad`, `factor`, `equs`, `suma_eq` | `gold.v_resumen_equ`, for each month with receipts or invoices that a version covers |
+| `equs_batt_mensual` | month | `mes`, `anio_fiscal`, `equs_orec`, `equs_ensamble`, `equs_formacion`, `equs_decorado`, `equs_shipping`, `equs_batt` | `gold.v_equs_batt_mes` |
+| `equs_poly_mensual` | month × plastic account and category | `mes`, `anio_fiscal`, `cuenta`, `categoria`, `area_planta`, `fila`, `piezas`, `piezas_con_equ`, `factor_equ` (null when the category mixes factors), `equs` | `gold.v_reporte_qad`, warehouse 1010 |
+| `aporte_cuenta` | receipt or invoice line × driver it fed, under the version in force | `origen` (`recibo` or `factura`), `numero_de_transaccion` (receipts only), `documento` (transaction number, or `num_fact/orden/linea`), `fecha_efectiva`, `mes`, `anio_fiscal`, `numero_articulo`, `cuenta_id`, `version`, `cuenta_stats`, `proceso`, `regla_n`, `valor`, `factor`, `equs` = `valor` × `factor`, `suma_eq` | `gold.v_reporte_qad_regla`, `gold.v_unit_ship_regla` |
+| `recibos_produccion` | production receipt (`RCT-WO`) | `numero_de_transaccion`, `fecha_efectiva`, `mes`, `anio_fiscal`, `numero_articulo`, `articulo_descripcion`, `linea_de_productos`, `campo_equs`, `almac`, `linea_produccion`, `area_planta`, `cantidad`, `mat_activo`, `comp_deco`, `categoria_poly`, `cuenta_poly`, `factor_poly`, `equs_poly` | `gold.v_reporte_qad`, `silver.lineas_produccion` |
+| `calidad_datos_mensual` | month × data-quality check, 0 included | `mes`, `anio_fiscal`, `vista`, `descripcion`, `bloqueante`, `filas` | the six `gold.dq_*` views, by `fecha_efectiva` (by `mes` for check 6) |
+| `cierres` | close or reclose | `cierre_id`, `mes`, `anio_fiscal`, `cerrado_en`, `closed_by`, `recierre`, `advertencias_aceptadas`, `vigente` (the latest close of its month) | `gold.cierre_mes` |
+| `cierres_calidad` | close × check | `cierre_id`, `mes`, `vista`, `descripcion`, `bloqueante`, `filas` | `gold.cierre_mes.calidad_datos` |
+| `equs_cerrado` | closed month × driver | `mes`, `anio_fiscal`, `cuenta_id`, `version`, `cuenta_stats`, `descripcion`, `proceso`, `planta`, `area_planta`, `fila`, `unidad`, `cantidad`, `factor`, `equs`, `suma_eq`, `fecha_calculo`, `closed_by` | `gold.resumen_equ` |
+| `equs_cerrado_historial` | row a reclose replaced | `cierre_id`, `mes`, `anio_fiscal`, `cuenta_id`, `version`, `cuenta_stats`, `proceso`, `cantidad`, `factor`, `equs`, `suma_eq`, `fecha_calculo`, `closed_by` | `gold.resumen_equ_historial` |
+
+**Who can read them.** The group role `reporting_reader` (`NOLOGIN`) has `USAGE`
+on the schema and `SELECT` on every view, and no privilege on any other schema.
+
+- **The login.** `energy reporting create-reader` (or `make powerbi`) creates a
+  login in that role, named by `REPORTING_DB_USER` (default `powerbi`), with the
+  password `REPORTING_DB_PASSWORD`. Its sessions are read-only, it searches
+  `reporting` first, and each query is stopped after 10 minutes. The command
+  refuses to use a role that may do more than read.
+- **Cluster-wide roles.** Roles belong to the whole PostgreSQL cluster, not to
+  one database. So the migration creates the role only if it is missing, and the
+  downgrade drops it only once no other database still grants it something.
+- **A new view grants itself.** A revision that adds a view here must also grant
+  `SELECT` on it to `reporting_reader`.
+
+**With the FY26 workbooks.**
+
+- **Figures:** `equs_mensual` gives every month of EQUS_CONTEXT section 9.2 to
+  the cent; `aporte_cuenta` (134,833 rows) adds up to it exactly;
+  `recibos_produccion` holds the 138,773 receipts.
+- **Speed:** every view answers in under a second, except
+  `calidad_datos_mensual`, which takes about 3 seconds.
 
 ---
 
