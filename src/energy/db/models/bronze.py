@@ -11,7 +11,12 @@ Responsibility:
     into typed columns - a source that adds a field must not require a migration,
     and a value that fails to parse must still be stored so it can be diagnosed.
     The DDL, including hypertable and compression settings, lives in
-    ``migrations/versions/0002`` and ``0005``.
+    ``migrations/versions/0002`` and ``0005``. Revision 0002 also creates five
+    landing tables for the equivalent-batteries exports (``raw_rct_wo``,
+    ``raw_facturas``, ``raw_product_struc``, ``raw_item_master``,
+    ``raw_manual_sheets``). Those have no mapped class: the loader writes them
+    with ``COPY`` through :mod:`energy.adapters.postgres_bronze_repo`, and the
+    rules for their payloads live in :mod:`energy.domain.landing`.
 
 Depends on:
     ``sqlmodel``, ``energy.core.constants``.
@@ -54,11 +59,24 @@ class IngestionRun:
     Columns:
         run_id: UUID primary key.
         flow_name: which Prefect flow ran.
+        source_key: which kind of export it loaded; one of the keys the
+            migration allows (``qad_rct_wo``, ``qad_facturas``,
+            ``qad_product_struc``, ``item_master``, ``manual_sheets``).
         source_system: the source it read.
         plant_code: the plant it ran for.
         state: pending, running, completed, failed, or cancelled.
-        window_start: start of the period requested, UTC; null for full reads.
-        window_end: end of the period requested, UTC; null for full reads.
+        window_start: first date of the business period the run covers: the
+            earliest date found in the rows it landed, unless the caller stated
+            one. No year is assumed. Null when it is unknown, and for sources
+            that are not dated.
+        window_end: last date of that period, likewise.
+        qad_program: the QAD program that produced the export, as its Info
+            sheet reports it; null for sources without one.
+        qad_exploration: the QAD exploration name, from the same sheet.
+        qad_user: the QAD user who ran the query, from the same sheet.
+        queried_at: when the query ran, UTC, from the same sheet.
+        search_conditions: JSONB array holding the export's search conditions
+            as delivered; they can be stale, so nothing is derived from them.
         started_at: when the run began, UTC.
         finished_at: when it ended, UTC; null while running.
         row_count: rows written to Bronze.
@@ -88,7 +106,10 @@ class RawFile:
         content_type: MIME type.
         size_bytes: payload size.
         plant_code: the plant it was uploaded for.
-        source_key: the configured source it represents.
+        source_key: the configured source it represents; restricted to the
+            same keys as ``IngestionRun.source_key``.
+        sheet_names: the worksheets found in the workbook; empty for a file
+            that has none.
         uploaded_by: who submitted it.
         uploaded_at: when it was received, UTC.
     """

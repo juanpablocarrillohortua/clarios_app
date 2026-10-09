@@ -2,8 +2,8 @@
 
 Layer: core
 
-Settings are grouped into nested models (database, API, MinIO, Prefect, Dash,
-logging, data) so that each layer depends only on the slice it needs. Values come
+Settings are grouped into nested models (database, API, MinIO, archive, Prefect,
+Dash, logging, data) so that each layer depends only on the slice it needs. Values come
 from environment variables first and from ``.env`` second; there are no hardcoded
 credentials and no runtime mutation. Call :func:`get_settings` - it is cached, so
 the environment is read once per process.
@@ -11,9 +11,11 @@ the environment is read once per process.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, PostgresDsn, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,6 +23,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 Environment = Literal["local", "ci", "staging", "production"]
 LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
 LogFormat = Literal["console", "json"]
+ArchiveBackend = Literal["minio", "local"]
 
 _ENV_FILE = ".env"
 
@@ -169,6 +172,24 @@ class MinioSettings(BaseSettings):
     bucket_reports: str = Field(default="reports", validation_alias="MINIO_BUCKET_REPORTS")
 
 
+class ArchiveSettings(BaseSettings):
+    """Where the original source files are archived before they are parsed."""
+
+    model_config = _BASE_CONFIG
+
+    # `minio` is the deployed behaviour. `local` writes the same bucket/key
+    # layout under a directory, for a load run from a machine that cannot reach
+    # MinIO - the compose stack publishes no MinIO port.
+    backend: ArchiveBackend = Field(default="minio", validation_alias="ARCHIVE_BACKEND")
+    local_dir: Path = Field(default=Path("data/bronze_archive"), validation_alias="ARCHIVE_DIR")
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _lowercase_backend(cls, value: object) -> object:
+        """Accept ``MinIO`` as well as ``minio``."""
+        return value.strip().lower() if isinstance(value, str) else value
+
+
 class PrefectSettings(BaseSettings):
     """Prefect 3 orchestration server and worker configuration."""
 
@@ -225,6 +246,40 @@ class DataSettings(BaseSettings):
         return "UTC"
 
 
+class EqusSettings(BaseSettings):
+    """The Gold layer of the equivalent-batteries (EQUS) calculation."""
+
+    model_config = _BASE_CONFIG
+
+    # Presentation only: the time a report says it was made. The data itself
+    # has no time of day.
+    timezone: str = Field(default="America/Bogota", validation_alias="EQUS_TIMEZONE")
+    # Data-quality check 6 flags a driver whose monthly quantity moved more
+    # than this fraction against the month before.
+    variation_threshold: Decimal = Field(
+        default=Decimal("0.30"), ge=0, validation_alias="EQUS_VARIATION_THRESHOLD"
+    )
+    # How long a refresh or close waits for another one to finish.
+    lock_timeout_seconds: float = Field(
+        default=600, gt=0, validation_alias="EQUS_LOCK_TIMEOUT_SECONDS"
+    )
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        """Reject a time zone the IANA database does not know.
+
+        Raises:
+            ValueError: if the name is unknown.
+        """
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            msg = f"unknown time zone {value!r}"
+            raise ValueError(msg) from exc
+        return value
+
+
 class Settings(BaseSettings):
     """Root configuration object composing every settings group."""
 
@@ -239,9 +294,11 @@ class Settings(BaseSettings):
     api: APISettings = Field(default_factory=APISettings)
     dash: DashSettings = Field(default_factory=DashSettings)
     minio: MinioSettings = Field(default_factory=MinioSettings)
+    archive: ArchiveSettings = Field(default_factory=ArchiveSettings)
     prefect: PrefectSettings = Field(default_factory=PrefectSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     data: DataSettings = Field(default_factory=DataSettings)
+    equs: EqusSettings = Field(default_factory=EqusSettings)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -268,10 +325,13 @@ def get_settings() -> Settings:
 
 __all__ = [
     "APISettings",
+    "ArchiveBackend",
+    "ArchiveSettings",
     "DashSettings",
     "DataSettings",
     "DatabaseSettings",
     "Environment",
+    "EqusSettings",
     "LogFormat",
     "LogLevel",
     "LoggingSettings",

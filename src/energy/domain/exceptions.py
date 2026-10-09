@@ -109,6 +109,28 @@ class NegativeEnergyError(DomainRuleError):
     code = "negative_energy"
 
 
+class InvalidPeriodError(DomainRuleError):
+    """Raised when a period of the equivalent-batteries reports cannot be answered.
+
+    A date or month that does not parse, a start after the end, a month no
+    version of the equation covers, or a request for the frozen close of months
+    that are not closed whole.
+    """
+
+    code = "invalid_period"
+
+
+class CloseRefusedError(DomainRuleError):
+    """Raised when a month of the equivalent batteries may not be closed as asked.
+
+    The month is already closed and no reclose was requested, it has nothing to
+    close, or a blocking data-quality check has rows and the warnings were not
+    accepted. ``details`` says which.
+    """
+
+    code = "close_refused"
+
+
 # -----------------------------------------------------------------------------
 # Data quality and ingestion
 # -----------------------------------------------------------------------------
@@ -205,7 +227,18 @@ class WatermarkError(PipelineError):
     code = "watermark_error"
 
 
+class LockTimeoutError(PipelineError):
+    """Raised when another run holds the lock a run needs and does not release it in time.
+
+    Refreshing Gold and closing a month take the same lock, so two of them never
+    run at once; the second one waits, up to a limit, and then gives up with this.
+    """
+
+    code = "lock_timeout"
+
+
 __all__ = [
+    "CloseRefusedError",
     "ConfigurationError",
     "ContentHashMismatchError",
     "DataQualityError",
@@ -215,7 +248,9 @@ __all__ = [
     "EnergyError",
     "EntityNotFoundError",
     "IngestionError",
+    "InvalidPeriodError",
     "InvalidTimeWindowError",
+    "LockTimeoutError",
     "NaiveDatetimeError",
     "NegativeEnergyError",
     "PipelineError",

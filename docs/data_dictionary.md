@@ -2,7 +2,8 @@
 
 Field-by-field reference for every table. The authoritative definition is always
 the migration that creates the table — this document explains *why* each column
-exists and what it guarantees.
+exists and what it guarantees. New to the project? Start with the
+[database overview](database_overview.md), which shows how the tables relate.
 
 **Conventions used throughout:**
 
@@ -20,16 +21,16 @@ exists and what it guarantees.
 |---|---|---|
 | `reference` | Shared dimensions | Human-maintained, slowly changing |
 | `bronze` | Raw landing area | Append-only, immutable |
-| `silver` | Validated readings | Insert + supersede, never delete |
-| `gold` | Published KPIs | Replaced per period |
+| `silver` | Validated readings; EQUS tables | Readings: insert + supersede, never delete. EQUS: rebuilt from Bronze |
+| `gold` | Published KPIs; EQUS Gold | KPIs: replaced per period. EQUS: views over Silver, plus the frozen monthly close, changed only by a reclose |
 
 ---
 
 ## `reference` — shared dimensions
 
-Created by [`0002_create_bronze_schema.py`](../migrations/versions/0002_create_bronze_schema.py).
-It shares that migration because Silver and Gold carry foreign keys into it and
-it must therefore exist before them.
+Created by [`0003_create_silver_schema.py`](../migrations/versions/0003_create_silver_schema.py).
+It shares that migration because Silver and Gold carry foreign keys into it, and
+Silver is the first layer to need it.
 
 ### `reference.plants`
 
@@ -112,8 +113,16 @@ measured against the target that was in force at the time.
 
 ## `bronze` — raw landing area
 
-Append-only. Nothing in the application updates or deletes a Bronze row; the only
-thing that removes them is the retention policy (2 years) from migration 0005.
+Created by [`0002_create_bronze_schema.py`](../migrations/versions/0002_create_bronze_schema.py).
+
+Append-only. Nothing in the application updates or deletes a landing row. On the
+five EQUS landing tables the database enforces it: a trigger rejects every
+`UPDATE`. On `raw_readings` it is a convention, and the only thing that removes
+its rows is the retention policy (2 years) from migration 0005.
+
+Two tables are ledgers, not landing tables, and are updated on purpose:
+`ingestion_runs` (the loader moves a run from `pending` to `completed`) and
+`raw_files`.
 
 ### `bronze.raw_readings` — hypertable
 
@@ -140,21 +149,35 @@ after 2 years.
 
 ### `bronze.ingestion_runs`
 
-The ledger every Bronze row points at.
+The ledger every Bronze row points at. The EQUS loader writes one row per load:
+it inserts the run as `running` before landing anything, then sets it to
+`completed` in the same transaction that lands the rows, or to `failed` after
+rolling them back. So a `completed` run has all its rows and a `failed` run has
+none.
 
 | Column | Type | Null | Description |
 |---|---|---|---|
 | `run_id` | `UUID` | no | Primary key. |
-| `flow_name` | `VARCHAR(100)` | no | Which Prefect flow ran. |
-| `source_system` | `VARCHAR(64)` | no | The source it read. |
-| `plant_code` | `VARCHAR(32)` | no | The plant it ran for. |
+| `flow_name` | `VARCHAR(100)` | no | The name the load ran under. The EQUS loader uses the workbook's file name without its extension unless told otherwise. |
+| `source_key` | `VARCHAR(64)` | no | Which kind of export it loaded: `qad_rct_wo`, `qad_facturas`, `qad_product_struc`, `item_master` or `manual_sheets`. |
+| `source_system` | `VARCHAR(64)` | no | The source it read: `qad` for exports of the ERP, `excel` for workbooks people maintain by hand. |
+| `plant_code` | `VARCHAR(32)` | no | The plant it ran for. `1515` by default. |
 | `state` | `VARCHAR(20)` | no | `pending`, `running`, `completed`, `failed`, `cancelled`. |
-| `window_start` / `window_end` | `TIMESTAMPTZ` | yes | Period requested. Null for a full read. |
+| `window_start` / `window_end` | `DATE` | yes | The business period the run covers: the earliest and the latest *Fecha Efectiva* among the rows it landed, written when the run completes. No year is assumed. `energy equs load --window-start/--window-end` replaces the dates found with the ones given. Null for product structures and catalogues, which are not dated, and for a movement export whose *Fecha Efectiva* holds no date cells. The export's own search conditions are **not** used: the transactions export states a stale period. |
+| `qad_program` / `qad_exploration` / `qad_user` | `VARCHAR` | yes | What the workbook's *Info* sheet says about the query that produced it. |
+| `queried_at` | `TIMESTAMPTZ` | yes | When the query ran, from *Fecha de consulta* on the *Info* sheet. The text is `dd/mm/yyyy h:mm:ss`, optionally followed by `a. m.` or `p. m.`, in America/Bogota time. Null when it cannot be read. |
+| `search_conditions` | `JSONB` | no | The rows of the workbook's *Condiciones de búsqueda* sheet, as delivered: an array of objects keyed `campo`, `operador`, `valor`, `monto hasta`, with empty cells omitted. Empty array when the workbook has no such sheet. |
 | `started_at` | `TIMESTAMPTZ` | no | Run start. |
 | `finished_at` | `TIMESTAMPTZ` | yes | Null while running. |
-| `row_count` | `BIGINT` | no | Rows written to Bronze. |
+| `row_count` | `BIGINT` | no | Rows written to Bronze. Never negative. |
 | `error` | `TEXT` | no | Failure message; empty on success. |
-| `parameters` | `JSONB` | no | Invocation parameters — what a retry replays. |
+| `parameters` | `JSONB` | no | Invocation parameters — what a retry replays. The EQUS loader stores `filename`, `content_hash`, `sheets` (name, dataset key and header row of each), `plant_code`, `force`, the period dates the caller gave (null when none), `uploaded_by`, and `info`: the whole *Info* sheet as a name-to-value object. |
+
+**Indexes:** `(source_key, started_at DESC)`, `(plant_code, started_at DESC)`,
+`state`.
+
+**Constraints:** `state` and `source_key` restricted to the lists above;
+`window_start <= window_end` when both are present.
 
 ### `bronze.raw_files`
 
@@ -167,19 +190,162 @@ bytes a plant sent.
 |---|---|---|---|
 | `raw_file_id` | `UUID` | no | Primary key. |
 | `content_hash` | `CHAR(64)` | no | **Unique** — a re-upload is detected before the file is parsed. |
-| `bucket` / `object_key` | `VARCHAR(63)` / `TEXT` | no | Location in object storage. |
+| `bucket` / `object_key` | `VARCHAR(63)` / `TEXT` | no | Location in object storage. The key is `{plant_code}/{source_key}/{YYYY}/{MM}/{DD}/{content_hash}.{extension}`, dated with the UTC day the file was first archived. |
 | `filename` | `TEXT` | no | Original filename as submitted. |
 | `content_type` | `VARCHAR(150)` | no | MIME type. |
 | `size_bytes` | `BIGINT` | no | Payload size. Must be positive. |
-| `plant_code` / `source_key` | `VARCHAR` | no | What it was uploaded for. |
+| `plant_code` / `source_key` | `VARCHAR` | no | What it was uploaded for. `source_key` takes the same five values as on `ingestion_runs`. One workbook can feed several sources; this is the first one it was loaded for. |
+| `sheet_names` | `TEXT[]` | no | Every sheet found in the workbook, hidden ones included, whether or not it was landed. Empty by default. |
 | `uploaded_by` | `VARCHAR(200)` | no | Who submitted it. |
 | `uploaded_at` | `TIMESTAMPTZ` | no | Receipt time. |
 
+**Indexes:** `(source_key, uploaded_at DESC)`.
+
+### The EQUS landing tables
+
+Five tables receive the exports the equivalent-batteries calculation consumes,
+one spreadsheet row per table row. They are plain tables today; the composite
+primary key lets a later revision turn them into hypertables.
+
+| Table | Receives | Own indexes |
+|---|---|---|
+| `bronze.raw_rct_wo` | Production receipts: *Explorar transacciones por art* › `Datos` | payload keys `Número de transacción`, `Fecha Efectiva` |
+| `bronze.raw_facturas` | Invoice lines: *Unidades facturadas* › `Datos` | payload keys `Núm Fact`, `Fecha Efectiva` |
+| `bronze.raw_product_struc` | Product structures: *BOM BATERIAS FORMADAS* › `PASTA`, `PLACAS`, `BAT ENS`, `BAT FOR`, `BAT TERM`; *ESTRUCTURA DECORADO* › `Datos` | payload key `Artículo Matriz`; `(sheet_name, ingested_at DESC)` |
+| `bronze.raw_item_master` | *Item_Master* › `Datos`, `Grupo-Fam` | `(sheet_name, ingested_at DESC)` |
+| `bronze.raw_manual_sheets` | Hand-maintained catalogues, named by `dataset_key` | `(dataset_key, ingested_at DESC)` |
+
+Every one of them has these columns:
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| `<table>_id` | `UUID` | no | Part of the composite PK, e.g. `raw_rct_wo_id`. |
+| `ingested_at` | `TIMESTAMPTZ` | no | When the row landed. Part of the PK so the table can become a hypertable. |
+| `ingestion_run_id` | `UUID` | no | FK → `bronze.ingestion_runs`, `ON DELETE RESTRICT`. |
+| `raw_file_id` | `UUID` | yes | FK → `bronze.raw_files`, `ON DELETE RESTRICT`. Null when the rows did not come from an archived workbook. |
+| `source_system` | `VARCHAR(64)` | no | The system the export came from: `qad` or `excel`. |
+| `source_uri` | `TEXT` | no | Where the original is archived and which sheet the row came from: `{bucket}://{object_key}#{sheet_name}`. |
+| `sheet_name` | `VARCHAR(64)` | no | The worksheet the row was read from. |
+| `source_row` | `INTEGER` | no | The real Excel row number, counting empty rows and the header. At least 1: some hand-made sheets have no header row. |
+| `content_hash` | `CHAR(64)` | no | SHA-256 of the canonical JSON of the payload: keys sorted, compact separators, UTF-8, non-ASCII characters written as themselves. Indexed, **not unique**. |
+| `plant_code` | `VARCHAR(32)` | no | The plant the export belongs to. |
+| `payload` | `JSONB` | no | **The row exactly as exported.** Keys are the header texts of the sheet (Spanish, with accents); values are the cell text. Nothing is parsed. Always a JSON object. |
+
+`raw_manual_sheets` adds `dataset_key` (`VARCHAR(64)`, lowercase snake_case),
+which names the catalogue — `clasif_poly`, `lineas_produccion`, `instrucc`,
+`element_deco`, `comparativo_lineas` — so a new catalogue needs a new value, not
+a new table.
+
+**Indexes on each:** `content_hash` (duplicate lookup), `ingestion_run_id` and
+`raw_file_id` (audit).
+
+#### What each table holds after loading the FY26 files
+
+| Table | Sheet | `dataset_key` | Header row | Rows |
+|---|---|---|---|---|
+| `raw_rct_wo` | `Datos` | | 1 | 138,773 |
+| `raw_facturas` | `Datos` | | 1 | 14,458 |
+| `raw_product_struc` | `PASTA` | | 1 | 29 |
+| `raw_product_struc` | `PLACAS` | | 1 | 220 |
+| `raw_product_struc` | `BAT ENS` | | 1 | 8,340 |
+| `raw_product_struc` | `BAT FOR` | | 1 | 4,566 |
+| `raw_product_struc` | `BAT TERM` | | 1 | 3,413 |
+| `raw_product_struc` | `Datos` (*ESTRUCTURA DECORADO*) | | 1 | 31,907 |
+| `raw_manual_sheets` | `Clasif_Poly` | `clasif_poly` | 1 | 1,753 |
+| `raw_manual_sheets` | `Lineas Produccion` | `lineas_produccion` | 1 | 64 |
+| `raw_manual_sheets` | `INSTRUCC` | `instrucc` | none | 15 |
+| `raw_manual_sheets` | `ELEMENT DECO` | `element_deco` | 1 | 1,751 |
+| `raw_manual_sheets` | `Hoja1` (*Comparativo lineas*) | `comparativo_lineas` | 1 | 50 |
+| `raw_item_master` | `Datos`, `Grupo-Fam` | | 1 | 0 — workbook not delivered yet |
+
+`L.PRODUCCION` of *EQUS BATT* (`l_produccion`, header row 3) is landed only with
+`energy equs load-all --include-optional`: it gives the group of each production
+line, but shares its sheet with two pivot tables. The sheets `REPORTE QAD` and
+`Unit_Ship` are refused by the loader, because their columns are results of the
+Excel calculation and not sources.
+
+#### How a row becomes a payload
+
+The rules are implemented once, in
+[`energy/domain/landing.py`](../src/energy/domain/landing.py), and Silver relies
+on them to read Bronze.
+
+**Keys.** A key is the header text of the column, trimmed. A blank header becomes
+the Excel column letter (`A`, `B`, … `AA`). A repeated header gets ` #2`, ` #3`:
+the QAD structure exports have two columns headed `Descripción`, which land as
+`Descripción` and `Descripción #2`. When a sheet has no header row every key is a
+column letter.
+
+**Values.** Every value is text, written as follows.
+
+| Cell | Text |
+|---|---|
+| Text | As it is. Not trimmed, not upper-cased; `N/A` stays `N/A`. |
+| Whole number | No trailing `.0`: `900.0` → `900`. |
+| Other number | Shortest exact decimal form, never scientific notation: `0.0636`, `1e-05` → `0.00001`. |
+| Date, date-time, time | ISO-8601: `2025-12-10`, `2025-12-10T11:34:05`, `11:34:00`. |
+| Boolean | `true` or `false`. |
+| Empty | The key is omitted. |
+
+**Rows.** A row that is completely empty is skipped, and so are the rows above
+the header row. Every other row is landed, including exact repeats of an earlier
+row and the header row pasted again inside `PLACAS` (Excel row 257).
+
+#### How the tables are loaded
+
+`energy equs load` lands one workbook and `energy equs load-all` (or
+`make equs-load`) lands every workbook of the monthly close. For each load the
+loader, in this order:
+
+1. refuses a request it cannot honour (unknown source, missing or forbidden
+   sheet, missing dataset key) before writing anything;
+2. archives the file and registers it in `raw_files`, once per distinct hash;
+3. skips the sheets a **completed** run already landed from this exact file, and
+   stops if that is all of them — `--force` lands them again under a new run;
+4. inserts the run as `running`;
+5. lands all requested sheets in one transaction and, in that same transaction,
+   sets the run to `completed` with the period its rows cover; on any error it
+   rolls the rows back and sets the run to `failed`.
+
+The loader only inserts into landing tables and only updates `ingestion_runs`.
+
+**Any year, several files.** The loader does not know about fiscal years. It
+lands whatever dates an export holds; the fiscal year of a figure is assigned
+later, in Gold, from the date of each row.
+
+| Kind of workbook | Files `load-all` lands | Why |
+|---|---|---|
+| Movements: *Explorar transacciones por art*, *Unidades facturadas* | Every workbook whose name **starts with** the usual name, for example `Calculo de equivalente - Explorar transacciones por art FY24.xlsx` | One export per period can sit side by side. Each is one load with its own run and its own period. |
+| Product structures and catalogues | Only the workbook with exactly the usual name | They are snapshots: in Silver the latest load is the one that counts, so a second version must replace the file, not sit beside it. |
+
+Names are compared ignoring case, spaces, hyphens and accents. A workbook that
+no route takes is listed at the end of the output as not loaded. Two exports
+that overlap land their shared rows twice, with the same `content_hash`;
+removing the repeats is a Silver decision.
+
+**Correcting a period.** A file that is already landed is skipped, so loading it
+again with other dates changes nothing. `ingestion_runs` is a ledger and can be
+updated: `UPDATE bronze.ingestion_runs SET window_start = ..., window_end = ...
+WHERE run_id = ...`.
+
+**Why `content_hash` is not unique.** The exports contain genuinely repeated
+rows, and loading the same workbook twice is legitimate. Removing duplicates
+changes the result of the calculation, so it is done in Silver, where it is
+visible. Bronze keeps every copy.
+
+**Append-only guard.** `bronze.forbid_update()` is attached to each landing
+table as a `BEFORE UPDATE ... FOR EACH ROW` trigger and raises
+`restrict_violation` naming the table. `DELETE` is not blocked, because that is
+how a retention policy removes old rows.
+
 ---
 
-## `silver` — validated readings
+## `silver` — validated readings and EQUS Silver
 
 Created by [`0003_create_silver_schema.py`](../migrations/versions/0003_create_silver_schema.py).
+Two families of tables live here and do not reference each other: the energy
+readings, described first, and the tables of the equivalent-batteries
+calculation, described under [The EQUS Silver tables](#the-equs-silver-tables).
 
 ### `silver.readings` — hypertable
 
@@ -254,12 +420,267 @@ higher-priority source overrode their number.
 **Indexes:** `(meter_id, ts_utc DESC)`, and a partial index on
 `divergence_pct DESC WHERE divergence_pct > 2.0` surfacing material disagreements.
 
+### The EQUS Silver tables
+
+Eighteen tables and two materialized views: the typed, deduplicated version of
+what the EQUS workbooks landed in Bronze, plus the equation stored as data.
+[EQUS_CONTEXT.md](EQUS_CONTEXT.md) §6 is their specification and says which
+Excel column each field comes from; this section says what each table
+guarantees and how it is filled.
+
+Conventions of these tables, which differ from the rest of the schema:
+
+- **Names are Spanish.** Tables and columns mirror the Excel sheets and QAD
+  headers the plant uses (`reporte_qad`, `campo_equs`, `articulo_matriz`).
+- **Keys are natural.** An item code, a transaction number, an invoice line. No
+  surrogate UUID.
+- **Item codes are text.** `21500000A` and `21100000A` are real items.
+- **Numbers are exact.** Every quantity, price and factor is `NUMERIC`, never a
+  float: `36 x 0.0636` is `2.2896`, not `2.2895999`.
+- **Rows are derived.** Every table except the three of the equation is filled
+  by `make equs-silver` from Bronze. Do not edit them by hand; the next build
+  overwrites the edit. The exceptions are the columns marked *kept by hand*.
+
+#### Catalogues
+
+| Table | Key | Columns | Notes |
+|---|---|---|---|
+| `planta` | `planta` | `nombre` | Plant areas (RC, Componentes, OREC, Ensamble, F&A). Not `reference.plants`, which are sites. `nombre` is kept by hand. |
+| `almacen` | `almac` | `nombre` | Warehouses: 1010 plastic components, 1515 battery plant, 1520 and 1521 lead recycling. `nombre` is kept by hand. |
+| `lineas_produccion` | `linea` | `descripcion`, `almac` → `almacen`, `planta` → `planta`, `grupo`, `proceso_energia`, `unidades_por_hora` | QAD production lines. `planta` is empty for a line no area claims. `grupo` is empty unless sheet `L.PRODUCCION` was landed. |
+| `linea_de_productos` | `linea_de_productos` | `descripcion` | QAD product lines, which identify the process level: 2201 assembled, 3101 formed, 3103 decorated. |
+| `campo_equs` | `campo_equs` | `descripcion` | EQ categories. **`N/A` is a row**: it means "not applicable". The plastic catalogue spells it `NA`; both are kept as delivered. `descripcion` is kept by hand. |
+| `grupo_fam` | `familia_placa` | `tipo_bat`, `familia` | Battery families. Empty until `Item_Master.xlsx` is delivered. |
+| `item_master` | `numero_articulo` | `descripcion`, `descripcion2`, `unidad_de_medida`, `linea_de_productos` → `linea_de_productos`, `campo_equs` → `campo_equs`, `tipo_de_articulo`, `grpo`, `familia_placa` → `grupo_fam`, `peso_neto`, `polaridad`, `estado` | One row per item code seen in any source. See [how it is assembled](#how-silver-is-built). |
+| `costo_std` | `(numero_articulo, vigente_desde)` | `vigente_hasta`, `costo_std` | One row per change of the standard cost of an item. `vigente_hasta` is the day the next cost starts; empty for the cost in force. |
+| `vendido_a` | `vendido_a` | `ordenar_nombre`, `pais`, `tipo` | Customers. A country written in capitals is stored in title case, so `COLOMBIA` and `Colombia` are one. |
+
+`item_master.polaridad` is `+`, `-` or empty, and is **derived**, not exported:
+
+| Item | Rule, in order |
+|---|---|
+| Paste (description starts with `PASTA`) | The type sheet `PASTA` gives it: `POSITVO` (as QAD spells it) is `+`, `NEGATIVO` is `-`. Otherwise `-` if the description contains `NEG`, else `+`. |
+| Plate (description starts with `PLACA`) | `(+)` or `(-)` in the description. Otherwise its type. `PLACA PARA BAT IMPO` is `+`. |
+| Anything else | Empty. |
+
+The fictitious paste and plate of imported batteries count as positive because
+the workbook's author put them in the positive column. Whether that is right is
+an open question for the business.
+
+#### Structures and catalogues of the calculation
+
+**`bom_estructura`** — one row per parent-to-component link, every level in one
+table. An item is the parent of some rows and the component of others, which
+chains finished battery → formed battery → assembled battery → plate → paste.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| `bom_id` | `BIGINT` identity | no | Primary key. Restarted by every build. |
+| `articulo_matriz` | `TEXT` | no | The parent. FK → `item_master`. |
+| `articulo_componente` | `TEXT` | no | The component. FK → `item_master`. |
+| `cantidad_por` | `NUMERIC(18,8)` | no | Quantity of the component per parent. Negative for recovered scrap. |
+| `umcomp` | `TEXT` | yes | Unit of the component. |
+| `inicio_efectiva` / `fin_efectivo` | `DATE` | yes | Validity. An empty `fin_efectivo` means the link is in force. |
+| `desp`, `operacion`, `referencia`, `fecha_modificada`, `id_del_usuario` | | yes | As exported. |
+| `calculo` | `VARCHAR(2)` | no | `SI` or `NO`: whether the row counts towards the paste of a formed battery. Only sheet `BAT FOR` says `NO`; a blank there, and every row of the other sheets, is `SI`. |
+| `source_sheet` | `TEXT` | no | The Bronze sheet the row came from. |
+| `source_run_id` | `UUID` | no | The Bronze run. FK → `bronze.ingestion_runs`. |
+
+**Constraints:** unique on `(articulo_matriz, articulo_componente,
+inicio_efectiva, fin_efectivo, cantidad_por)`, with empty dates treated as
+equal. That is the business key of a link: a repeated link doubles whatever is
+summed over it. **Indexes:** on the parent and on the component.
+
+| Table | Key | Columns | Notes |
+|---|---|---|---|
+| `element_deco` | `numero_articulo` → `item_master` | `grpo`, `tipo_de_articulo`, `elemento_deco` (boolean) | The decoration catalogue: which components count as a decoration piece. |
+| `clasif_poly` | `numero_articulo` → `item_master` | `campo_equs`, `cuenta_stats`, `factor_equ` | The factor of each plastic piece, for the separate EQUS POLY indicator. `TAPONES` is 0.05, as the workbook uses; a side table says 0.28, which is open. |
+| `costo_conversion` | `(mes, planta, proceso)` | `costo_cop` | Conversion cost from accounting. Empty: no workbook carries it yet. |
+
+#### Movements
+
+**`reporte_qad`** — one row per production receipt. Key: `numero_de_transaccion`.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| `numero_de_transaccion` | `BIGINT` | no | Primary key: the QAD transaction number. |
+| `fecha_efectiva` | `DATE` | no | The accounting date. **It decides the month**; `fecha`, the entry date, does not. |
+| `numero_articulo` | `TEXT` | no | FK → `item_master`. |
+| `almac` | `TEXT` | yes | FK → `almacen`. |
+| `linea_produccion` | `TEXT` | yes | FK → `lineas_produccion`. Empty for the 2,518 receipts QAD records without a line. |
+| `cambiar_cantidad_de_ubic` | `NUMERIC` | no | **The quantity used everywhere.** Negative for a reversal. |
+| `campo_equs` | `TEXT` | yes | The category the item had when the export was taken. `N/A` is kept as text. |
+| `precio`, `costo_total`, `peso_neto` | `NUMERIC` | yes | As exported. |
+| `tipo_transaccion`, `fecha`, `tiempo`, `ubicacion`, `lote_serie`, `orden`, `id`, `unidad_de_medida`, `status_inventario`, `program`, `id_del_usuario` | | yes | As exported. |
+| `source_run_id` | `UUID` | no | The Bronze run that brought this copy. FK → `bronze.ingestion_runs`. |
+
+**Indexes:** `(fecha_efectiva, tipo_transaccion)`, `numero_articulo`,
+`linea_produccion`.
+
+**`unit_ship`** — one row per invoice line. Key: `(num_fact, orden, linea)`.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| `num_fact`, `orden`, `linea` | `TEXT`, `TEXT`, `INTEGER` | no | Primary key. |
+| `fecha_efectiva` | `DATE` | no | **Decides the month.** |
+| `vendido_a` | `TEXT` | yes | FK → `vendido_a`. |
+| `numero_articulo` | `TEXT` | no | FK → `item_master`. |
+| `cantidad_fac` | `NUMERIC` | no | Units invoiced. **Negative for a credit note**, so a sum is net. |
+| `remision`, `canal`, `fecha_de_la_factura`, `embarcar_para`, `precio_de_lista`, `porcentaje_descuento`, `precio_neto`, `monto_factura`, `moneda`, `tipos_de_cambio`, `importe_de_factura_mb`, `total_plomo`, `campo_equs` | | yes | As exported. |
+| `source_run_id` | `UUID` | no | FK → `bronze.ingestion_runs`. |
+
+**Indexes:** `fecha_efectiva`, `numero_articulo`.
+
+#### The equation
+
+`EQ = quantity x (multiplicador / estandar_por_bat) x peso`. The three tables
+below hold that equation as data. They are the only EQUS tables the build does
+not write: version 1 is inserted by the migration, and a later version is added
+by a person.
+
+| Table | Key | Columns |
+|---|---|---|
+| `equs_version` | `version` | `nombre`, `vigente_desde`, `vigente_hasta`, `aprobado_por` |
+| `factores_equ` | `(version, cuenta_stats)` | `proceso`, `descripcion`, `unidad`, `fuente`, `estandar_por_bat`, `multiplicador`, `peso`, `factor`, `suma_eq` |
+| `instrucc` | `(version, cuenta_stats, regla_n)` | `linea_de_productos`, `campo_equs`, `campo_equs_excluir`, `prefijo_linea`, `signo` |
+
+- **`factores_equ.factor` is generated** by the database as
+  `multiplicador / estandar_por_bat * peso`. It cannot be written, so the factor
+  and its three terms never disagree.
+- **`fuente`** says what a driver sums: `PRODUCCION` (the quantity), `MAT_ACTIVO`
+  (quantity x `td_form.pasta_pos`), `COMP_DECO` (quantity x `td_deco.comp_deco`)
+  or `FACTURACION` (invoiced units).
+- **`suma_eq`** is false for the four drivers that are reported but do not add
+  to the total. They carry weight 0.
+- **`instrucc`**: within one rule every condition that is not empty must hold;
+  several rules of one driver add up.
+- **To change a rule, add a version.** Editing version 1 changes every past
+  month computed with it.
+
+Version 1, `STD FY26`, in force from 2025-10-01:
+
+| Driver | Process | Sums | Standard | Multiplier | Weight | Factor | Fed by |
+|---|---|---|---|---|---|---|---|
+| `OXPROD_KG` | OREC | kg | 6.08 | 1 | 0.074 | 0.012171 | category `OXIDO` |
+| `GRIDS_REG_POS` | OREC | kg | 42 | 23.634 | 0.057 | 0.032075 | category `CINTA(+)` |
+| `GRIDS_CAST` | OREC | units | 42 | 1.33 | 0.057 | 0.001805 | product line 2102 |
+| `GRIDS_NEG` | OREC | kg | 42 | 25.28 | 0.037 | 0.022270 | category `CINTA(-)` |
+| `PLATEPRD_SLI` | OREC | units | 84 | 1 | 0.178 | 0.002119 | category `PLACASLI` |
+| `PLATEPRD_TRUCK` | OREC | units | 84 | 1.14 | 0.178 | 0.002416 | category `PLACA HD` |
+| `COSPRODU_SLI` | ENSAMBLE | units | 1 | 1 | 0.354 | 0.354 | line 2201 except `TRUCK-B` |
+| `COSPRODU_TRUCK` | ENSAMBLE | units | 1 | 2.15 | 0.354 | 0.7611 | line 2201 and `TRUCK-B` |
+| `POS_ACT_MTL` | FORMACION | units x kg of paste | 3.39 | 1 | 0.146 | 0.043068 | line 3101 |
+| `COMP_DEC` | DECORADO | units x pieces | 4.29 | 1 | 0.113 | 0.026340 | lines 3102, 3103, 3104 |
+| `CARTON_BATT` | DECORADO | units | 4.29 | 12.8 | 0.113 | 0.337156 | no rule: contributes 0 |
+| `UNITSHIP` | SHIPPING | invoiced units | 1 | 1 | 0.041 | 0.041 | lines 3103, 3104 |
+| `15BATPRD` | INFO | units | 1 | 1 | 0 | 0 | no rule |
+| `FORM_PRD_SLI` | INFO | units | 1 | 1 | 0 | 0 | line 3101 except `TRUCK-B` |
+| `FORM_PRD_TRUCK` | INFO | units | 1 | 1 | 0 | 0 | line 3101 and `TRUCK-B` |
+| `LEADPROD` | INFO | kg | 1 | 1 | 0 | 0 | production lines starting `RCREFI` |
+
+The weights add up to 1 once each `(proceso, peso)` pair is counted once: OREC
+0.346, ENSAMBLE 0.354, FORMACION 0.146, DECORADO 0.113, SHIPPING 0.041.
+
+Left exactly as the workbook has them, because the business has not decided:
+only `TRUCK-B` gets the 2.15 multiplier, not `TRUCK-S`; `CARTON_BATT` has a
+factor and no rule; `UNITSHIP` is net of credit notes. Two gaps come from
+EQUS_CONTEXT §6.5 itself: it gives `15BATPRD` no rule, and it says `UNITSHIP`
+is "channel Venta" although `instrucc` has no column for the channel (the
+invoices export is already restricted to that channel).
+
+#### The two conversion tables
+
+Materialized views, refreshed by the build. Each has a unique index on
+`articulo_matriz`, so it can be refreshed while it is being read.
+
+| View | Columns | Meaning |
+|---|---|---|
+| `td_form` | `articulo_matriz`, `pasta_pos`, `pasta_neg` | Kg of paste per formed battery (product line 3101). Only `pasta_pos` enters the calculation. Replaces pivot `TD_FORM`. |
+| `td_deco` | `articulo_matriz`, `comp_deco` | Decoration pieces per semi-decorated, decorated or imported battery (3102, 3103, 3104). Replaces column X of sheet `Datos` and pivot `TD`. |
+
+- **`td_form`** walks the structure upwards. Paste per plate: the links of a
+  plate to a component whose description starts with `PASTA`, split by the
+  polarity of the paste. Paste per assembled battery: plates per battery x paste
+  per plate. Paste per formed battery: the sum over its links with
+  `calculo = 'SI'`. Plates and assembled batteries are not filtered by product
+  line, because the imported ones have none.
+- **`td_deco`** sums `cantidad_por` over the in-force links of a battery whose
+  component is a decoration element: not a `SOBRECUB` or `MANIJA` of line 1202;
+  of line 1401, or described as `TAPA `, `CUBRE`, `POST PROTECTOR`, `TERM-PRT` or
+  `TERMINAL-PRT`; and marked in `element_deco`.
+
+With the FY26 workbooks: `td_form` has 1,248 rows and `td_deco` 4,889.
+
+#### How Silver is built
+
+`make equs-silver` (or `energy equs build-silver`) runs one transaction. If any
+step fails, Silver is left as it was. Running it twice changes nothing.
+
+**Which Bronze rows count.** Only rows of `completed` runs.
+
+| Kind of source | Rows used | Silver |
+|---|---|---|
+| Snapshots: product structures, catalogues, item master | The latest completed run of each sheet or `dataset_key` | Replaced |
+| Movements: receipts, invoice lines | Every completed run; the most recently landed copy of each natural key | Upserted, never deleted |
+
+**How values are read.** Numbers with exact decimal semantics. Dates from the
+date part of the ISO text. Codes and descriptions trimmed. `N/A` kept as `N/A`.
+A cell that is not what its column should hold becomes empty rather than
+stopping the build.
+
+**What is conformed, in order:**
+
+1. **Rows that are not links are left out**: a header row pasted among the data
+   (its first cell holds the header text) and rows without a parent, a
+   component or a quantity.
+2. **A block below a pasted header is read by that header.** In `BAT FOR` the
+   453 rows below row 4114 have type and group swapped and the unit where the
+   sheet has the second description.
+3. **Each link is kept once**, by its business key, from the newest run. A link
+   that two sheets deliver (`BAT TERM` and `Datos` share 1,777) is kept once too.
+4. **Production lines get one name.** Upper case, and `OEMPSOV` is `OEMPSOV1`.
+5. **Every item code seen anywhere gets a row.** Each attribute takes the first
+   value that is not empty, in this order: Item_Master (when delivered),
+   receipts, invoices, structures as parent, structures as component, the
+   decoration catalogue, the plastic catalogue. One exception: the product line
+   of a component of sheet `Datos` comes from its column `LINEA DE PRODUCTO` and
+   overrides the rest.
+6. **Nothing is dropped to make a reference hold.** A code no source describes
+   gets a row with the description `(sin descripción)` and is reported.
+
+**The report.** Printed and returned by every build: rows per table; per
+structure sheet, the rows left out, the repeats dropped and the links shared
+with another sheet; and the checks that need a person.
+
+| Check | With the FY26 workbooks |
+|---|---|
+| Items without description | None |
+| Production lines without plant area | 14; three were used: `FADECO05`, `POLINY05`, `MAQBUJEO` |
+| Plastic items whose factor is not their category's | 1 (`157000012`, category `PELLET`, which the factor table does not list) |
+| Formed batteries produced without positive paste | None |
+| Formed batteries whose paste adds up several assembled batteries | 1 (`231001483`) |
+| Decorated batteries produced without decoration pieces | None |
+| Items QAD marks `N/A` that the plastic catalogue classifies | 44 |
+
+**Repeats dropped with the FY26 workbooks:** `PLACAS` 7, `BAT ENS` 13,
+`BAT FOR` 11, `Datos` 70. Sheet `Datos` also has 741 rows that hold nothing but
+a `1` in the first column (Excel rows 28,520 to 29,260); they are not links and
+are left out.
+
+**Known difference with the workbook.** `231001483` has two assembled
+batteries: the link to the old one was closed in January 2026 and `BAT FOR`
+marks only the new one with `CALCULO = SI`. A blank counts as `SI`, as
+EQUS_CONTEXT specifies, so both add paste and `td_form` holds 5.3424 kg where
+the workbook's pivot holds 2.6712. The documented target figures include it. It
+is 116 EQ over FY26 and is reported by every build until someone decides.
+
 ---
 
-## `gold` — published KPIs
+## `gold` — published KPIs and EQUS Gold
 
 Created by [`0004_create_gold_schema.py`](../migrations/versions/0004_create_gold_schema.py).
-Written **only** by `pipelines/tasks/compute_kpis.py`.
+Two families live here: the energy KPI tables below, written **only** by
+`pipelines/tasks/compute_kpis.py`, and [the EQUS Gold objects](#the-equs-gold-objects).
 
 ### `gold.kpi_hourly` — hypertable
 
@@ -316,6 +737,195 @@ pivot over the long KPI tables.
 | `deviation_pct` | `DOUBLE PRECISION` | yes | Signed deviation. **Positive means worse** (consumed more than predicted). |
 | `coverage` | `DOUBLE PRECISION` | no | `[0, 1]`. |
 
+### The EQUS Gold objects
+
+The Gold layer of the equivalent-batteries (EQ) calculation, also created by revision
+0004. It **applies** the equation that Silver stores as data
+(`silver.factores_equ`, `silver.instrucc`, `silver.equs_version`): the views filter
+production and invoice rows with the rules, sum what each driver's `fuente` says,
+and multiply by the factor of the version in force. No factor, weight, Campo Equs
+value or product line is written in any view. The only literals are the
+transaction type `RCT-WO`, the channel `Venta`, warehouse `1010`, the product-line
+range `2101`–`3104` of data-quality check 1, and the four values of `fuente`. A
+migration test reads the configuration and fails if any of its values appears in
+a view.
+
+Everything is a plain view or SQL function and reads Silver live. Nothing in Gold
+is materialized: a whole fiscal year computes in under two seconds. The only
+materialized objects the calculation depends on are `silver.td_form` and
+`silver.td_deco`. The only tables are the layout of the report and the frozen
+close.
+
+Two companion pages:
+
+- [equs_calculation_explained.md](equs_calculation_explained.md) walks from the
+  exports to `v_resumen_equ` in plain language, following one receipt through
+  every step.
+- [equs_resumen_call_chain.md](equs_resumen_call_chain.md) traces `make resumen`
+  through the code and shows how to call it from Python.
+
+#### Layout tables (seeded by the migration)
+
+| Table | Key | Columns | Holds |
+|---|---|---|---|
+| `secciones_reporte` | `proceso` | `planta`, `area_planta` (FK → `silver.planta`, nullable), `orden` | Column F of RESUMEN EQU. `OREC` → OREC; `ENSAMBLE` → ENSAMBLE; `FORMACION` and `DECORADO` → F&A; `SHIPPING` → DESPACHOS (no plant area); `INFO` → INFORMATIVOS; `POLY` → EQUS POLY, area `Componentes`. `proceso` is checked against the processes of `factores_equ` plus `POLY`: no table has the process as its key, so it cannot be a foreign key. |
+| `filas_resumen_equ` | `cuenta_stats` | `fila` (unique) | The row of each driver (2–18) and plastic-injection account (20–30) in RESUMEN EQU, which is the order the report and `resumen-equ` print. |
+| `controles_calidad` | `vista` | `descripcion`, `bloqueante`, `orden` | The data-quality views; checks 1–3 block a close. |
+
+The migration also inserts the four plant areas the sections point at (`OREC`,
+`Ensamble`, `F&A`, `Componentes`) into `silver.planta`, exactly as the Silver build
+would, so the foreign key holds on a database that was never built. Downgrading
+0004 removes them again while nothing in Silver points at them.
+
+#### Calculation views
+
+| View | One row per | Columns | Excel equivalent |
+|---|---|---|---|
+| `v_reporte_qad` | production receipt (`RCT-WO`) | every `silver.reporte_qad` column, plus `mes`, `linea_de_productos` (item master), `campo_equs_eq` (the receipt's Campo Equs, or the item master's only when the receipt has none; `N/A` is a value), `mat_activo` = quantity × `td_form.pasta_pos`, `comp_deco` = quantity × `td_deco.comp_deco`, and for warehouse 1010 only `new_equ` (category), `cuenta`, `factor_equ`, `valor_equ` = quantity × factor | Sheet REPORTE QAD with columns AZ, AY, BE, BG, BF |
+| `v_reporte_qad_regla` | receipt × rule it matches, every version | `fecha_efectiva`, `mes`, the rule (`version`, `cuenta_stats`, `regla_n`, `signo`), `proceso`, `fuente`, `en_vigor`, `valor` (quantity, `mat_activo` or `comp_deco` as `fuente` says, times the sign) | The filters of the pivots that feed column D |
+| `v_unit_ship_regla` | invoice line × rule it matches | the same, for `fuente = FACTURACION`: channel Venta in any case, product line and Campo Equs through the item master; a rule with `prefijo_linea` never matches an invoice. Credit notes subtract (shipping is net, open question 6). | Pivot TD_UNIT_Ship |
+| `lineas_de_pdcto` | month × product line × Campo Equs | `descripcion`, `cantidad`, `mat_activo`, `comp_deco` | Pivot LINEAS DE PDCTO, per month |
+| `v_cantidad_cuenta` | version × driver × month | `cantidad` (Q_k), `en_vigor` | Column D of RESUMEN EQU, for every version |
+| `v_resumen_equ` | month × driver, version in force | `version`, `proceso`, `descripcion`, `cantidad`, `factor`, `equs` = cantidad × factor, `suma_eq` | **Column H of RESUMEN EQU** |
+| `v_equs_batt_mes` | month | `equs_orec`, `equs_ensamble`, `equs_formacion`, `equs_decorado`, `equs_shipping`, `equs_batt` | Rows 36–45 |
+| `inyeccion` | month × account × category | `piezas`, `valor_equ` (EQUS POLY, warehouse 1010; not added to EQUS BATT) | Pivot INYECCION, rows 20–34 |
+| `v_costo_por_eq` | month × process | `equs`, `costo_cop` (summed over plant areas), `cop_por_eq` (null without cost or EQ) | New |
+
+A driver with no rule, or whose rules matched nothing in the month, has no row in
+`v_cantidad_cuenta` or `v_resumen_equ` (`GRIDS_REG_POS` and `CARTON_BATT` in
+September 2026; `15BATPRD` always, because EQUS_CONTEXT gives it no rule). The
+range functions below list every driver, with 0.
+
+**The version in force.** `gold.en_vigor(vigente_desde, vigente_hasta, mes)` is the
+only definition: a version is in force in a month when its validity contains the
+month's first day. Every view and function asks it.
+
+#### Range functions
+
+All take `(p_desde date, p_hasta date)`, both included, and compare with
+`fecha_efectiva`. They sum the same two pairing views as `v_cantidad_cuenta`, so a
+whole month by range equals the month's view exactly.
+
+| Function | Returns |
+|---|---|
+| `versiones_rango` | `(mes, version, nombre)` for each month the range touches; `version` null where none covers it, two rows where two overlap. |
+| `resumen_equ_rango_mes` | `(mes, version, cuenta_stats, cantidad, equs)`: every driver of the version in force in each month, 0 when nothing matched. Each row uses the version of its own month. |
+| `resumen_equ_rango` | `(version, cuenta_stats, cantidad, equs)`: the same, for the whole range. A range across a version change returns rows for both versions. |
+| `resumen_equ_cierre_mes` | The frozen close in the shape of `resumen_equ_rango_mes`. |
+| `inyeccion_rango_mes`, `inyeccion_rango` | `(mes, cuenta, categoria, area_planta, piezas, piezas_con_equ, factor_equ, equs)`: EQUS POLY. `piezas_con_equ` leaves out categories whose factor is 0 (the workbook's D32). |
+| `calidad_datos_rango` | `(vista, descripcion, bloqueante, filas)`: the rows of each check inside the range. |
+
+#### Data-quality views (EQUS_CONTEXT section 8)
+
+Each returns the offending rows with their `fecha_efectiva` (check 6: `mes`), so they
+can be counted for any range.
+
+| View | Check | Blocks a close | FY26 | September 2026 |
+|---|---|---|---|---|
+| `dq_sin_regla` | Production of product lines 2101–3104 that no rule of the version in force takes | yes | 0 | 0 |
+| `dq_doble_regla` | Receipts two or more rules of one process take | yes | 0 | 0 |
+| `dq_sin_conversor` | Receipts of a `MAT_ACTIVO` driver without paste, or of a `COMP_DECO` driver without decoration pieces | yes | 34 | 0 |
+| `dq_categoria_poly` | Receipts whose Campo Equs differs from the Clasif_Poly category of the item, for items whose category carries EQ | no | 1,588 | 141 |
+| `dq_linea_sin_planta` | Receipts on production lines with no plant area | no | 1,429 (`FADECO05` 1,284, `POLINY05` 130, `MAQBUJEO` 15) | 0 |
+| `dq_variacion` | Drivers whose monthly quantity moved more than the threshold against the previous month, or started or stopped | no | 73 | 7 |
+
+- **Check 3** finds its drivers by `fuente`, not by product line. Its 34 FY26 rows are
+  16 imported batteries (line 3104) whose structure gives 0 decoration pieces; none
+  falls in September, so September closes without accepting warnings.
+- **Check 4** compares the two columns and names no category. EQUS_CONTEXT
+  section 7 counts "about 1,495" rows: those are exactly the covers and handles of
+  lines 1200 and 1202. The view also finds the 93 receipts of `150000015`, truck
+  handles (`ACCMED`, line 1305), whose category carries EQ just the same.
+- **Check 6** reads its threshold from the session setting `equs.umbral_variacion`
+  (a fraction; 0.30 when unset). The commands set it from `EQUS_VARIATION_THRESHOLD`.
+- Check 7 of section 8 (structure links repeated by business key) is counted by the
+  Silver build's report, per sheet, and has no Gold view.
+
+#### The frozen close
+
+| Table | Key | Columns |
+|---|---|---|
+| `resumen_equ` | `(mes, version, cuenta_stats)` | `cantidad`, `equs`, `fecha_calculo` (default `now()`), `closed_by`. FK `(version, cuenta_stats)` → `silver.factores_equ`, so a version a close used cannot be deleted. `mes` is a first day. |
+| `cierre_mes` | `cierre_id` (identity) | `mes`, `cerrado_en`, `closed_by`, `recierre`, `advertencias_aceptadas`, `calidad_datos` (JSONB: the rows of each check the close saw). One row per close **and** reclose. |
+| `resumen_equ_historial` | `(cierre_id, version, cuenta_stats)` | The rows a reclose replaced, as they were, under the `cierre_mes` row of that reclose. |
+
+`energy equs close-month YYYY-MM` (`make close MONTH=…`):
+
+1. takes the refresh lock and refreshes `td_form` and `td_deco`;
+2. counts every data-quality check for the month and prints the counts;
+3. refuses with exit 1 if a blocking check has rows, unless `--accept-warnings`, which
+   is then recorded in `cierre_mes.advertencias_aceptadas`;
+4. in one transaction: refuses if the month is closed and `--reclose` was not given;
+   writes the `cierre_mes` row; on a reclose copies the old rows to
+   `resumen_equ_historial`; upserts the month's `v_resumen_equ` rows into
+   `resumen_equ` and deletes rows the new close no longer has;
+5. prints the EQ of each process, EQUS BATT, EQUS POLY (live: the close does not
+   freeze it) and the change against the previous closed month.
+
+It also refuses a month with no production, or with no version or two versions in
+force. **Nothing recomputes a closed month implicitly**: refreshes never touch these
+tables.
+
+#### The date-range report
+
+`equs-report --start YYYY-MM-DD --end YYYY-MM-DD [--source live|closed] [--by-month]
+[--output FILE] [--dsn URL]` (`make report START=… END=… [OUTPUT=…]`), or
+`energy.pipelines.flows.equs_report.build_report(conn, start, end, source, by_month)`
+from Python. It returns JSON laid out like RESUMEN EQU: `rango`, `fuente`,
+`generado_en`, `versiones`, `plantas` → `procesos` → `subsecciones` (one per
+cuenta STATS, with its row `fila`), `equs_batt`, `equs_poly`, `informativos`,
+`calidad_datos`, `advertencias`; with `--by-month`, `por_mes` everywhere. The JSON
+Schema is
+[`equs_report.schema.json`](../src/energy/pipelines/flows/equs_report.schema.json).
+
+- Every driver of the version(s) in force appears, even at 0. Across two versions a
+  subsection's `factor` is null and `por_version` gives each.
+- Totals are added from unrounded values. Quantities are rounded to 6 decimals, the
+  terms of the equation to 10, EQ to 6; whole numbers are written as integers.
+- `--source closed` reads `resumen_equ` and accepts only whole months that are all
+  closed. EQUS POLY is still computed, with a warning.
+- Warnings (`advertencias[].codigo`): `mes_parcial`, `varias_versiones`,
+  `calidad_bloqueante`, `difiere_del_cierre` (a closed month's live EQ moved more than
+  0.01 since its close), `poly_en_vivo`.
+- Exit codes: 0 success; 1 invalid arguments or an unanswerable range (a month no
+  version covers, the closed source over a partial or unclosed month); 2 database
+  error.
+
+#### Refreshing
+
+`v_resumen_equ` reads Silver live. It is stale only when Silver is behind Bronze or a
+conversion table is behind the structure. `energy equs refresh-gold [--with-silver]
+[--month YYYY-MM] [--no-concurrently] [--format table|json] [--lock-timeout S]`
+(`make refresh`; `make refresh-all` first lands `data/raw_excels`):
+
+1. takes a session advisory lock (key 7215590330) under `lock_timeout`. A second
+   refresh or close waits up to `EQUS_LOCK_TIMEOUT_SECONDS` (600) and then exits 3;
+2. with `--with-silver`, builds Silver from Bronze in its own transaction;
+3. refreshes `silver.td_form`, then `silver.td_deco`, each `CONCURRENTLY` in
+   autocommit, so readers are never blocked (plain refresh when refused, or with
+   `--no-concurrently`);
+4. runs `ANALYZE` on the two views and the Silver tables the calculation reads;
+5. prints the time of each step and column H of `--month`, or of the latest month with
+   production.
+
+`energy equs resumen-equ --month YYYY-MM [--format table|json|csv] [--source
+live|closed]` (`make resumen MONTH=…`) prints that table on its own: one row per
+cuenta STATS in the order of RESUMEN EQU with columns D, G and H, then EQUS BATT,
+each plant, FORMACION and DECORADO, then the EQUS POLY categories and EQUS POLY.
+
+Exit codes of the three commands: 0 success, 1 invalid arguments or a refused
+request, 2 database error, 3 lock not released in time.
+
+#### With the FY26 workbooks
+
+September 2026 reproduces EQUS_CONTEXT section 9.1 to the cent: OREC 71,040.72,
+assembly 85,014.78, formation 27,940.86, decoration 23,615.00, shipping 7,978.97,
+**EQUS BATT 215,590.33**, **EQUS POLY 503,033.19** (1,737,504 pieces, 1,631,925 of
+categories with EQ). Every month of section 9.2 matches to the cent, and FY26 is
+2,310,724. Against column H of the workbook itself, only the rows section 9 explains
+differ: POS_ACT_MTL (the plate listed twice in PLACAS), COMP_DEC (the TERM-PRT
+protectors) and the totals that carry them (H36, H40, H44, H45).
+
 ---
 
 ## TimescaleDB configuration
@@ -334,8 +944,10 @@ Chunk sizes descend with volume: Bronze is the highest-volume table by an order
 of magnitude and benefits from the smallest chunks. `segment_by` is set to the
 column queries filter on, so chunk exclusion still works after compression.
 
-Bronze is the only table with a retention policy. It is raw evidence whose value
-decays once the derived layers are settled, and it is also by far the largest.
+`bronze.raw_readings` is the only table with a retention policy. It is raw
+evidence whose value decays once the derived layers are settled, and it is also
+by far the largest. The EQUS landing tables are not hypertables yet and have no
+policy.
 
 ---
 

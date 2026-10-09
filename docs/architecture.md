@@ -144,6 +144,16 @@ Every Gold row carries `coverage` — the fraction of its period actually backed
 reliable readings — as a `NOT NULL` column bounded to `[0, 1]`. A KPI without its
 coverage is a number without an error bar, and consumers will read it as certain.
 
+The equivalent-batteries (EQUS) part of Gold is built differently: it is views,
+not tables. They apply the equation Silver stores as data, so they are as fresh as
+Silver and need no pipeline to fill them. What is published is the **monthly
+close**, `gold.resumen_equ`: a month's column H frozen by `energy equs close-month`
+after the data-quality checks pass, and replaced only by an explicit reclose that
+keeps the old values. The code follows the hexagon: the queries in
+`adapters/postgres_equs_gold.py`, the order of the steps of a refresh, a close and
+a report in `services/equs_gold.py`, and the layout of the report in
+`domain/equs_gold.py`.
+
 ---
 
 ## 3. The hexagonal structure
@@ -370,6 +380,15 @@ internal.
 | You want to… | Change this |
 |---|---|
 | Add a data source | `adapters/`, `config/sources.yaml` |
+| Land another EQUS workbook or sheet | the routing table in `pipelines/flows/equs_bronze_load.py` |
+| Change how a spreadsheet row is stored in Bronze | `domain/landing.py` — a contract: it changes every content hash |
+| Change a rule of the EQUS Silver build | `adapters/equs_silver_sql.py`, and its case in `tests/integration/test_equs_silver_rules.py` |
+| Add a check to the EQUS data-quality report | a `REPORT_*` query in `adapters/equs_silver_sql.py`, a field in `domain/equs_silver.py` |
+| Change a factor or a rule of the EQ equation | a new row in `silver.equs_version` and its rows in `factores_equ` and `instrucc`; never an edit to version 1. Gold needs no change |
+| Change how Gold applies the equation, or add a Gold view | a new migration replacing the view (revision 0004 holds the current ones); keep every number of the equation out of it, a migration test checks |
+| Add a data-quality check before the close | a `dq_*` view, a row in `gold.controles_calidad` and a line in `gold.calidad_datos_rango` (a new migration) |
+| Change the layout of the EQUS report | the rows of `gold.secciones_reporte` and `gold.filas_resumen_equ`; `domain/equs_gold.py` only nests what they say |
+| Change what a refresh or a close does | `services/equs_gold.py` for the order of the steps, `adapters/postgres_equs_gold.py` for the SQL around them |
 | Change a KPI formula | `domain/kpi_formulas.py` |
 | Add a KPI | `config/kpis.yaml`, then `domain/kpi_formulas.py` if the maths is new |
 | Change what counts as valid data | `schemas/silver.py` |
@@ -380,6 +399,7 @@ internal.
 
 ## Related documents
 
+- [Database overview](database_overview.md) — the schemas and how they relate, with diagrams
 - [Data dictionary](data_dictionary.md) — table-by-table field reference
 - [Runbook](runbook.md) — backups, restore, incident response
 - [ADR 0002](adr/0002-postgres-timescale-over-nosql.md) — why PostgreSQL + TimescaleDB

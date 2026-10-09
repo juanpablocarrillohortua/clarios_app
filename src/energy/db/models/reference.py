@@ -8,8 +8,12 @@ Responsibility:
     seeded by ``scripts/seed_reference_data.py`` rather than by a pipeline.
     ``targets`` is temporally versioned because a KPI target agreed for 2026 must
     not retroactively change how 2025 was judged. The DDL for these tables lives
-    in ``migrations/versions/0002_create_bronze_schema.py``, which provisions the
-    ``reference`` schema first because Silver and Gold reference it.
+    in ``migrations/versions/0003_create_silver_schema.py``, which provisions the
+    ``reference`` schema before Silver because Silver and Gold reference it.
+
+    The catalogues of the equivalent-batteries calculation (items, production
+    lines, plant areas) are not here. They are rebuilt from Bronze by a
+    pipeline rather than maintained by people, so they live in ``silver``.
 
 Depends on:
     ``sqlmodel``, ``energy.core.constants``.

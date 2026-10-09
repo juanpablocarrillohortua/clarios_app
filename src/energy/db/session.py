@@ -66,6 +66,10 @@ def get_engine() -> Engine:
     def _set_session_timezone(dbapi_connection: Any, _connection_record: Any) -> None:
         with dbapi_connection.cursor() as cursor:
             cursor.execute(_CONNECTION_SETUP_SQL)
+        # The SET opened a transaction. Committed, it holds for the whole
+        # session; left open, the pool's rollback on return would undo it after
+        # the first use, and an autocommit connection could not be made at all.
+        dbapi_connection.commit()
 
     logger.debug("database engine created", dsn=db.safe_url, pool_size=db.pool_size)
     return engine
