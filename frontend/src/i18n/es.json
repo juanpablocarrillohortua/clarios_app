@@ -1,0 +1,29 @@
+{
+  "app": {
+    "name": "Clarios Energy"
+  },
+  "nav": {
+    "label": "Secciones",
+    "toggle": "Abrir o cerrar el menú",
+    "dashboard": "Tablero",
+    "loads": "Carga de datos"
+  },
+  "dashboard": {
+    "title": "Tablero",
+    "empty": "Aquí se mostrará el informe de Power BI."
+  },
+  "loads": {
+    "title": "Carga de datos",
+    "empty": "Aquí podrá agregar datos: subir un archivo, llenar un formulario o editar una tabla."
+  },
+  "notFound": {
+    "title": "Página no encontrada",
+    "text": "La dirección no corresponde a ninguna sección.",
+    "back": "Ir al tablero"
+  },
+  "api": {
+    "checking": "Comprobando el servicio…",
+    "online": "Servicio en línea · versión {{version}}",
+    "offline": "Sin conexión con el servicio"
+  }
+}

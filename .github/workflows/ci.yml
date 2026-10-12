@@ -155,6 +155,28 @@ jobs:
           PYTHON
           fi
 
+  frontend:
+    name: Frontend gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node with dependency caching
+        uses: actions/setup-node@v4
+        with:
+          # The same version the web image builds with.
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install the locked dependencies
+        run: make frontend-install
+
+      - name: Format, lint, type-check, test and build
+        run: make frontend-check
+
   security:
     name: Security gate
     runs-on: ubuntu-latest
@@ -199,5 +221,6 @@ jobs:
             caddy:2 caddy validate --config /etc/caddy/Caddyfile
 
       - name: Build the application images
+        # caddy is built too: its image carries the web app.
         run: |
-          docker compose build api dash
+          docker compose build api dash caddy

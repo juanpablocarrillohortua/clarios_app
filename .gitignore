@@ -204,3 +204,8 @@ tests/fixtures/*
 
 # Prefect local state
 .prefect/
+
+# Frontend (frontend/): installed packages and test coverage. The build output,
+# frontend/dist, is already covered by dist/ above.
+node_modules/
+frontend/coverage/

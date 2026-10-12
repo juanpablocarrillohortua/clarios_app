@@ -1,0 +1,47 @@
+{
+  "name": "clarios-energy-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Web app of Clarios Energy: the Power BI dashboard and the data-loading section.",
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "format": "biome check --write .",
+    "lint": "biome ci .",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
+    "test": "vitest run",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@mantine/core": "9.6.3",
+    "@mantine/hooks": "9.6.3",
+    "@tanstack/react-query": "5.104.1",
+    "i18next": "26.4.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-i18next": "17.0.15",
+    "react-router": "8.4.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.7",
+    "@types/node": "24.19.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "jsdom": "29.1.1",
+    "postcss": "8.5.28",
+    "postcss-preset-mantine": "1.18.0",
+    "postcss-simple-vars": "7.0.1",
+    "typescript": "7.0.2",
+    "vite": "8.3.2",
+    "vitest": "4.1.11"
+  }
+}

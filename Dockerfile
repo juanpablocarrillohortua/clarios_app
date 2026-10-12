@@ -102,7 +102,8 @@ FROM runtime AS dash
 # -----------------------------------------------------------------------------
 EXPOSE 8050
 
+# Dash answers only under its base path, so the probe follows the setting.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
-    CMD curl --fail --silent --show-error http://localhost:8050/ || exit 1
+    CMD curl --fail --silent --show-error "http://localhost:8050${DASH_URL_BASE_PATHNAME:-/}" || exit 1
 
 CMD ["python", "-m", "energy.dashboards.app"]

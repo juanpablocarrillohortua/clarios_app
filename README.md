@@ -139,6 +139,7 @@ Full detail: **[docs/architecture.md](docs/architecture.md)**.
 | Dataframes | Polars (primary), Pandas (interop) | Fast columnar transforms; Pandas only where a library requires it |
 | Data validation | Pandera | Executable per-layer dataframe contracts |
 | Dashboards | Plotly Dash | Interactive charts over the Gold layer |
+| Web app | React, TypeScript, Vite, Mantine | The app users open: the Power BI dashboard and data loading. Checked by Biome, `tsc` and Vitest |
 | Testing | pytest, pytest-cov, pytest-asyncio, Hypothesis, testcontainers | Unit, property, integration and container-backed tests |
 | Linting / formatting | Ruff | One tool for lint and format |
 | Type checking | mypy (strict) | Full static typing across `src/energy` |
@@ -161,6 +162,7 @@ clarios-energy/
 │   ├── sources.yaml            Per-plant sources, priorities, resampling rules
 │   └── logging.yaml            Logger levels and handlers
 ├── docs/                   Architecture, data dictionary, ADRs, ops runbook
+├── frontend/               The web app (React, TypeScript, Vite) Caddy serves at /
 ├── migrations/             Alembic revisions - the source of truth for all DDL
 │   └── versions/               0001 extensions → 0005 hypertables
 ├── scripts/                Operational tooling (seeding, synthetic data, waits)
@@ -204,6 +206,7 @@ tested stack without needing anything that is not listed here.
 | Python | 3.12 | `uv python list` | **uv installs this for you** — no system Python 3.12 needed |
 | make | 3.81 | `make --version` | GNU Make |
 | git | 2.30 | `git --version` | |
+| Node.js | 22.22; 24 LTS recommended | `node --version` | Only to work on `frontend/` or run `make check`. `make up` builds the web app inside Docker and needs no Node on the host |
 
 Installing uv, if you do not have it:
 
@@ -275,7 +278,7 @@ with `openssl rand -hex 32`.
 | **Dashboards** |
 | `DASH_HOST` | Bind interface | `0.0.0.0` | No |
 | `DASH_PORT` | Bind port | `8050` | No |
-| `DASH_URL_BASE_PATHNAME` | Base path behind the proxy | `/` | No |
+| `DASH_URL_BASE_PATHNAME` | Base path when Dash runs outside the stack. In the stack `docker-compose.yml` fixes it to `/dash/`, the path the Caddyfile routes | `/` | No |
 | **Object storage** |
 | `MINIO_ENDPOINT` | MinIO host and port | `minio:9000` | No |
 | `MINIO_ROOT_USER` | Access key | `minioadmin` | **Yes** |
@@ -350,7 +353,8 @@ clarios-energy-prefect-worker-1  prefect-worker   Up 2 minutes (healthy)
 | API health | <http://localhost:8080/api/health> | `{"status":"ok",...}` |
 | API readiness | <http://localhost:8080/api/ready> | Per-dependency health |
 | **API docs** | <http://localhost:8080/api/docs> | Interactive OpenAPI UI |
-| **Dashboards** | <http://localhost:8080/> | Dash application |
+| **Web app** | <http://localhost:8080/> | The app's shell, with its two sections; the footer shows the API's version |
+| **Dash** | <http://localhost:8080/dash/> | Holding page until the Phase 5 energy charts |
 | **Prefect UI** | <http://localhost:8080/prefect/> | Flow runs and work pools |
 | **MinIO console** | <http://localhost:8080/minio/> | Log in with `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |
 
@@ -558,6 +562,7 @@ Each target does one thing and can be run on its own:
 | `make test` | Full suite with coverage, failing below 70% | Before opening a PR |
 | `make test-unit` | Unit tests only — no containers, no database, ~2 seconds | Constantly, while working |
 | `make test-integration` | Integration tests — needs PostgreSQL | After a schema or repository change |
+| `make frontend-check` | The web app's gate: Biome (format and lint), `tsc`, Vitest and a production build. Run `make frontend-install` once first | After any change under `frontend/` |
 
 ```console
 $ make test-unit
@@ -580,7 +585,7 @@ make check
 It runs, in order, stopping at the first failure:
 
 ```
-format-check  →  lint  →  typecheck  →  security  →  test
+format-check  →  lint  →  typecheck  →  security  →  frontend-check  →  test
 ```
 
 ```console
@@ -633,6 +638,10 @@ uv run uvicorn energy.api.main:app --reload --port 8000
 
 # 6. Or the dashboards
 uv run python -m energy.dashboards.app
+
+# 7. Or the web app, with live reload, against the running stack
+make frontend-install   # once
+make frontend-dev       # http://localhost:5173, forwarding /api to :8080
 ```
 
 The API is then at <http://localhost:8000/docs> — note there is no `/api` prefix,

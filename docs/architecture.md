@@ -339,7 +339,7 @@ flowchart TB
     USER["Browser / API client"]
 
     subgraph host["Docker host"]
-        CADDY["caddy:2<br/>ports 80, 443<br/>THE ONLY PUBLISHED PORTS"]
+        CADDY["caddy:2 + the web app<br/>ports 80, 443<br/>THE ONLY PUBLISHED PORTS"]
 
         subgraph internal["Internal network"]
             API["api<br/>expose 8000"]
@@ -354,12 +354,16 @@ flowchart TB
     end
 
     PBI["Power BI Desktop"]
+    GW["On-premises data gateway<br/>a Windows service on the host"]
+    PBIS["Power BI Service<br/>published report"]
 
     USER --> CADDY
     PBI -.->|"make powerbi"| BRIDGE
+    PBIS -.->|"encrypted, opened by the gateway"| GW
+    GW -.->|"127.0.0.1:5433"| BRIDGE
     BRIDGE -.->|"read-only login"| DB
     CADDY -->|/api/*| API
-    CADDY -->|/| DASH
+    CADDY -->|/dash/*| DASH
     CADDY -->|/prefect/*| PS
     CADDY -->|/minio/*| MINIO
 
@@ -374,6 +378,23 @@ flowchart TB
 Caddy is the only service that publishes ports. Everything else is reachable only
 on the internal compose network, which is why `make db-upgrade` runs Alembic
 *inside* the api container rather than from the host.
+
+Caddy also serves the **web app** at `/`. The app is static files, built from
+`frontend/` (React, TypeScript, Vite) into the Caddy image by
+`frontend/Dockerfile`, so it adds no service. It holds no business rule: it
+calls the API under `/api`. What the `Caddyfile` does with each path:
+
+| Path | Goes to |
+|---|---|
+| `/api/*`, `/prefect/*`, `/minio/*` | The service, with the prefix removed |
+| `/dash/*` | Dash, with the prefix kept (`DASH_URL_BASE_PATHNAME` is `/dash/`) |
+| `/auth/*` | Nowhere: Caddy answers 404. Reserved for a server-side sign-in callback |
+| Any other path with a file extension | A file of the app, or 404 |
+| Any other path | The app's `index.html`, which routes in the browser |
+
+[Frontend plan](frontend-plan.md) has the design and the increments;
+[ADR 0004](adr/0004-react-spa-entra-and-embedded-power-bi.md) records the
+decision.
 
 The one exception is opt-in. `reporting-bridge` (compose profile `reporting`,
 started by `make powerbi`) relays a database port for Power BI. It listens on
@@ -418,3 +439,6 @@ internal.
 - [Runbook](runbook.md) — backups, restore, incident response
 - [ADR 0002](adr/0002-postgres-timescale-over-nosql.md) — why PostgreSQL + TimescaleDB
 - [ADR 0003](adr/0003-modular-monolith-over-microservices.md) — why a modular monolith
+- [ADR 0004](adr/0004-react-spa-entra-and-embedded-power-bi.md) — why a React app, Entra ID sign-in and embedded Power BI
+- [ADR 0005](adr/0005-api-composition-root.md) — why `api/deps.py` may import adapters
+- [Frontend plan](frontend-plan.md) — the web app's design and its increments

@@ -894,5 +894,5 @@ SELECT * FROM gold.calidad_datos_rango(DATE '2026-09-01', DATE '2026-09-30');
 - [Data dictionary](data_dictionary.md): every column of every table
 - [Architecture](architecture.md): how the code is organised around the database
 - [EQUS context](EQUS_CONTEXT.md): the business rules of the equivalent-batteries calculation
-- [Power BI](powerbi.md): connecting Power BI Desktop to the reporting views
+- [Power BI](powerbi.md): connecting Power BI Desktop and the Power BI Service to the reporting views
 - [Runbook](runbook.md): backups, restore, incident response

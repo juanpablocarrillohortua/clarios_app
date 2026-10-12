@@ -5,6 +5,9 @@
 # reachable only on the internal compose network, so this file is the complete
 # definition of what the outside world can touch.
 #
+# It also serves the web app: the image is caddy:2 plus the static build of
+# frontend/ in /srv (frontend/Dockerfile).
+#
 # Local development runs plain HTTP on the :80 site block below. For a real
 # deployment, replace `:80` with the hostname (for example
 # `energy.example.com`) and Caddy provisions and renews a certificate
@@ -73,14 +76,62 @@
 	}
 
 	# -------------------------------------------------------------------------
-	# Dashboards at the root. Must be last: it matches everything not claimed
-	# by a handle_path above.
+	# Reserved. /auth/callback is the redirect URI registered under the "Web"
+	# platform of the Entra ID app registration, for a server-side sign-in that
+	# nothing implements yet. It is answered here so it can never fall through
+	# to the web app, which signs in through its own page (/redirect.html). If
+	# a server-side flow is built, this block becomes a reverse_proxy to the
+	# API.
 	# -------------------------------------------------------------------------
-	handle {
+	@auth path /auth /auth/*
+	handle @auth {
+		respond "Reserved for a server-side sign-in callback. Nothing uses it yet." 404
+	}
+
+	# -------------------------------------------------------------------------
+	# Dash, under /dash/. The prefix is not stripped: Dash builds its own URLs
+	# from DASH_URL_BASE_PATHNAME, which docker-compose.yml sets to this path.
+	# -------------------------------------------------------------------------
+	redir /dash /dash/
+	handle /dash/* {
 		reverse_proxy dash:8050 {
 			header_up X-Real-IP {remote_host}
 			header_up X-Forwarded-Proto {scheme}
 		}
+	}
+
+	# -------------------------------------------------------------------------
+	# The web app at the root: static files built from frontend/ into the image.
+	# Must be last: it takes everything not claimed above.
+	#
+	# The app routes in the browser, so an address such as /loads has no file
+	# behind it and is answered with index.html. Only paths without a file
+	# extension get that treatment: a missing script or image stays a 404
+	# instead of arriving as a page.
+	#
+	# Files under /assets/ carry a hash of their content in their name and can
+	# be cached for good. Everything else is revalidated on every load, so a new
+	# build is picked up at once. The long cache applies only to a file that
+	# exists: a 404 cached for a year would outlive the deploy that fixes it.
+	#
+	# Do not add a Cross-Origin-Opener-Policy header here: the sign-in page of
+	# the app (increment 2 of docs/frontend-plan.md) stops working with it.
+	# -------------------------------------------------------------------------
+	handle {
+		root * /srv
+
+		@hashed {
+			path /assets/*
+			file
+		}
+		header @hashed Cache-Control "public, max-age=31536000, immutable"
+		# The leading ? sets the header only where nothing has set it yet.
+		header ?Cache-Control "no-cache"
+
+		@page not path_regexp \.[A-Za-z0-9]+$
+		rewrite @page /index.html
+
+		file_server
 	}
 
 	log {

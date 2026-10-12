@@ -33,8 +33,9 @@ make check
 ```
 
 This runs format-check → lint → strict type-checking → security scanning → the
-full test suite, and it is **exactly what CI enforces**. A green `make check`
-locally means a green CI run.
+frontend gate → the full test suite, and it is **exactly what CI enforces**. A
+green `make check` locally means a green CI run. The frontend gate needs Node
+and one `make frontend-install`.
 
 Individual targets are documented in the README; `make help` lists everything.
 
@@ -221,6 +222,37 @@ SQL, no direct adapter construction. Request and response models live in
 `api/schemas/` and are deliberately separate from both the domain entities and
 the ORM tables — a database column rename must never become a breaking API change.
 
+### Changing the web app
+
+The app in `frontend/` (React, TypeScript, Vite) is what users open at `/`.
+[docs/frontend-plan.md](docs/frontend-plan.md) has its design and increments.
+
+```bash
+make frontend-install   # once, and after the lockfile changes
+make frontend-dev       # http://localhost:5173 with live reload; needs `make up`
+make frontend-format    # format, and apply safe lint fixes
+make frontend-check     # the gate: format, lint, type-check, test, build
+```
+
+- **No business rule in TypeScript.** Validation, messages about data and every
+  calculation come from the API. A rule that exists only in the browser is a
+  defect.
+- **Every text the user sees is a key in `frontend/src/i18n/es.json`.** The
+  interface is Spanish; keys, code and comments are English. A key that does not
+  exist fails the type-check.
+- **Addresses.** A new page gets a path in `frontend/src/paths.ts`, without a
+  file extension and not under `/api`, `/auth`, `/dash`, `/minio` or `/prefect`:
+  the `Caddyfile` routes those elsewhere.
+- **Packages.** Add or upgrade with a cooling-off week, so a release pulled
+  for being malicious never reaches the lockfile:
+  `npm install --before=<a date a week ago> <package>` inside `frontend/`.
+  Versions are exact, install scripts are off (`frontend/.npmrc`), and the
+  lockfile is committed.
+- **Folder names.** The root `.gitignore` ignores `lib/`, `build/`, `dist/`,
+  `env/` and `var/` anywhere, so a source folder with one of those names would
+  silently stay out of git.
+- **Node.** Use the version in `frontend/.nvmrc` (24 LTS); CI and the image do.
+
 ---
 
 ## Architecture rules
@@ -236,6 +268,11 @@ parses imports statically.
 | `adapters` | `domain`, `ports`, `core`, `db` |
 | `services` | `domain`, `ports`, `core` |
 | `api` / `dashboards` / `pipelines` | as tabled in [docs/architecture.md](docs/architecture.md) — **never each other** |
+
+One exception is decided and not yet in the test:
+[ADR 0005](docs/adr/0005-api-composition-root.md) lets `api/deps.py`, and no
+other `api` module, import adapters. The test changes with the first such
+import.
 
 **If a change requires weakening that test, stop and discuss it in the pull
 request.** The test is load-bearing: the day it is relaxed to make something

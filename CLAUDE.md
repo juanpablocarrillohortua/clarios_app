@@ -40,8 +40,19 @@ Gold views or to that call chain, and change both languages together.
 **Power BI.** Revision `0006` adds schema `reporting`: twelve read-only views over
 Gold for BI tools, readable by the role `reporting_reader`. `make powerbi` creates
 the login (`energy reporting create-reader`) and starts `reporting-bridge`, an
-opt-in container publishing 127.0.0.1:5433. [docs/powerbi.md](docs/powerbi.md) is
-the guide.
+opt-in container publishing 127.0.0.1:5433. Power BI Desktop connects through it
+directly; the report published to the Power BI Service connects through an
+on-premises data gateway on the same machine. [docs/powerbi.md](docs/powerbi.md)
+is the guide.
+
+**Web app.** `frontend/` is a React single-page app (TypeScript, Vite) that Caddy
+serves at `/`; Dash moved to `/dash/`. It is built in the increments of
+[docs/frontend-plan.md](docs/frontend-plan.md): increment 0 (decisions) and
+increment 1 (the shell, with two empty sections) are done. The decisions are in
+[ADR 0004](docs/adr/0004-react-spa-entra-and-embedded-power-bi.md) (stack, Entra
+ID sign-in, embedded Power BI) and
+[ADR 0005](docs/adr/0005-api-composition-root.md) (`api/deps.py` may import
+adapters). Read the plan before touching `frontend/`.
 
 ---
 
@@ -59,22 +70,26 @@ Definition-of-Done item is verified against a running stack.
 | Extensions | timescaledb **2.30.1**, pgcrypto 1.3 |
 | Hypertables | All 5 registered: `raw_readings, readings, kpi_hourly, kpi_daily, plant_daily_summary` |
 | Timescale policies | 3 compression + 1 retention job created (no warnings) |
-| Routes through Caddy | `/api/health` `/api/ready` `/api/docs` `/` `/prefect/api/health` all **HTTP 200** |
+| Routes through Caddy | `/api/health` `/api/ready` `/api/docs` `/` `/dash/` `/prefect/api/health` `/minio/` all **HTTP 200**. `/` is the web app (any path without a file extension gets its `index.html`); `/auth/*` answers 404 by design (2026-10-12) |
 | `/api/ready` payload | `degraded` (connectivity+extensions healthy, Silver empty) - correct, returns 200 not 503 |
 | Placeholder endpoint | `/api/kpis/summary` -> **501** with `code=not_implemented` |
 | `X-Request-Id` | Present and propagated |
-| `make check` | **Exit 0** - format, lint, mypy strict (107 files), bandit, pip-audit, tests (24 minutes) |
+| `make check` | **Exit 0** - format, lint, mypy strict (107 files), bandit, pip-audit, tests (24 minutes). Since 2026-10-12 it also runs `frontend-check`; the whole chain has not been re-run with it |
+| `make frontend-check` | **Exit 0** (2026-10-12) - Biome on 26 files, `tsc`, 12 Vitest tests, production build. About 10 seconds |
 | `make test` | **691 passed, 39 skipped** (about 21 minutes with the workbooks present) |
 | Coverage | **95.43%** (threshold 70%) |
 | `make test-integration` | **118 passed** against real TimescaleDB and MinIO, with the workbooks present (2026-10-07; not re-run on its own since) |
 | `make powerbi` | **Exit 0** in the stack: the bridge healthy on 127.0.0.1:5433; the login reads the reporting views from Windows through it, is refused on gold/silver and with a wrong password; `make powerbi-down` closes the port without touching the db container |
-| No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer. One deliberate exception, asked for on 2026-10-08: `docs/equs_calculation_explained.es.md`, the Spanish translation of the non-technical explanation |
+| No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer. Two deliberate exceptions: `docs/equs_calculation_explained.es.md`, the Spanish translation of the non-technical explanation (asked for on 2026-10-08), and `frontend/src/i18n/es.json`, the texts of the web app's interface (decided on 2026-10-12, ADR 0004) |
 
 The schema, `make check`, test, coverage and `make powerbi` rows were re-verified
 on 2026-10-08, after the EQUS Gold layer and the reporting schema were built,
 with `make check DATABASE_URL=<a reachable test database>` (the `.env` value
 otherwise wins and points at the compose-internal host). The integration row
-dates from 2026-10-07 and the other rows from 2026-09-19.
+dates from 2026-10-07 and the other rows from 2026-09-19. On 2026-10-12, with
+the web app added, `make up`, the routes and `make frontend-check` were verified
+again; no Python source changed that day, so the Python gate was not re-run in
+full.
 
 **Integration tests can be skipped silently.** They start a TimescaleDB container
 and wait 120 s for it. On 2026-10-06, with the machine busy, the container needed
@@ -141,6 +156,7 @@ check free space first.
 | `.venv` | Holds notebook packages that are **not** in `uv.lock` (seaborn, matplotlib, ipykernel, jupyter). A plain `uv sync` is exact and would remove them. To add a dependency: edit `pyproject.toml`, `uv lock`, then `uv pip install <package>==<locked version>` |
 | Shell for `make` | Git Bash at `D:\git\Git\bin\bash.exe`, resolved via `git --exec-path`. Selecting it as bare `bash.exe` picked up WSL's `C:\Windows\System32\bash.exe`, which has docker but no uv. `make` now works from PowerShell, cmd or Git Bash. |
 | Published port | Only Caddy, `CADDY_HTTP_PORT=8080` |
+| Node | v25.2.1 on this machine, with npm 11.6.2. It is an odd-numbered release that current tools no longer list as supported: Vitest 5 and jsdom 30 exclude it in their `engines`, so npm resolved Vitest 4 and jsdom 29 into the lockfile. CI and the image use Node 24 LTS (`frontend/.nvmrc`). Vitest prints a harmless `--localstorage-file` warning on Node 25 |
 
 ---
 
@@ -312,6 +328,64 @@ test raising would fail the suite. Keep that distinction.
   - one test in `test_equs_gold_build.py` on the FY26 figures.
 - **Speed with FY26, warm:** every view answers in under a second, except
   `calidad_datos_mensual` (about 3 s). Import mode is the documented one.
+- **The published report reads through a gateway**, set up by the owner and
+  checked on 2026-10-12 with read-only calls to the Power BI REST API.
+  [docs/powerbi.md](docs/powerbi.md) marks each fact as read from the API or
+  taken from the owner's description. The on-premises data gateway
+  `clarios-local-gw` runs on the host as a Windows service, outside compose. Its
+  connection `clarios-reporting` dials `127.0.0.1:5433` with the login
+  `powerbi`, unencrypted (the login's name and the encryption setting are the
+  owner's word: the API returns neither).
+  - **Keep people and machines out of the repository:** no account addresses,
+    tenant names, machine names, identifiers of the tenant, workspace, model or
+    gateway, and no install paths of the Azure CLI. Write "the gateway admin
+    account in the tenant" and "the machine that runs the stack".
+  - The API checks are read-only: `GET` only, no refresh triggered, nothing
+    changed in the Service, the gateway or the Entra app.
+  - A refresh in the Service needs the stack, the bridge and the gateway
+    running; `make powerbi-down` stops it. No refresh is scheduled.
+  - The Service matches the connection by server and database name, exactly
+    `127.0.0.1:5433` and `energy`: never `localhost`, and
+    `REPORTING_BIND_ADDRESS` / `REPORTING_PORT` keep their defaults.
+  - Publishing the report again from Desktop drops the mapping.
+  - A new `REPORTING_DB_PASSWORD` must also be entered in the connection.
+
+**Web app** (`frontend/`, increment 1 built 2026-10-12):
+
+- **No business rule in TypeScript.** The app renders what the API tells it.
+  Validation, messages about data and calculations stay in Python.
+- **Texts are keys of `frontend/src/i18n/es.json`**, in Spanish; keys, code and
+  comments are English. `i18next.d.ts` types the keys, so a missing one fails
+  `tsc`. Tests read the texts from that file and never repeat them.
+- **The Caddyfile owns the routes.**
+  - `/api`, `/prefect` and `/minio` go to their services; `/dash/*` goes to
+    Dash with the prefix kept.
+  - `/auth/*` answers 404 from Caddy. It is the "Web" redirect URI of the Entra
+    app registration, reserved for a server-side sign-in nothing implements.
+  - Everything else is the app. A path with a file extension is a file or a
+    404; any other path gets `index.html`. So app paths carry no extension.
+  - `admin off` means Caddy cannot reload: after editing the Caddyfile,
+    `docker compose restart caddy`.
+  - Never add a `Cross-Origin-Opener-Policy` header: MSAL's redirect page
+    (increment 2) stops working with it.
+- **Dash's base path is fixed in compose** (`DASH_URL_BASE_PATHNAME: /dash/`),
+  not read from `.env`, because it must equal the Caddyfile's route. The image's
+  healthcheck probes the same variable.
+- **Entra ID redirect URIs.** The app registers one,
+  `http://localhost:8080/redirect.html`, under "Single-page application". Entra
+  ignores the port of `localhost` URIs, so it also covers the Vite dev server
+  on 5173; two `localhost` URIs that differ only by port must never be
+  registered. `ENTRA_CLIENT_SECRET` is in `.env` and passed to no container.
+- **Packages.** Installed with a one-week cooldown
+  (`npm install --before=<date>`), exact versions, `ignore-scripts=true` in
+  `frontend/.npmrc`. `npm ci` in Docker and CI installs the lockfile as is.
+- **Folder names.** The root `.gitignore` ignores `lib/`, `build/`, `dist/`,
+  `env/` and `var/` anywhere: a source folder named so never reaches git.
+- **`make frontend-check`** is `biome ci`, two `tsc` runs, `vitest run` and
+  `vite build`. `make check` runs it before the Python tests.
+- **Tests** render the whole app in jsdom through `renderAppAt()` and stub
+  `fetch`; `frontend/src/test/setup.ts` supplies `matchMedia` and `ResizeObserver`,
+  which Mantine's shell needs and jsdom lacks.
 
 **EQUS Bronze loader** (built 2026-10-07):
 
@@ -361,8 +435,13 @@ test raising would fail the suite. Keep that distinction.
 
 **Tooling.**
 
-- `make check` = format-check → lint → typecheck → security → test. It is exactly
-  what CI runs.
+- `make check` = format-check → lint → typecheck → security → frontend-check →
+  test. It is exactly what CI runs (the frontend gate is its own CI job).
+- **`README.md` is part of the images' dependency layer** (the root Dockerfile
+  copies it with `pyproject.toml` and `uv.lock`). Any edit to the README makes
+  the next `make up` reinstall every Python dependency in the api and dash
+  images: 11 minutes on this machine on 2026-10-12, and over 20 when the disk
+  is busy.
 - Alembic is configured in `pyproject.toml` under `[tool.alembic]` — there is no
   `alembic.ini`. Always invoke as `alembic -c pyproject.toml`.
 - `make db-upgrade` runs Alembic **inside the api container** because the
@@ -435,6 +514,10 @@ All deliberate; each is explained where it lives.
 - **Phase 5 — Analytics, alerting and reporting**: baseline regression, STL
   decomposition, anomaly and changepoint detection, SHAP attribution, notifiers,
   reports, full dashboards
+
+The web app has its own roadmap, in section 8 of
+[docs/frontend-plan.md](docs/frontend-plan.md): fourteen increments, of which 0
+and 1 are done. Increment 2 is sign-in and roles.
 
 When implementing a placeholder: read its docstring first (it is the spec), keep
 and update the docstring, remove the `Implemented in: Phase N` line, and un-skip

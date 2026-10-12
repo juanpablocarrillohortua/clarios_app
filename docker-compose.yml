@@ -48,10 +48,17 @@ x-restart: &restart
 
 services:
   # ---------------------------------------------------------------------------
-  # Reverse proxy - the single ingress
+  # Reverse proxy - the single ingress, and the web app
   # ---------------------------------------------------------------------------
+  # caddy:2 with the static build of frontend/ in /srv. The app is served from
+  # the root; the Caddyfile routes /api, /dash, /prefect and /minio away from it.
   caddy:
-    image: caddy:2
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: web
+      args:
+        NODE_VERSION: "24"
     <<: *restart
     ports:
       - "${CADDY_HTTP_PORT:-8080}:80"
@@ -252,7 +259,10 @@ services:
       <<: [*common-env, *db-env]
       DASH_HOST: 0.0.0.0
       DASH_PORT: "8050"
-      DASH_URL_BASE_PATHNAME: ${DASH_URL_BASE_PATHNAME:-/}
+      # Fixed, not read from .env: it must be the path the Caddyfile routes to
+      # this service, and the two cannot be allowed to drift. The image's
+      # healthcheck probes the same path.
+      DASH_URL_BASE_PATHNAME: /dash/
       CONFIG_DIR: /app/config
     networks: [backend]
     depends_on:
