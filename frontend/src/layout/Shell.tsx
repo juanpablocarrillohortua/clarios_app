@@ -1,23 +1,24 @@
-// The frame every page sits in: the header, the navigation between the two
-// sections, and a footer that reports whether the API answers.
+// The frame every page sits in: the header with the signed-in user, the
+// navigation between the sections that user may open, and a footer that
+// reports whether the API answers.
 import { AppShell, Burger, Group, NavLink, Title } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { useTranslation } from "react-i18next";
 import { Link, Outlet, useLocation } from "react-router";
 
-import { paths } from "../paths";
+import { useSession } from "../auth/Session";
+import { sections } from "../sections";
 import { ApiStatus } from "./ApiStatus";
+import { UserMenu } from "./UserMenu";
 
 export function Shell() {
   const { t } = useTranslation();
   const { pathname } = useLocation();
+  const { me } = useSession();
   // On a narrow screen the navigation is a drawer the burger opens.
   const [opened, { toggle, close }] = useDisclosure(false);
 
-  const sections = [
-    { to: paths.dashboard, label: t("nav.dashboard") },
-    { to: paths.loads, label: t("nav.loads") },
-  ];
+  const allowed = sections.filter((section) => me.permissions.includes(section.permission));
 
   return (
     <AppShell
@@ -27,29 +28,32 @@ export function Shell() {
       padding="md"
     >
       <AppShell.Header>
-        <Group h="100%" px="md">
-          <Burger
-            opened={opened}
-            onClick={toggle}
-            hiddenFrom="sm"
-            size="sm"
-            aria-label={t("nav.toggle")}
-          />
-          <Title order={1} size="h4">
-            {t("app.name")}
-          </Title>
+        <Group h="100%" px="md" justify="space-between" wrap="nowrap">
+          <Group wrap="nowrap">
+            <Burger
+              opened={opened}
+              onClick={toggle}
+              hiddenFrom="sm"
+              size="sm"
+              aria-label={t("nav.toggle")}
+            />
+            <Title order={1} size="h4">
+              {t("app.name")}
+            </Title>
+          </Group>
+          <UserMenu />
         </Group>
       </AppShell.Header>
 
       <AppShell.Navbar p="sm" aria-label={t("nav.label")}>
-        {sections.map((section) => {
-          const active = pathname === section.to || pathname.startsWith(`${section.to}/`);
+        {allowed.map((section) => {
+          const active = pathname === section.path || pathname.startsWith(`${section.path}/`);
           return (
             <NavLink
-              key={section.to}
+              key={section.path}
               component={Link}
-              to={section.to}
-              label={section.label}
+              to={section.path}
+              label={t(section.label)}
               active={active}
               aria-current={active ? "page" : undefined}
               onClick={close}

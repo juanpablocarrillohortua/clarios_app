@@ -10,6 +10,9 @@ Responsibility:
     :mod:`energy.api.routers.runs` for the outcome. Nothing is written to Silver
     or Gold from here.
 
+    Every route here needs the permission ``loads:write``. It is attached where
+    the router is mounted, in :mod:`energy.api.main`.
+
 Depends on:
     ``energy.api.deps``, ``energy.api.schemas``,
     ``energy.services.upload_service``, ``energy.ports.object_storage``.
@@ -22,7 +25,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, UploadFile, status
 
-from energy.api.deps import APIKeyDep, SessionDep, SettingsDep
+from energy.api.deps import SessionDep, SettingsDep
 from energy.api.schemas.responses import UploadAcceptedResponse, UploadHistoryResponse
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
@@ -32,7 +35,6 @@ router = APIRouter(prefix="/uploads", tags=["uploads"])
 async def upload_file(
     session: SessionDep,
     settings: SettingsDep,
-    api_key: APIKeyDep,
     file: UploadFile = File(description="Excel or CSV file to ingest."),
     plant_code: str = Form(description="Plant the file belongs to."),
     source_key: str = Form(description="Source key as defined in config/sources.yaml."),
@@ -46,7 +48,6 @@ async def upload_file(
     Args:
         session: injected database session.
         settings: injected process configuration.
-        api_key: injected caller credential.
         file: the uploaded workbook or CSV.
         plant_code: which plant the data belongs to.
         source_key: which configured source this file represents.

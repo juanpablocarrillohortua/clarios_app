@@ -213,6 +213,52 @@ class DatabaseUnavailableError(RepositoryError):
 
 
 # -----------------------------------------------------------------------------
+# Access
+# -----------------------------------------------------------------------------
+class AccessError(EnergyError):
+    """Base class for refusals to serve a caller."""
+
+    code = "access_error"
+
+
+class AuthenticationError(AccessError):
+    """Raised when a caller presents no credential, or one that cannot be trusted.
+
+    ``details`` carries a ``reason`` for the log (``expired``, ``wrong_audience``
+    and so on). It is never sent to the caller, who learns only that the
+    credential was refused.
+    """
+
+    code = "unauthenticated"
+
+
+class PermissionDeniedError(AccessError):
+    """Raised when a caller is known but may not do what was asked."""
+
+    code = "forbidden"
+
+
+class IdentityProviderUnavailableError(AccessError):
+    """Raised when a credential cannot be checked because the identity provider did not answer.
+
+    The caller's credential may well be valid: the failure is on this side, so
+    it is not an :class:`AuthenticationError`.
+    """
+
+    code = "identity_provider_unavailable"
+
+
+class SignInNotConfiguredError(AccessError):
+    """Raised when a credential arrives but this process was not told how to check one.
+
+    The identifiers of the identity provider's tenant and application are
+    missing from the configuration. As above, the failure is on this side.
+    """
+
+    code = "auth_not_configured"
+
+
+# -----------------------------------------------------------------------------
 # Pipelines
 # -----------------------------------------------------------------------------
 class PipelineError(EnergyError):
@@ -238,6 +284,8 @@ class LockTimeoutError(PipelineError):
 
 
 __all__ = [
+    "AccessError",
+    "AuthenticationError",
     "CloseRefusedError",
     "ConfigurationError",
     "ContentHashMismatchError",
@@ -247,16 +295,19 @@ __all__ = [
     "DuplicateReadingError",
     "EnergyError",
     "EntityNotFoundError",
+    "IdentityProviderUnavailableError",
     "IngestionError",
     "InvalidPeriodError",
     "InvalidTimeWindowError",
     "LockTimeoutError",
     "NaiveDatetimeError",
     "NegativeEnergyError",
+    "PermissionDeniedError",
     "PipelineError",
     "QuarantinedRowsError",
     "RepositoryError",
     "SchemaValidationError",
+    "SignInNotConfiguredError",
     "SourceUnavailableError",
     "UnitMismatchError",
     "UnknownKPIError",

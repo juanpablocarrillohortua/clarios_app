@@ -222,6 +222,15 @@ flowchart TB
 | `api` | `domain`, `ports`, `services`, `schemas`, `db`, `core` |
 | `dashboards` | `domain`, `ports`, `services`, `core` |
 
+**One exception, by module.** `api/deps.py`, and no other module of `api`, may
+also import `adapters`. Every entry point needs one place where adapters are
+bound to the ports its code depends on. For pipelines that place is
+`pipelines/flows`; for the API it is `deps.py`, which today binds the adapter
+that checks sign-in tokens. Routers, schemas and `api/security.py` receive ports
+through the dependencies `deps.py` exports and never name an adapter.
+[ADR 0005](adr/0005-api-composition-root.md) records the decision, and the test
+fails for an adapter import anywhere else in `api`.
+
 Two consequences are worth stating explicitly:
 
 **`domain` depends on nothing.** This is the single most valuable structural
@@ -252,6 +261,31 @@ something — which is a useful signal rather than an inconvenience.
 
 ## 4. Request and data flow
 
+### Who is calling
+
+Every route of the API needs a signed-in person, unless it is listed as public
+(`/health`, `/ready`, `/config` and the API's own documentation). Devices will
+use API keys on `/ingest`, in Phase 3.
+
+```
+any request with Authorization: Bearer <token>
+  → deps.get_principal
+      → TokenVerifier.verify()      (port; adapters.entra_token_verifier)
+          signature, validity period, issuer, tenant, audience, scope
+          → refused → 401
+      → security.principal_from_token()   roles from the token's `roles` claim
+  → deps.requires(permission)
+      → security.GRANTS: does a role of the caller grant it?
+          → no → 403
+  → the handler
+```
+
+The web app obtains the token from Microsoft Entra ID in the browser, and asks
+`GET /me` what the caller may do. `api/security.py` is the only place where a
+role is given a meaning: the app holds no such rule. [The API](api.md) follows a
+request through these steps and lists every endpoint; [Sign-in and
+roles](sign-in.md) has the Entra ID side.
+
 ### A file upload
 
 ```
@@ -277,13 +311,27 @@ were never stored.
 
 ### A dashboard query
 
+People see figures in the Power BI report embedded in the web app:
+
+```
+gold → schema reporting (read-only views) → Power BI → the web app's dashboard
+```
+
+The reporting views restate Gold and calculate nothing again, so a figure in
+the report and the same figure printed by the command line resolve to the same
+rows. The API serves no analytical figure: its three KPI endpoints are
+placeholders of the Phase 1 scaffold, and Phase 4 removes them
+([ADR 0007](adr/0007-figures-reach-people-through-power-bi.md)).
+
+Dash, if Phase 5 keeps it, reads inside its own process:
+
 ```
 Dash callback → KPIService.get_series() → KPIRepository.query() → gold.kpi_daily
 ```
 
-Nothing is aggregated on the way out. A figure drawn on a chart and the same
-figure returned by the API resolve to the same stored row, so they cannot
-disagree.
+Nothing is aggregated on the way out. Whether Dash draws these charts at all is
+decided when Phase 5 starts
+([ADR 0004](adr/0004-react-spa-entra-and-embedded-power-bi.md)).
 
 ---
 
@@ -427,7 +475,9 @@ internal.
 | Add a KPI | `config/kpis.yaml`, then `domain/kpi_formulas.py` if the maths is new |
 | Change what counts as valid data | `schemas/silver.py` |
 | Change how source conflicts resolve | `config/sources.yaml` priorities |
-| Add an endpoint | `api/routers/`, `api/schemas/` |
+| Add an endpoint | `api/routers/`, `api/schemas/`, and mount it in `api/main.py` with the permission it needs: a route nobody is asked about fails `tests/unit/test_api_auth.py` |
+| Change what a role may do | the table `GRANTS` in `api/security.py`, and `tests/unit/test_api_security.py`. The web app follows: it reads permissions from `GET /me` |
+| Give a person access | no code: assign them a role in Entra ID ([Sign-in and roles](sign-in.md)) |
 | Add a chart | `dashboards/components/charts.py`, `dashboards/layouts.py` |
 | Change the database shape | a new migration in `migrations/versions/` |
 
@@ -441,4 +491,8 @@ internal.
 - [ADR 0003](adr/0003-modular-monolith-over-microservices.md) — why a modular monolith
 - [ADR 0004](adr/0004-react-spa-entra-and-embedded-power-bi.md) — why a React app, Entra ID sign-in and embedded Power BI
 - [ADR 0005](adr/0005-api-composition-root.md) — why `api/deps.py` may import adapters
+- [ADR 0006](adr/0006-api-tokens-and-app-roles.md) — which token the API accepts, and how roles become permissions
+- [ADR 0007](adr/0007-figures-reach-people-through-power-bi.md) — why figures reach people through Power BI only, and the API's KPI endpoints are removed
+- [The API](api.md) — what it is in plain words, every endpoint, the token check, the errors, how the web app calls it
+- [Sign-in and roles](sign-in.md) — the app registration, giving someone access, troubleshooting
 - [Frontend plan](frontend-plan.md) — the web app's design and its increments

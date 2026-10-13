@@ -25,5 +25,49 @@
     "checking": "Comprobando el servicio…",
     "online": "Servicio en línea · versión {{version}}",
     "offline": "Sin conexión con el servicio"
+  },
+  "session": {
+    "starting": "Iniciando…",
+    "redirecting": "Abriendo el inicio de sesión de Microsoft…"
+  },
+  "signIn": {
+    "title": "Iniciar sesión",
+    "text": "Para usar la aplicación, inicie sesión con su cuenta de Microsoft.",
+    "signedOut": "Cerró la sesión. Puede cerrar esta pestaña o iniciar sesión de nuevo.",
+    "failed": "No se pudo completar el inicio de sesión. Intente de nuevo.",
+    "errorCode": "Código del error: {{code}}",
+    "action": "Iniciar sesión"
+  },
+  "user": {
+    "signOut": "Cerrar sesión"
+  },
+  "noAccess": {
+    "title": "Sin acceso",
+    "text": "Su cuenta no tiene permisos en esta aplicación. Pida a un administrador que le asigne un rol.",
+    "account": "Cuenta: {{account}}"
+  },
+  "forbidden": {
+    "title": "Sin permiso",
+    "text": "Su cuenta no tiene permiso para abrir esta sección.",
+    "back": "Ir al inicio"
+  },
+  "problem": {
+    "retry": "Reintentar",
+    "notConfigured": {
+      "title": "Inicio de sesión no configurado",
+      "text": "El servidor no tiene configurado el inicio de sesión. Avise a un administrador."
+    },
+    "unreachable": {
+      "title": "Servicio no disponible",
+      "text": "No fue posible comunicarse con el servicio. Intente de nuevo en unos minutos."
+    },
+    "cannotStart": {
+      "title": "No se pudo preparar el inicio de sesión",
+      "text": "Abra la aplicación con la dirección que le indicó su administrador. Si el problema continúa, avísele."
+    },
+    "sessionRefused": {
+      "title": "Sesión no aceptada",
+      "text": "El servicio no aceptó su sesión. Inicie sesión de nuevo."
+    }
   }
 }

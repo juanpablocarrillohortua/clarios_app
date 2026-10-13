@@ -55,6 +55,21 @@ id:
 docker compose logs api | grep '<request-id>'
 ```
 
+### Nobody can sign in, or the API answers 401 or 503
+
+A request the API refuses with 401 never says why in its answer. The reason is
+in the log:
+
+```bash
+docker compose logs api | grep "caller not authenticated"
+```
+
+A 503 with the code `auth_not_configured` means `ENTRA_TENANT_ID` or
+`ENTRA_CLIENT_ID` is empty in `.env`. One with `identity_provider_unavailable`
+means the API container cannot reach `login.microsoftonline.com`. The
+troubleshooting table of [Sign-in and roles](sign-in.md#troubleshooting) lists
+each reason with its fix.
+
 ---
 
 ## 2. Database down
@@ -407,4 +422,5 @@ Include in any escalation:
 
 - [Architecture](architecture.md) — how the layers fit together
 - [Data dictionary](data_dictionary.md) — table and column reference
+- [Sign-in and roles](sign-in.md) — giving someone access, and sign-in problems
 - [README](../README.md) — setup and troubleshooting for developers

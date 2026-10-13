@@ -10,7 +10,10 @@ id is echoed back on the response so a client can quote it in a support ticket.
 
 One structured access log line is emitted per request, with method, path, status
 and duration. Uvicorn's own access log is silenced in ``core.logging`` so these
-are not duplicated.
+are not duplicated. When the caller signed in, the line also carries their
+identifier in the identity provider (``subject``), which is how a request is
+traced to a person. It is an opaque id: no name and no address is logged, and
+never a token.
 """
 
 from __future__ import annotations
@@ -93,6 +96,8 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                 status_code=response.status_code,
                 duration_ms=round(duration_ms, 2),
                 client=request.client.host if request.client else None,
+                # Left on the request by `energy.api.deps.get_principal`.
+                subject=getattr(request.state, "subject", None),
             )
 
         clear_request_context()

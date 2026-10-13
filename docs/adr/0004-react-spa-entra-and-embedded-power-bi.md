@@ -1,6 +1,8 @@
 # 4. A React single-page app with Entra ID sign-in and embedded Power BI
 
-- **Status:** Accepted
+- **Status:** Accepted. The library named in point 2 of the decision was
+  changed by [ADR 0006](0006-api-tokens-and-app-roles.md): the app uses
+  `@azure/msal-browser` alone
 - **Date:** 2026-10-12
 - **Deciders:** Platform team
 

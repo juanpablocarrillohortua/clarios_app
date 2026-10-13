@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from energy.core.settings import ArchiveSettings, DashSettings, EqusSettings
+from energy.core.settings import ArchiveSettings, DashSettings, EntraSettings, EqusSettings
 
 pytestmark = pytest.mark.unit
 
@@ -125,3 +125,82 @@ def test_equs_gold_settings_reject_what_cannot_work(
 
     with pytest.raises(ValidationError):
         EqusSettings(_env_file=None)
+
+
+TENANT = "11111111-1111-4111-8111-111111111111"
+CLIENT = "33333333-3333-4333-8333-333333333333"
+ENTRA_VARIABLES = ("ENTRA_TENANT_ID", "ENTRA_CLIENT_ID", "ENTRA_CLIENT_SECRET")
+
+
+def test_sign_in_is_not_configured_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fresh clone has no tenant: the API starts and says sign-in is not set up."""
+    for name in ENTRA_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+
+    settings = EntraSettings(_env_file=None)
+
+    assert settings.is_configured is False
+    assert settings.tenant_id is None
+    assert settings.client_id is None
+    assert settings.authority is None
+    assert settings.api_scope is None
+
+
+@pytest.mark.parametrize("empty", ["", "   "])
+def test_an_empty_sign_in_identifier_counts_as_not_set(
+    monkeypatch: pytest.MonkeyPatch, empty: str
+) -> None:
+    """Compose hands a variable missing from `.env` to the container as an empty string."""
+    monkeypatch.setenv("ENTRA_TENANT_ID", empty)
+    monkeypatch.setenv("ENTRA_CLIENT_ID", CLIENT)
+
+    settings = EntraSettings(_env_file=None)
+
+    assert settings.tenant_id is None
+    assert settings.is_configured is False
+
+
+def test_sign_in_identifiers_give_the_authority_and_the_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both are derived, so the app and the API cannot be told different things."""
+    # Upper case and padded, as a careless paste would leave them.
+    monkeypatch.setenv("ENTRA_TENANT_ID", f" {TENANT.upper()} ")
+    monkeypatch.setenv("ENTRA_CLIENT_ID", CLIENT.upper())
+
+    settings = EntraSettings(_env_file=None)
+
+    assert settings.is_configured is True
+    assert settings.tenant_id == TENANT
+    assert settings.client_id == CLIENT
+    assert settings.authority == f"https://login.microsoftonline.com/{TENANT}"
+    assert settings.api_scope == f"api://{CLIENT}/access_as_user"
+
+
+@pytest.mark.parametrize("name", ["ENTRA_TENANT_ID", "ENTRA_CLIENT_ID"])
+@pytest.mark.parametrize("value", ["contoso.example", "not-a-guid", "1234"])
+def test_a_sign_in_identifier_must_be_a_guid(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    """A tenant's domain name is refused: the issuer of its tokens is written with the GUID."""
+    from pydantic import ValidationError  # noqa: PLC0415
+
+    monkeypatch.setenv("ENTRA_TENANT_ID", TENANT)
+    monkeypatch.setenv("ENTRA_CLIENT_ID", CLIENT)
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValidationError):
+        EntraSettings(_env_file=None)
+
+
+def test_the_client_secret_is_not_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The API checks tokens with public keys, so it has no field to hold the secret in."""
+    monkeypatch.setenv("ENTRA_TENANT_ID", TENANT)
+    monkeypatch.setenv("ENTRA_CLIENT_ID", CLIENT)
+    monkeypatch.setenv("ENTRA_CLIENT_SECRET", "a-secret-that-must-stay-put")
+
+    settings = EntraSettings(_env_file=None)
+
+    assert not [name for name in EntraSettings.model_fields if "secret" in name]
+    assert "a-secret-that-must-stay-put" not in settings.model_dump_json()
+    assert "a-secret-that-must-stay-put" not in repr(settings)

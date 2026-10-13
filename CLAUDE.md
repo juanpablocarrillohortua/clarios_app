@@ -47,12 +47,20 @@ is the guide.
 
 **Web app.** `frontend/` is a React single-page app (TypeScript, Vite) that Caddy
 serves at `/`; Dash moved to `/dash/`. It is built in the increments of
-[docs/frontend-plan.md](docs/frontend-plan.md): increment 0 (decisions) and
-increment 1 (the shell, with two empty sections) are done. The decisions are in
+[docs/frontend-plan.md](docs/frontend-plan.md): increment 0 (decisions),
+increment 1 (the shell, with two empty sections) and increment 2 (sign-in with
+Microsoft Entra ID, and roles) are done. The decisions are in
 [ADR 0004](docs/adr/0004-react-spa-entra-and-embedded-power-bi.md) (stack, Entra
-ID sign-in, embedded Power BI) and
+ID sign-in, embedded Power BI),
 [ADR 0005](docs/adr/0005-api-composition-root.md) (`api/deps.py` may import
-adapters). Read the plan before touching `frontend/`.
+adapters), [ADR 0006](docs/adr/0006-api-tokens-and-app-roles.md) (which token
+the API accepts, roles and permissions) and
+[ADR 0007](docs/adr/0007-figures-reach-people-through-power-bi.md) (figures
+reach people through Power BI only; the API's KPI endpoints are removed when
+Phase 4 starts). [docs/sign-in.md](docs/sign-in.md) is
+the guide to sign-in, and [docs/api.md](docs/api.md) the guide to the API: a
+part in plain words for readers who do not write code, and a technical
+reference with every endpoint. Read the plan before touching `frontend/`.
 
 ---
 
@@ -70,14 +78,15 @@ Definition-of-Done item is verified against a running stack.
 | Extensions | timescaledb **2.30.1**, pgcrypto 1.3 |
 | Hypertables | All 5 registered: `raw_readings, readings, kpi_hourly, kpi_daily, plant_daily_summary` |
 | Timescale policies | 3 compression + 1 retention job created (no warnings) |
-| Routes through Caddy | `/api/health` `/api/ready` `/api/docs` `/` `/dash/` `/prefect/api/health` `/minio/` all **HTTP 200**. `/` is the web app (any path without a file extension gets its `index.html`); `/auth/*` answers 404 by design (2026-10-12) |
+| Routes through Caddy | `/api/health` `/api/ready` `/api/docs` `/api/config` `/` `/redirect.html` `/dash/` `/prefect/api/health` `/minio/` all **HTTP 200**. `/` is the web app (any path without a file extension gets its `index.html`); `/auth/*` answers 404 by design (2026-10-12) |
+| Sign-in (2026-10-12) | Without a token `/api/me`, `/api/uploads`, `/api/runs` and `/api/kpis/summary` answer **401**; so do a made-up token, one that names no algorithm, and a well-formed one signed with another key. A signed-out headless browser is sent to Microsoft's sign-in page with the registered redirect page, the API's scope and PKCE, from `:8080` and from the dev server on `:5173`, and Microsoft shows no error. **Not done by a session:** signing in as a real user; that is the owner's check |
 | `/api/ready` payload | `degraded` (connectivity+extensions healthy, Silver empty) - correct, returns 200 not 503 |
-| Placeholder endpoint | `/api/kpis/summary` -> **501** with `code=not_implemented` |
+| Placeholder endpoint | `/api/kpis/summary` -> **501** with `code=not_implemented` for a signed-in caller (in the tests); 401 without a token |
 | `X-Request-Id` | Present and propagated |
-| `make check` | **Exit 0** - format, lint, mypy strict (107 files), bandit, pip-audit, tests (24 minutes). Since 2026-10-12 it also runs `frontend-check`; the whole chain has not been re-run with it |
-| `make frontend-check` | **Exit 0** (2026-10-12) - Biome on 26 files, `tsc`, 12 Vitest tests, production build. About 10 seconds |
-| `make test` | **691 passed, 39 skipped** (about 21 minutes with the workbooks present) |
-| Coverage | **95.43%** (threshold 70%) |
+| `make check` | Every step passes on the code of increment 2 (2026-10-12): format, lint, mypy strict (111 files), bandit, pip-audit, `frontend-check`, tests (24 minutes). The one run of the whole chain that day failed at the tests, for a test-module import since fixed (see "Sign-in and roles"); the steps were then run again, not the chain as one command |
+| `make frontend-check` | **Exit 0** (2026-10-12) - Biome on 44 files, `tsc`, 45 Vitest tests, production build of two pages. About 10 seconds on an idle machine |
+| `make test` | **841 passed, 39 skipped** (24 minutes with the workbooks present, 2026-10-12). Two unit tests were added afterwards, with the guide to the API (`test_api_reference.py`): `make test-unit`'s selection then passed, 648 with 30 skipped, and the whole suite was not run again |
+| Coverage | **95.86%** (threshold 70%) |
 | `make test-integration` | **118 passed** against real TimescaleDB and MinIO, with the workbooks present (2026-10-07; not re-run on its own since) |
 | `make powerbi` | **Exit 0** in the stack: the bridge healthy on 127.0.0.1:5433; the login reads the reporting views from Windows through it, is refused on gold/silver and with a wrong password; `make powerbi-down` closes the port without touching the db container |
 | No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer. Two deliberate exceptions: `docs/equs_calculation_explained.es.md`, the Spanish translation of the non-technical explanation (asked for on 2026-10-08), and `frontend/src/i18n/es.json`, the texts of the web app's interface (decided on 2026-10-12, ADR 0004) |
@@ -88,8 +97,9 @@ with `make check DATABASE_URL=<a reachable test database>` (the `.env` value
 otherwise wins and points at the compose-internal host). The integration row
 dates from 2026-10-07 and the other rows from 2026-09-19. On 2026-10-12, with
 the web app added, `make up`, the routes and `make frontend-check` were verified
-again; no Python source changed that day, so the Python gate was not re-run in
-full.
+again. Later that day, with sign-in added (increment 2), `make up`, the routes,
+`make test` and every other step of the gate were run again; the `make test`
+and coverage rows are from that run.
 
 **Integration tests can be skipped silently.** They start a TimescaleDB container
 and wait 120 s for it. On 2026-10-06, with the machine busy, the container needed
@@ -144,7 +154,10 @@ check free space first.
 - `make seed` - runs the Phase 2 placeholder scripts, which raise
   `NotImplementedError` by design.
 - `tests/e2e/` - all skipped; they are Phase 2 deliverables.
-- The GitHub Actions workflows have not run on a real push.
+- The GitHub Actions workflows run on pull requests and on `main` or `develop`,
+  not on a push to a feature branch. The owner reported CI green on the
+  increment 1 commit (2026-10-12); the repository is private and `gh` is not
+  installed on this machine, so a session cannot read the result itself.
 
 ## Environment specifics
 
@@ -166,7 +179,10 @@ check free space first.
 `dashboards` and `pipelines` are siblings and must never import one another.
 Enforced by [`tests/unit/test_architecture.py`](tests/unit/test_architecture.py),
 which parses imports with `ast`. **Do not weaken that test to make a change
-pass** — it is load-bearing.
+pass** — it is load-bearing. It has one exception, named in the test as
+`COMPOSITION_ROOTS`: `api/deps.py`, and no other module of `api`, may import
+`adapters` (ADR 0005, used since 2026-10-12 for the token verifier). A second
+test fails if that list grows or another `api` module imports an adapter.
 
 **Placeholders.** Non-test placeholders raise `NotImplementedError("Phase N: …")`.
 Placeholder *tests* instead carry `@pytest.mark.skip(reason="Phase N: …")` — a
@@ -292,6 +308,24 @@ test raising would fail the suite. Keep that distinction.
   - `aporte_cuenta` adds up to it exactly.
   - `equs_poly_mensual` and `calidad_datos_mensual` repeat the grouping of the
     range functions over every month.
+- **Figures reach people through these views and Power BI, and nowhere else**
+  (ADR 0007, decided 2026-10-13). The API serves no analytical figure.
+  - The three KPI endpoints (`api/routers/kpis.py`) are **not to be
+    implemented**. Their docstrings are no longer a specification. Phase 4
+    removes them as its first step and delivers the energy KPIs as new
+    `reporting` views, each row with its `coverage`.
+  - Until Phase 4 they stay untouched, answering 501, and their rows stay in
+    the table of `docs/api.md`: the owner asked that nothing be built before
+    the phase itself.
+  - What a load did, before the report is refreshed, is asked by run
+    (`/runs/{run_id}`), not by a KPI route.
+  - `dashboard:view` only makes the app show the dashboard section. Who sees
+    the report is decided in Power BI, by access to the workspace.
+  - A model on shared capacity may be refreshed eight times a day, scheduled
+    refreshes and those started through the REST API together. The workspace
+    is on shared capacity.
+  - Before building anything in Phase 4, ask the plant how fresh energy
+    figures must be. "Within minutes" reopens the ADR.
 - **Never call a Gold function from a reporting view.** Views read their tables
   with the owner's rights, but a function runs with the *caller's*: the reader
   would get *permission denied*. Build on Gold views (`gold.en_vigor` is fine:
@@ -371,9 +405,11 @@ test raising would fail the suite. Keep that distinction.
 - **Dash's base path is fixed in compose** (`DASH_URL_BASE_PATHNAME: /dash/`),
   not read from `.env`, because it must equal the Caddyfile's route. The image's
   healthcheck probes the same variable.
-- **Entra ID redirect URIs.** The app registers one,
-  `http://localhost:8080/redirect.html`, under "Single-page application". Entra
-  ignores the port of `localhost` URIs, so it also covers the Vite dev server
+- **Entra ID redirect URIs.** The app has two, under "Single-page
+  application": `http://localhost:8080/redirect.html` (after sign-in) and
+  `http://localhost:8080/signed-out` (after sign-out). Both are also constants
+  in `frontend/src/paths.ts`, so neither can be renamed in one place only. Entra
+  ignores the port of `localhost` URIs, so they also cover the Vite dev server
   on 5173; two `localhost` URIs that differ only by port must never be
   registered. `ENTRA_CLIENT_SECRET` is in `.env` and passed to no container.
 - **Packages.** Installed with a one-week cooldown
@@ -383,9 +419,86 @@ test raising would fail the suite. Keep that distinction.
   `env/` and `var/` anywhere: a source folder named so never reaches git.
 - **`make frontend-check`** is `biome ci`, two `tsc` runs, `vitest run` and
   `vite build`. `make check` runs it before the Python tests.
-- **Tests** render the whole app in jsdom through `renderAppAt()` and stub
-  `fetch`; `frontend/src/test/setup.ts` supplies `matchMedia` and `ResizeObserver`,
-  which Mantine's shell needs and jsdom lacks.
+- **Tests** render the whole app in jsdom through `renderAppAt()`, in React's
+  strict mode as `main.tsx` does, with a stand-in for sign-in (`fakeAuth()`) and
+  for the API (`stubApi()`); `frontend/src/test/setup.ts` supplies `matchMedia`
+  and `ResizeObserver`, which Mantine's shell needs and jsdom lacks. The app
+  starts with three requests, so a test waits for what it looks at (`findBy…`).
+
+**Sign-in and roles** (increment 2, built 2026-10-12;
+[docs/sign-in.md](docs/sign-in.md), ADR 0006):
+
+- **The API accepts one kind of token:** a version 2.0 Entra ID access token of
+  the project's tenant, issued for the app registration, with the scope
+  `access_as_user`. Never the ID token. The checks and their order are the
+  module docstring of `adapters/entra_token_verifier.py`.
+- **A route is protected unless its path is in `PUBLIC_PATHS`** (`api/main.py`).
+  Routers are mounted there with `dependencies=[Depends(requires(Permission.…))]`.
+  `tests/unit/test_api_auth.py` calls every published operation without a token
+  and fails for one that answers. `/ingest` is the device route (API keys,
+  Phase 3) and is skipped by name.
+- **Endpoints ask for a permission, never for a role.** `GRANTS` in
+  `api/security.py` is the only place where a role is given a meaning, and a
+  test restates it. Nothing is inherited: a role is listed on every row it
+  applies to. `device` is never taken from a person's token.
+- **No default role.** A signed-in user without one gets an empty permission
+  list from `GET /me`, and the app shows its no-access page.
+- **A refusal does not say why.** The 401 body is fixed; the reason
+  (`wrong_version`, `expired`, …) is in the log line `caller not authenticated`.
+  A token is never logged. The access log names the caller by `subject`, the
+  person's object ID.
+- **The signing keys** are fetched from Entra ID, kept a day, and refetched for
+  an unknown key at most every five minutes. With no keys and no answer the API
+  says 503, not 401. The api container needs outbound access to
+  `login.microsoftonline.com`.
+- **`ENTRA_TENANT_ID` and `ENTRA_CLIENT_ID`** reach the api container through
+  compose and the app through `GET /api/config`. They are in no image and no
+  file of the repository; tests use made-up GUIDs. `EntraSettings` has no field
+  for the secret. Empty values mean "not configured": the stack still starts.
+- **Tests never reach Entra ID.** The `token_verifier` fixture replaces the
+  bound adapter and `auth_headers("viewer")` gives a signed-in caller's
+  headers. A test that calls a guarded route with a token and without that
+  fixture would use the developer's real `.env`: set the variables empty first
+  (`entra_env` in `test_api_auth.py`).
+- **A test module never imports `energy.api.main` at its top.** Importing it
+  builds the app, which caches the settings. pytest imports every test module
+  before running any, so the cache would hold the database address of `.env`
+  (`db`, unreachable from the host) and every database test would fail with
+  "failed to resolve host 'db'". It happened on 2026-10-12: 175 errors. Import
+  inside the test, as `conftest.py` does. The database fixtures now also clear
+  the cache after pointing `DATABASE_URL` at the test database.
+- **`docs/api.md` lists every endpoint, and a test keeps the list complete.**
+  `tests/unit/test_api_reference.py` fails for an operation of the API that the
+  guide does not name, and for one it names that no longer exists. The guide
+  writes an operation in a code span, as `GET /api/me`: a new endpoint needs
+  its row, and a planned one must not be written that way. Its sample answers
+  were copied from real calls made with made-up identifiers; keep them so.
+- **The API is not the only way into the database,** and no document may say
+  so. Section 9 of `docs/api.md` lists every way in: the API, the command line
+  (which loads all data today), and Power BI through `reporting-bridge`. The
+  sign-in and the roles protect the first only. Add a row there when a new way
+  in appears.
+- **Four things the API does that its docstrings do not say** (found on
+  2026-10-12, described in `docs/api.md`, not changed):
+  - the device routes ask for no real credential yet: the watermark route
+    takes none, and the readings route takes the Phase 1 stand-in, which
+    accepts a missing key outside staging and production. Both answer 501;
+  - a 422 and the 404 of an unknown path use FastAPI's `{"detail": …}`, not
+    the error envelope;
+  - no handler fills `ErrorResponse.request_id`: the ID is in the
+    `X-Request-ID` header;
+  - an unforeseen 500 is plain text without that header.
+- **In the app, only `auth/msalAuthClient.ts` imports MSAL.** Everything else
+  uses `AuthClient`. `Session.tsx` draws nothing of the app until the settings,
+  the account and `GET /api/me` are known; pages read them with `useSession()`.
+  The app goes to Microsoft by itself once per tab; coming back without an
+  account it asks, so a failure cannot loop.
+- **Open the app as `localhost`, not `127.0.0.1`:** the redirect URI is built
+  from the address bar, and only `localhost` is registered.
+- **The app registration is the owner's to change.** Read it back with the
+  Azure CLI session, `GET` only (`az ad app show`), and print no identifier.
+- **Not covered:** `/dash/`, `/prefect/` and `/minio/` are served without this
+  sign-in. That must be closed before the stack runs on a shared host.
 
 **EQUS Bronze loader** (built 2026-10-07):
 
@@ -441,7 +554,14 @@ test raising would fail the suite. Keep that distinction.
   copies it with `pyproject.toml` and `uv.lock`). Any edit to the README makes
   the next `make up` reinstall every Python dependency in the api and dash
   images: 11 minutes on this machine on 2026-10-12, and over 20 when the disk
-  is busy.
+  is busy. So does any change to `pyproject.toml` or `uv.lock`. Make all such
+  edits before one rebuild, and do it when the machine is idle: the second
+  rebuild of 2026-10-12 took 37 minutes with about 2 GB of memory free, and the
+  load made the development database stop and recover by itself (nothing was
+  lost: its revision, its 42 tables and its run ledger were read back).
+- **Short of memory, tests fail for no reason of their own.** With under 2 GB
+  free, Vitest's workers time out at start and test containers miss their 120
+  seconds. Check the free memory before believing such a failure.
 - Alembic is configured in `pyproject.toml` under `[tool.alembic]` — there is no
   `alembic.ini`. Always invoke as `alembic -c pyproject.toml`.
 - `make db-upgrade` runs Alembic **inside the api container** because the
@@ -498,6 +618,12 @@ All deliberate; each is explained where it lives.
    line. `__main__.py` registers only the `equs` commands; its other functions
    are still placeholders. `ensure_bucket` creates the bucket but sets no
    retention policy, which the original docstring had asked for.
+9. **`api/security.py` is partly implemented ahead of Phase 3**, for the web
+   app's sign-in (2026-10-12): the permission table, `Principal.has_role`,
+   `require_roles` and the mapping from a token to a principal. Device API keys
+   and filtering by plant are still Phase 3 placeholders. The `uploads` and
+   `runs` routers no longer take the Phase 1 stand-in API key: people present
+   a token. `ingest` keeps it, for devices.
 
 ---
 
@@ -510,15 +636,21 @@ All deliberate; each is explained where it lives.
   Postgres repositories, Pandera contracts, validate/consolidate/quarantine
   tasks, Prefect flows, watermarks, upload and ingest endpoints
 - **Phase 4 — KPI computation and Gold**: KPI service, computation and roll-up,
-  coverage accounting, Gold repository, KPI endpoints
+  coverage accounting, Gold repository, and `reporting` views of the energy
+  KPIs for Power BI. It starts by removing the KPI endpoints (ADR 0007, which
+  lists the first steps). `README.md` still names "the KPI query endpoints" in
+  its roadmap: correct it with that first change, not before, because a README
+  edit forces a full reinstall in the images
 - **Phase 5 — Analytics, alerting and reporting**: baseline regression, STL
   decomposition, anomaly and changepoint detection, SHAP attribution, notifiers,
   reports, full dashboards
 
 The web app has its own roadmap, in section 8 of
 [docs/frontend-plan.md](docs/frontend-plan.md): fourteen increments, of which 0
-and 1 are done. Increment 2 is sign-in and roles.
+to 2 are done. Increment 3 is the dashboard page, with the embedded Power BI
+report.
 
 When implementing a placeholder: read its docstring first (it is the spec), keep
 and update the docstring, remove the `Implemented in: Phase N` line, and un-skip
-the matching placeholder tests.
+the matching placeholder tests. One exception: `api/routers/kpis.py` is to be
+removed, not implemented (ADR 0007).

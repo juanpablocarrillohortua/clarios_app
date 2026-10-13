@@ -3,8 +3,8 @@
 Layer: core
 
 Settings are grouped into nested models (database, API, MinIO, archive, Prefect,
-Dash, logging, data, EQUS, reporting) so that each layer depends only on the
-slice it needs. Values come
+Dash, logging, data, EQUS, reporting, Entra ID) so that each layer depends only
+on the slice it needs. Values come
 from environment variables first and from ``.env`` second; there are no hardcoded
 credentials and no runtime mutation. Call :func:`get_settings` - it is cached, so
 the environment is read once per process.
@@ -17,10 +17,13 @@ from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, PostgresDsn, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from energy.core.constants import ENTRA_API_SCOPE_NAME, ENTRA_LOGIN_HOST
 
 Environment = Literal["local", "ci", "staging", "production"]
 LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
@@ -321,6 +324,68 @@ class ReportingSettings(BaseSettings):
         return value
 
 
+class EntraSettings(BaseSettings):
+    """Microsoft Entra ID sign-in: the app registration whose tokens the API accepts.
+
+    The web app signs users in from the browser and sends the API an access
+    token. To check one the API needs only these identifiers, which are public:
+    they appear in the address of every sign-in page. The registration's client
+    secret has no field here on purpose, so nothing in this process can read it.
+    """
+
+    model_config = _BASE_CONFIG
+
+    tenant_id: str | None = Field(default=None, validation_alias="ENTRA_TENANT_ID")
+    client_id: str | None = Field(default=None, validation_alias="ENTRA_CLIENT_ID")
+
+    @field_validator("tenant_id", "client_id", mode="before")
+    @classmethod
+    def _empty_is_unset(cls, value: object) -> object:
+        """Treat an empty value as no value.
+
+        Compose hands a variable that is missing from ``.env`` to the container
+        as an empty string, which must read as "sign-in is not configured".
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("tenant_id", "client_id")
+    @classmethod
+    def _must_be_a_guid(cls, value: str | None) -> str | None:
+        """Accept only the GUID form of an identifier, and return it in lower case.
+
+        Raises:
+            ValueError: if the value is not a GUID. A tenant's domain name is
+                refused too: the issuer of its tokens is written with the GUID.
+        """
+        if value is None:
+            return None
+        try:
+            return str(UUID(value.strip()))
+        except ValueError as exc:
+            msg = "ENTRA_TENANT_ID and ENTRA_CLIENT_ID must each be a GUID"
+            raise ValueError(msg) from exc
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_configured(self) -> bool:
+        """Return whether both identifiers are set, so tokens can be checked."""
+        return self.tenant_id is not None and self.client_id is not None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def authority(self) -> str | None:
+        """Return the address users of this tenant sign in at, or ``None`` if unset."""
+        return f"{ENTRA_LOGIN_HOST}/{self.tenant_id}" if self.tenant_id else None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def api_scope(self) -> str | None:
+        """Return the full scope the web app requests a token for, or ``None`` if unset."""
+        return f"api://{self.client_id}/{ENTRA_API_SCOPE_NAME}" if self.client_id else None
+
+
 class Settings(BaseSettings):
     """Root configuration object composing every settings group."""
 
@@ -341,6 +406,7 @@ class Settings(BaseSettings):
     data: DataSettings = Field(default_factory=DataSettings)
     equs: EqusSettings = Field(default_factory=EqusSettings)
     reporting: ReportingSettings = Field(default_factory=ReportingSettings)
+    entra: EntraSettings = Field(default_factory=EntraSettings)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -372,6 +438,7 @@ __all__ = [
     "DashSettings",
     "DataSettings",
     "DatabaseSettings",
+    "EntraSettings",
     "Environment",
     "EqusSettings",
     "LogFormat",

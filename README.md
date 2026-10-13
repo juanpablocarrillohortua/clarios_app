@@ -117,7 +117,10 @@ extracted into its own deployable without untangling an import.
 
 The rule is enforced by [`tests/unit/test_architecture.py`](tests/unit/test_architecture.py),
 which parses imports with `ast` rather than observing them at runtime, so a
-violation hidden inside a `TYPE_CHECKING` block is caught too.
+violation hidden inside a `TYPE_CHECKING` block is caught too. It has one
+exception, by module: `api/deps.py` may import `adapters`, because that is where
+the API binds them to ports
+([ADR 0005](docs/adr/0005-api-composition-root.md)).
 
 Full detail: **[docs/architecture.md](docs/architecture.md)**.
 
@@ -275,6 +278,11 @@ with `openssl rand -hex 32`.
 | `API_CORS_ORIGINS` | Comma-separated allowed origins | `http://localhost` | No |
 | `API_SECRET_KEY` | Token signing key. `openssl rand -hex 32` | *(none)* | **Yes** |
 | `API_KEY_HEADER` | Header carrying the API key | `X-API-Key` | No |
+| **Sign-in (Microsoft Entra ID)** |
+| `ENTRA_TENANT_ID` | The tenant users sign in to. An identifier, not a secret | *(none)* | To sign in |
+| `ENTRA_CLIENT_ID` | The app registration users sign in through, and whose access tokens the API accepts | *(none)* | To sign in |
+| `ENTRA_CLIENT_SECRET` | Secret of the registration's unused "Web" platform. Nothing reads it and no container receives it | *(none)* | No |
+| `ENTRA_REDIRECT_URI` | Redirect URI of that unused platform | `http://localhost:8080/auth/callback` | No |
 | **Dashboards** |
 | `DASH_HOST` | Bind interface | `0.0.0.0` | No |
 | `DASH_PORT` | Bind port | `8050` | No |
@@ -353,7 +361,7 @@ clarios-energy-prefect-worker-1  prefect-worker   Up 2 minutes (healthy)
 | API health | <http://localhost:8080/api/health> | `{"status":"ok",...}` |
 | API readiness | <http://localhost:8080/api/ready> | Per-dependency health |
 | **API docs** | <http://localhost:8080/api/docs> | Interactive OpenAPI UI |
-| **Web app** | <http://localhost:8080/> | The app's shell, with its two sections; the footer shows the API's version |
+| **Web app** | <http://localhost:8080/> | Microsoft's sign-in, then the app's shell with the sections your role allows. Use `localhost`, not `127.0.0.1`. With `ENTRA_*` empty, a page saying that sign-in is not configured ([docs/sign-in.md](docs/sign-in.md)) |
 | **Dash** | <http://localhost:8080/dash/> | Holding page until the Phase 5 energy charts |
 | **Prefect UI** | <http://localhost:8080/prefect/> | Flow runs and work pools |
 | **MinIO console** | <http://localhost:8080/minio/> | Log in with `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |

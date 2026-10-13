@@ -222,6 +222,27 @@ SQL, no direct adapter construction. Request and response models live in
 `api/schemas/` and are deliberately separate from both the domain entities and
 the ORM tables — a database column rename must never become a breaking API change.
 
+**Every route says who may call it.** Mount the router in `api/main.py` with the
+permission it needs:
+
+```python
+app.include_router(things.router, dependencies=[Depends(requires(Permission.LOADS_WRITE))])
+```
+
+- A route is protected unless its path is in `PUBLIC_PATHS`. A router mounted
+  without a permission fails `tests/unit/test_api_auth.py`.
+- Ask for a **permission**, never for a role. If none fits, add one to
+  `Permission` and a row to `GRANTS` in `api/security.py`, with its test. That
+  table is the only place where a role is given a meaning.
+- A handler that needs the caller takes `principal: PrincipalDep`.
+- Never log a token, and never put the reason for a refusal in the response:
+  it goes to the log.
+- Add the endpoint's row to the table of [docs/api.md](docs/api.md#2-endpoints).
+  A missing row fails `tests/unit/test_api_reference.py`.
+
+[docs/api.md](docs/api.md) follows a request through the API and lists every
+endpoint; [docs/sign-in.md](docs/sign-in.md) has the Entra ID side.
+
 ### Changing the web app
 
 The app in `frontend/` (React, TypeScript, Vite) is what users open at `/`.
@@ -236,7 +257,12 @@ make frontend-check     # the gate: format, lint, type-check, test, build
 
 - **No business rule in TypeScript.** Validation, messages about data and every
   calculation come from the API. A rule that exists only in the browser is a
-  defect.
+  defect. That includes access: the app shows a section when `GET /api/me`
+  lists its permission, and never works out from a role what a user may do.
+- **Sign-in is behind `AuthClient`** (`frontend/src/auth/authClient.ts`). Only
+  `msalAuthClient.ts` imports Microsoft's library; tests hand the app a
+  stand-in. A new section is a row in `frontend/src/sections.ts`, with its
+  permission, and a route wrapped in `RequirePermission`.
 - **Every text the user sees is a key in `frontend/src/i18n/es.json`.** The
   interface is Spanish; keys, code and comments are English. A key that does not
   exist fails the type-check.
@@ -269,10 +295,11 @@ parses imports statically.
 | `services` | `domain`, `ports`, `core` |
 | `api` / `dashboards` / `pipelines` | as tabled in [docs/architecture.md](docs/architecture.md) — **never each other** |
 
-One exception is decided and not yet in the test:
+One exception, by module:
 [ADR 0005](docs/adr/0005-api-composition-root.md) lets `api/deps.py`, and no
-other `api` module, import adapters. The test changes with the first such
-import.
+other `api` module, import adapters. It is where the API binds adapters to
+ports. The test names that module and fails for an adapter import anywhere else
+in `api`. Another exception needs a decision record of its own.
 
 **If a change requires weakening that test, stop and discuss it in the pull
 request.** The test is load-bearing: the day it is relaxed to make something

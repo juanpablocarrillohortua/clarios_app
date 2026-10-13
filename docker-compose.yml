@@ -235,6 +235,12 @@ services:
       REPORTING_DB_PASSWORD: ${REPORTING_DB_PASSWORD:-}
       REPORTING_BIND_ADDRESS: ${REPORTING_BIND_ADDRESS:-127.0.0.1}
       REPORTING_PORT: ${REPORTING_PORT:-5433}
+      # Sign-in: the tenant and the app registration whose access tokens the API
+      # accepts. Both are public identifiers. Left empty, the API starts and
+      # says that sign-in is not configured. ENTRA_CLIENT_SECRET is deliberately
+      # not passed: the API checks tokens with Entra ID's public keys.
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
+      ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
     networks: [backend]
     depends_on:
       db:

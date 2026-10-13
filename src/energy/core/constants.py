@@ -97,6 +97,16 @@ LAYER_GOLD: Final = "gold"
 REQUEST_ID_HEADER: Final = "X-Request-ID"
 REQUEST_ID_LOG_KEY: Final = "request_id"
 
+# -----------------------------------------------------------------------------
+# Sign-in (Microsoft Entra ID)
+# -----------------------------------------------------------------------------
+# The public cloud's sign-in host. A tenant's authority, token issuer and
+# signing keys all live under it.
+ENTRA_LOGIN_HOST: Final = "https://login.microsoftonline.com"
+# The one scope the app registration exposes ("Expose an API"). The web app
+# asks for a token with it, and the API accepts no token without it.
+ENTRA_API_SCOPE_NAME: Final = "access_as_user"
+
 __all__ = [
     "ALL_SCHEMAS",
     "BRONZE_SCHEMA",
@@ -105,6 +115,8 @@ __all__ = [
     "CANONICAL_TIMEZONE",
     "CONTENT_HASH_ALGORITHM",
     "CONTENT_HASH_LENGTH",
+    "ENTRA_API_SCOPE_NAME",
+    "ENTRA_LOGIN_HOST",
     "GOLD_SCHEMA",
     "LAYER_BRONZE",
     "LAYER_GOLD",

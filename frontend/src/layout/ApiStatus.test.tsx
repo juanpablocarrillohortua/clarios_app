@@ -5,11 +5,16 @@ import { describe, expect, it, vi } from "vitest";
 import { fetchHealth } from "../api/health";
 import es from "../i18n/es.json";
 import { paths } from "../paths";
-import { renderAppAt, stubHealthyApi } from "../test/render";
+import { renderAppAt, stubApi } from "../test/render";
+
+/** The API answers everything as usual, except the health check. */
+function stubHealth(answer: () => Response | Promise<Response>) {
+  return stubApi({ answers: { "/api/health": answer } });
+}
 
 describe("the API status line", () => {
   it("shows the version the API reports", async () => {
-    const fetchStub = stubHealthyApi("1.2.3");
+    const fetchStub = stubApi({ version: "1.2.3" });
     renderAppAt(paths.dashboard);
 
     expect(await screen.findByText(/1\.2\.3/)).toHaveTextContent(
@@ -18,15 +23,15 @@ describe("the API status line", () => {
     expect(fetchStub).toHaveBeenCalledWith("/api/health", expect.anything());
   });
 
-  it("says it is checking until the API answers", () => {
-    vi.stubGlobal("fetch", () => new Promise<Response>(() => {}));
+  it("says it is checking until the API answers", async () => {
+    stubHealth(() => new Promise<Response>(() => {}));
     renderAppAt(paths.dashboard);
 
-    expect(screen.getByRole("status")).toHaveTextContent(es.api.checking);
+    expect(await screen.findByText(es.api.checking)).toHaveRole("status");
   });
 
   it("says the service is unreachable when the request fails", async () => {
-    vi.stubGlobal("fetch", async () => {
+    stubHealth(() => {
       throw new TypeError("network down");
     });
     renderAppAt(paths.dashboard);
@@ -35,7 +40,7 @@ describe("the API status line", () => {
   });
 
   it("says the service is unreachable when the API answers an error", async () => {
-    vi.stubGlobal("fetch", async () => new Response("bad gateway", { status: 502 }));
+    stubHealth(() => new Response("bad gateway", { status: 502 }));
     renderAppAt(paths.dashboard);
 
     expect(await screen.findByText(es.api.offline)).toBeInTheDocument();
@@ -43,10 +48,20 @@ describe("the API status line", () => {
 
   it("says the service is unreachable when the answer is a page, not JSON", async () => {
     // What a proxy that routes /api to the app itself would return.
-    vi.stubGlobal("fetch", async () => new Response("<!doctype html>", { status: 200 }));
+    stubHealth(() => new Response("<!doctype html>", { status: 200 }));
     renderAppAt(paths.dashboard);
 
     expect(await screen.findByText(es.api.offline)).toBeInTheDocument();
+  });
+
+  it("asks without the user's token: the health check is public", async () => {
+    const fetchStub = stubApi();
+    renderAppAt(paths.dashboard);
+
+    await screen.findByText(/0\.0\.0-test/);
+    const [, request] = fetchStub.mock.calls.find(([address]) => address === "/api/health") ?? [];
+
+    expect(request?.headers).toEqual({ Accept: "application/json" });
   });
 });
 

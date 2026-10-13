@@ -1,11 +1,26 @@
 # Frontend plan
 
 **Status:** written 2026-10-11 and built in the increments of section 8.
-Increment 0 closed on 2026-10-12, except that its two ADRs are written but not
-yet merged: the questions of section 9 are answered, and the decisions are
-recorded in [ADR 0004](adr/0004-react-spa-entra-and-embedded-power-bi.md) and
-[ADR 0005](adr/0005-api-composition-root.md). Increment 1, the app skeleton, is
-built.
+Increments 0 to 2 are done, all on 2026-10-12:
+
+- **Increment 0, decisions.** The questions of section 9 are answered, and the
+  decisions are recorded in
+  [ADR 0004](adr/0004-react-spa-entra-and-embedded-power-bi.md) and
+  [ADR 0005](adr/0005-api-composition-root.md).
+- **Increment 1, the app skeleton.** Built, and green in CI.
+- **Increment 2, sign-in and roles.** Built, and checked against the running
+  stack up to Microsoft's sign-in page; signing in as each test user is the
+  owner's check. Its decisions are in
+  [ADR 0006](adr/0006-api-tokens-and-app-roles.md), and
+  [docs/sign-in.md](sign-in.md) is the guide.
+
+The work is on the branch `feature/front-end`; the ADRs reach `main` when it is
+merged.
+
+One decision was added on 2026-10-13, before any Phase 4 work:
+[ADR 0007](adr/0007-figures-reach-people-through-power-bi.md). The API serves no
+analytical figure, and its three KPI placeholders are removed when Phase 4
+starts. Section 3 says what follows for this plan.
 
 The app has two sections: a **dashboard** that embeds the Power BI report, and a
 **data loading** section where users add data that lands in the Bronze layer.
@@ -39,8 +54,9 @@ in the stack for the Phase 5 energy charts but stops being the app's front door.
 | Proxy | Caddy serves `/` from Dash and `/api` from FastAPI, over plain HTTP | `Caddyfile` |
 
 This table describes the repository on 2026-10-11, before increment 0. Since
-then the report has been published to the Power BI Service, and increment 1
-added the JavaScript toolchain and put the app at `/`.
+then the report has been published to the Power BI Service, increment 1 added
+the JavaScript toolchain and put the app at `/`, and increment 2 made the API
+check who is calling.
 
 ### Comparison
 
@@ -94,7 +110,7 @@ The backend plan in sections 5 to 7 is the same either way.
 | Data fetching | TanStack Query | Polling for jobs comes with it |
 | UI kit | Mantine | Stepper, dropzone, forms and notifications in one library |
 | Texts | i18next with `react-i18next` | Spanish, in `frontend/src/i18n/es.json` |
-| Sign-in | `@azure/msal-react` | Microsoft Entra ID |
+| Sign-in | `@azure/msal-browser` | Microsoft Entra ID. Used alone, behind an interface of the app's own ([ADR 0006](adr/0006-api-tokens-and-app-roles.md)); the plan first named `@azure/msal-react` |
 | Power BI | `powerbi-client-react` | Microsoft's official component |
 | Grid | Decided by a short spike in increment 6 | See below |
 | Format and lint | Biome | One tool for both, as ruff is on the Python side |
@@ -157,8 +173,11 @@ flowchart TB
   which dataset types exist and what their columns are, and draws the form and
   the grid from the answer.
 - **API** (`src/energy/api/`). New routers: `datasets` (the specs), `drafts`
-  (upload, edit, validate, commit) and `me` (who is signed in). The `uploads`
-  and `runs` placeholders are implemented for history and status.
+  (upload, edit, validate, commit), `me` (who is signed in and what they may
+  do) and `config` (the settings the app needs before sign-in). The `uploads`
+  and `runs` placeholders are implemented for history and status. The `kpis`
+  placeholders are not: no page of this plan calls them, and Phase 4 removes
+  them (see "One source for figures" below).
 - **Validation layer.** Pure rules and reason detectors in `domain/`, a
   `ValidationService` in `services/`, and lookups against existing data through
   a new port. Details are in section 5.
@@ -183,9 +202,9 @@ The layer rule (`tests/unit/test_architecture.py`) forbids `api` from importing
 bound to ports. Checking a token and validating inside a request both need that
 binding. [ADR 0005](adr/0005-api-composition-root.md) decides it: `api/deps.py`,
 and no other module of `api`, may import adapters, as `pipelines/flows` already
-does. The test changes with the first binding, in increment 2. The rejected
-alternative was to run every validation as a Prefect job, which adds seconds of
-delay to each form submission.
+does. The test changed with the first binding, in increment 2: the adapter that
+checks sign-in tokens. The rejected alternative was to run every validation as
+a Prefect job, which adds seconds of delay to each form submission.
 
 ### Power BI embedding
 
@@ -223,6 +242,32 @@ workspace permissions people already manage.
   longer open the report.
   [ADR 0004](adr/0004-react-spa-entra-and-embedded-power-bi.md) records the risk
   and what to do before that date.
+
+### One source for figures
+
+Every figure a person sees in the app comes from the embedded report: Gold,
+then the views of schema `reporting`, then Power BI. The app draws no chart of
+its own and asks the API for no figure.
+[ADR 0007](adr/0007-figures-reach-people-through-power-bi.md) decides it
+(2026-10-13).
+
+- **The KPI endpoints go.** `/api/kpis`, `/api/kpis/summary` and
+  `/api/kpis/{plant_code}/coverage` are placeholders of the Phase 1 scaffold.
+  No page of this plan calls them. Serving the same figures there and in the
+  report would give them two levels of freshness and two access models. Phase
+  4 removes them and delivers the energy KPIs as `reporting` views instead.
+- **What a load did is asked by run.** The one thing the report cannot show is
+  the effect of a load before its next refresh. The wizard holds a run ID, so
+  that feedback belongs to `/api/runs/{run_id}`.
+- **A figure is as fresh as the last refresh.** On shared capacity, where the
+  workspace is, Microsoft allows a model eight refreshes a day, counting the
+  scheduled ones and those started through the REST API together. The refresh
+  of increment 10 draws on the same eight.
+- **A viewer needs two grants:** the app role, for the dashboard section to
+  appear, and access to the Power BI workspace, for the report to open. They
+  are given separately.
+- **Still to design, in increment 3:** the "data as of" line of the dashboard
+  page. No endpoint provides it today.
 
 ## 4. Pages and user flows
 
@@ -507,23 +552,32 @@ What follows from them:
 ## 7. Security and access control
 
 - **Sign-in.** Microsoft Entra ID, in the project's dedicated tenant (single
-  tenant), through the app registration "Clarios dash". The browser obtains a token with MSAL (authorization code flow
-  with PKCE, no secret); the API checks its signature, issuer and audience on
-  every request and builds the `Principal` that `api/security.py` already
-  defines.
-- **Redirect URIs.** The app registration has two, on different platforms:
+  tenant), through the app registration "Clarios dash". Built in increment 2;
+  [docs/sign-in.md](sign-in.md) is the guide.
+  - The browser signs the user in with MSAL (authorization code flow with PKCE,
+    no secret) and obtains an **access token** for the scope the registration
+    exposes, `access_as_user`.
+  - The API checks that token on every request: its signature, validity
+    period, issuer, tenant, audience and scope. It then builds the `Principal`
+    of `api/security.py`.
+  - The app reads the tenant, the client ID and the scope from the API
+    (`GET /api/config`), which reads them from `.env`. They are in neither the
+    repository nor the app's build.
+- **Redirect URIs.** The app registration has three, on two platforms:
 
   | URI | Platform | Used by |
   |---|---|---|
-  | `http://localhost:8080/redirect.html` | Single-page application | The app. MSAL Browser v5 needs a dedicated redirect page for every flow; with Vite it is `redirect.html` beside `index.html` (increment 2) |
+  | `http://localhost:8080/redirect.html` | Single-page application | The app, after sign-in. MSAL Browser v5 needs a dedicated redirect page for every flow; with Vite it is `redirect.html` beside `index.html` |
+  | `http://localhost:8080/signed-out` | Single-page application | The app, after sign-out. An ordinary app page with a sign-in button |
   | `http://localhost:8080/auth/callback` | Web | Nothing today. It belongs to a server-side flow with the client secret. Caddy answers `/auth/*` itself, so the app never receives it |
 
-  - Entra ID ignores the port of a `localhost` URI, so the first one also
-    covers the Vite development server on port 5173. Never register two
-    `localhost` URIs that differ only by port.
+  - Entra ID ignores the port of a `localhost` URI, so the first two also
+    cover the Vite development server on port 5173. Never register two
+    `localhost` URIs that differ only by port; tell them apart by path.
   - The redirect page must not be served with a
     `Cross-Origin-Opener-Policy` header.
-  - The deployed server adds `https://<host name>/redirect.html`.
+  - The deployed server adds `https://<host name>/redirect.html` and
+    `https://<host name>/signed-out`.
   - `ENTRA_CLIENT_SECRET` stays in `.env`. The app holds no secret, and no
     container receives this one until something needs it.
 - **Roles.** Entra app roles map onto the roles already in the code:
@@ -535,8 +589,20 @@ What follows from them:
   | `engineer` | Void a load, start the update of the figures |
   | `admin` | Manage dataset specs and access |
 
-  The API enforces the role on each endpoint; the frontend only hides what a
-  user cannot do.
+  - A user with no role is signed in and may do nothing: the app shows a
+    no-access page. Nothing is granted by default.
+  - An endpoint asks for a **permission**, and one table in `api/security.py`
+    says which roles grant it. Two exist so far: `dashboard:view` (every role)
+    and `loads:write` (`operator` and above). Each later increment adds the
+    permissions of its own endpoints.
+  - `dashboard:view` makes the app show the dashboard section. It does not
+    decide who sees a figure: Power BI does, by access to the workspace
+    ([ADR 0007](adr/0007-figures-reach-people-through-power-bi.md)).
+  - The API enforces the permission on each route. The app receives the
+    user's permissions from `GET /api/me` and only hides what they cannot do;
+    it holds no rule about roles.
+  - A route is protected unless it is listed as public, and a test fails for a
+    route that answers a caller without a token.
 - **Plant scope.** `Principal.plant_scope` already exists. Today there is one
   plant (`1515`); the check is written once so more plants need no redesign.
 - **Uploads.**
@@ -564,9 +630,9 @@ Each increment is small enough to review and has one test of "done".
 
 | # | Increment | Done when |
 |---|---|---|
-| 0 | **Decisions and prerequisites.** Answer the blocking questions of section 9; write the ADRs (stack, API composition root); register the Entra app; publish the report to a workspace. **Closed 2026-10-12:** the app registration issues a token with its client credentials, a test user signed in and reached `/auth/callback`, and the report is published. The Power BI REST API confirmed the workspace, the report, its binding to the gateway and a completed refresh that day ([docs/powerbi.md](powerbi.md)). Still open: the ADRs are written but not merged | Both ADRs are merged, a test user can sign in to the Entra app, and the report opens in the Power BI Service |
-| 1 | **App skeleton.** `frontend/` with Vite, React and TypeScript; Caddy serves it at `/`; Dash moves to `/dash/`; a CI job lints, type-checks, tests and builds it. **Built 2026-10-12** and verified against the running stack; the CI job has not yet run on a push | `make up` shows the shell with two empty sections at `:8080`, and CI is green |
-| 2 | **Sign-in and roles.** MSAL in the app; token check and role mapping in the API; `GET /api/me` | Without a token the API answers 401; a `viewer` cannot open data loading and an `operator` can |
+| 0 | **Decisions and prerequisites.** Answer the blocking questions of section 9; write the ADRs (stack, API composition root); register the Entra app; publish the report to a workspace. **Closed 2026-10-12:** the app registration issues a token with its client credentials, a test user signed in and reached `/auth/callback`, and the report is published. The Power BI REST API confirmed the workspace, the report, its binding to the gateway and a completed refresh that day ([docs/powerbi.md](powerbi.md)). The ADRs are committed on `feature/front-end` and reach `main` with that branch | Both ADRs are merged, a test user can sign in to the Entra app, and the report opens in the Power BI Service |
+| 1 | **App skeleton.** `frontend/` with Vite, React and TypeScript; Caddy serves it at `/`; Dash moves to `/dash/`; a CI job lints, type-checks, tests and builds it. **Done 2026-10-12:** verified against the running stack, and green in CI | `make up` shows the shell with two empty sections at `:8080`, and CI is green |
+| 2 | **Sign-in and roles.** MSAL in the app; token check and role mapping in the API; `GET /api/me`. Also `GET /api/config`, the permission table, and the rule that a route is protected unless listed as public ([ADR 0006](adr/0006-api-tokens-and-app-roles.md)). **Built 2026-10-12** and checked against the running stack: every guarded route answers 401 without a token and to forged ones, and a signed-out browser is sent to Microsoft with the registered redirect page and the API's scope. That a viewer is kept out of data loading and an operator let in is proved by tests of the API and of the app, with stand-ins for Entra ID; the same check by the two test users in a browser is the owner's | Without a token the API answers 401; a `viewer` cannot open data loading and an `operator` can |
 | 3 | **Dashboard page.** The embedded report with token refresh | A signed-in user sees the report; it still works after the first token expires; a user without workspace access gets a clear message |
 | 4 | **Dataset specs.** YAML for two pilots, one catalogue (`lineas_produccion`) and one export (`qad_facturas`); `GET /api/datasets`; template download | Specs load at startup and fail loudly when malformed; the downloaded template has exactly the headers of the spec |
 | 5 | **Staging, upload and schema checks.** Migration for `staging`; a streaming upload endpoint with the 300 MB limit enforced by the browser, Caddy and the API; streaming variants of the storage and reader ports; file and schema rules; the issues list. A file over 5 MB is archived but answers "not built yet" to validation until increment 12 | A deliberately broken file shows every failure with row, column and rule; the original is archived; Bronze is unchanged; a 300 MB file uploads through Caddy with progress while the API's memory stays flat, and a larger one is refused with a clear message |
@@ -585,7 +651,10 @@ Every question was answered on 2026-10-12. Questions 5 to 15 and 17 were
 confirmed as the plan had assumed them; question 16 changed, from 100 MB to
 300 MB. The decisions that shape the architecture are also in
 [ADR 0004](adr/0004-react-spa-entra-and-embedded-power-bi.md) and
-[ADR 0005](adr/0005-api-composition-root.md).
+[ADR 0005](adr/0005-api-composition-root.md). Three more were taken with
+increment 2 and are in [ADR 0006](adr/0006-api-tokens-and-app-roles.md): the
+app uses `@azure/msal-browser` alone, a user without a role gets a no-access
+page, and the owner makes every change to the app registration.
 
 | # | Question | Decision | Affects |
 |---|---|---|---|
@@ -611,6 +680,14 @@ Two figures in this plan are still assumptions, both to be settled by
 measurement in increment 12: the time allowed to validate a file, and the
 memory the worker needs for a 300 MB one.
 
+One decision came after these answers, on 2026-10-13, and is not one of the
+seventeen questions: the app shows figures through the embedded report only,
+and the API's KPI endpoints are removed in Phase 4
+([ADR 0007](adr/0007-figures-reach-people-through-power-bi.md); "One source for
+figures" in section 3). It leaves one question for Phase 4 to ask the plant:
+how fresh must energy figures be? If the answer is "within minutes", that
+decision is reopened before anything is built.
+
 ## References
 
 - AG Grid, clipboard (Enterprise): <https://www.ag-grid.com/react-data-grid/clipboard/>
@@ -621,6 +698,9 @@ memory the worker needs for a 300 MB one.
 - Microsoft Fabric trial: <https://learn.microsoft.com/en-us/fabric/fundamentals/fabric-trial>
 - Dash `dcc.Upload` and large files: <https://community.plotly.com/t/dash-upload-component-decoding-large-files/8033>
 - Streamlit authentication: <https://docs.streamlit.io/develop/concepts/connections/authentication>
-- In this repository: `docs/powerbi.md`, `docs/data_dictionary.md` (Bronze),
+- Entra ID access tokens and how an API validates them: <https://learn.microsoft.com/en-us/entra/identity-platform/access-tokens>
+- Entra ID app roles: <https://learn.microsoft.com/en-us/entra/identity-platform/howto-add-app-roles-in-apps>
+- In this repository: `docs/sign-in.md`, `docs/powerbi.md`,
+  `docs/data_dictionary.md` (Bronze),
   `docs/architecture.md` (layer rule), `docs/EQUS_CONTEXT.md` (the columns of
   each workbook).

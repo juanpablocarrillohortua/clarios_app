@@ -7,6 +7,9 @@ import { afterEach } from "vitest";
 
 afterEach(() => {
   cleanup();
+  // The app notes in the tab's storage that it started a sign-in. A test must
+  // not inherit that note from the one before.
+  window.sessionStorage.clear();
 });
 
 // jsdom has no layout, so it lacks two browser APIs Mantine's shell reads.

@@ -55,6 +55,60 @@ class ErrorResponse(ResponseModel):
     request_id: str = ""
 
 
+class AuthClientConfig(ResponseModel):
+    """What the web app needs to sign a user in.
+
+    All four values are public: a browser shows them in the address of the
+    sign-in page. None of them is a secret.
+
+    Attributes:
+        tenant_id: the Entra ID tenant users belong to.
+        client_id: the app registration users sign in through.
+        authority: the address the browser is sent to for sign-in.
+        api_scope: the scope to request an access token for. The API accepts
+            only tokens issued for it.
+    """
+
+    tenant_id: str
+    client_id: str
+    authority: str
+    api_scope: str
+
+
+class ClientConfigResponse(ResponseModel):
+    """Settings the web app reads before anyone is signed in.
+
+    Attributes:
+        auth: the sign-in settings, or ``None`` when sign-in is not configured
+            on this server.
+    """
+
+    auth: AuthClientConfig | None
+
+
+class MeResponse(ResponseModel):
+    """The signed-in caller, and what they may do.
+
+    Attributes:
+        subject: the caller's stable identifier in the identity provider.
+        name: display name; ``None`` when the token carries none.
+        username: the name the caller signs in with; ``None`` when the token
+            carries none.
+        roles: the roles assigned to the caller, in alphabetical order.
+        permissions: everything those roles allow, in alphabetical order. The
+            web app shows a section when its permission is listed here; it
+            never interprets ``roles``.
+        plant_scope: the plants the caller may access.
+    """
+
+    subject: str
+    name: str | None
+    username: str | None
+    roles: list[str]
+    permissions: list[str]
+    plant_scope: list[str]
+
+
 class HealthResponse(ResponseModel):
     """Liveness probe payload.
 
@@ -362,7 +416,9 @@ class RunDetailResponse(RunSummary):
 
 
 __all__ = [
+    "AuthClientConfig",
     "CheckResponse",
+    "ClientConfigResponse",
     "ErrorResponse",
     "HealthResponse",
     "IngestAcceptedResponse",
@@ -371,6 +427,7 @@ __all__ = [
     "KPISummaryItem",
     "KPISummaryResponse",
     "LayerCounts",
+    "MeResponse",
     "ReadinessResponse",
     "RejectedReading",
     "RunDetailResponse",

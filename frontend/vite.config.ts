@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
@@ -7,8 +9,17 @@ import { defineConfig } from "vitest/config";
 const STACK_URL = process.env.STACK_URL ?? "http://localhost:8080";
 const STACK_PATHS = ["/api", "/auth", "/dash", "/minio", "/prefect"];
 
+const page = (name: string) => fileURLToPath(new URL(name, import.meta.url));
+
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rolldownOptions: {
+      // Two pages: the app, and the page Microsoft returns to after sign-in
+      // (src/redirect.ts). The dev server serves redirect.html by itself.
+      input: { main: page("index.html"), redirect: page("redirect.html") },
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,

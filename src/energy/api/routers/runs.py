@@ -10,6 +10,9 @@ Responsibility:
     pipeline, because an unscheduled run competing with the nightly flow can
     produce overlapping writes to the same Gold period.
 
+    Every route here needs the permission ``loads:write``. It is attached where
+    the router is mounted, in :mod:`energy.api.main`.
+
 Depends on:
     ``energy.api.deps``, ``energy.api.schemas``,
     ``energy.services.report_service``.
@@ -24,7 +27,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, status
 
-from energy.api.deps import APIKeyDep, SessionDep
+from energy.api.deps import SessionDep
 from energy.api.schemas.responses import RunDetailResponse, RunListResponse
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -102,7 +105,7 @@ async def get_run_quarantine(
 
 
 @router.post("/{run_id}/retry", summary="Retry a failed run", status_code=status.HTTP_202_ACCEPTED)
-async def retry_run(session: SessionDep, run_id: UUID, api_key: APIKeyDep) -> dict[str, object]:
+async def retry_run(session: SessionDep, run_id: UUID) -> dict[str, object]:
     """Re-submit a failed run with its original parameters.
 
     Only failed runs may be retried. Re-running a successful one is refused
@@ -112,7 +115,6 @@ async def retry_run(session: SessionDep, run_id: UUID, api_key: APIKeyDep) -> di
     Args:
         session: injected database session.
         run_id: the failed run to retry.
-        api_key: injected caller credential.
 
     Returns:
         The id of the newly scheduled run.

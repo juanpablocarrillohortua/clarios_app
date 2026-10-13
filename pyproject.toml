@@ -21,6 +21,9 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "python-multipart>=0.0.18",
     "httpx>=0.28",
+    # Checks the signature and claims of the Entra ID access tokens the web app
+    # sends. The `crypto` extra brings the RSA support those tokens need.
+    "pyjwt[crypto]>=2.10",
     # ---- Models & configuration -----------------------------------------
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
