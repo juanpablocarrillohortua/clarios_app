@@ -323,6 +323,12 @@ rows. The API serves no analytical figure: its three KPI endpoints are
 placeholders of the Phase 1 scaffold, and Phase 4 removes them
 ([ADR 0007](adr/0007-figures-reach-people-through-power-bi.md)).
 
+The last arrow does not pass through this stack. The browser loads the report
+from the Power BI Service, with the signed-in user's own token for Power BI;
+the API only tells the app which report to ask for
+([ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md)). What the
+report shows is the copy Power BI took at its last refresh.
+
 Dash, if Phase 5 keeps it, reads inside its own process:
 
 ```
@@ -493,6 +499,7 @@ internal.
 - [ADR 0005](adr/0005-api-composition-root.md) — why `api/deps.py` may import adapters
 - [ADR 0006](adr/0006-api-tokens-and-app-roles.md) — which token the API accepts, and how roles become permissions
 - [ADR 0007](adr/0007-figures-reach-people-through-power-bi.md) — why figures reach people through Power BI only, and the API's KPI endpoints are removed
+- [ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md) — how the dashboard embeds the report with the user's own Power BI token
 - [The API](api.md) — what it is in plain words, every endpoint, the token check, the errors, how the web app calls it
 - [Sign-in and roles](sign-in.md) — the app registration, giving someone access, troubleshooting
 - [Frontend plan](frontend-plan.md) — the web app's design and its increments

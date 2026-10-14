@@ -11,12 +11,32 @@ export interface Account {
   username: string;
 }
 
+/** An access token for a service, and when that service stops accepting it. */
+export interface ServiceToken {
+  token: string;
+  expiresAt: Date;
+}
+
+/**
+ * The identity provider cannot give a token without the user: consent is
+ * missing, a second factor is asked for, or the session ended.
+ */
+export class InteractionNeeded extends Error {
+  constructor(
+    /** The provider's code for why, for example "consent_required". */
+    readonly code: string,
+  ) {
+    super(`the identity provider needs the user (${code})`);
+    this.name = "InteractionNeeded";
+  }
+}
+
 export interface AuthClient {
   /** Who is signed in in this browser tab, or null. */
   readonly account: Account | null;
   /**
-   * Why the return from the sign-in page failed, as the provider's error
-   * code; null when it did not fail.
+   * Why the last return from the provider's pages failed, as the provider's
+   * error code; null when it did not fail.
    */
   readonly signInError: string | null;
   /**
@@ -31,7 +51,32 @@ export interface AuthClient {
    * cannot be renewed without the user, the browser is sent to sign in again.
    */
   getApiToken(): Promise<string>;
+  /**
+   * An access token for another service the user may use, such as Power BI,
+   * from the same sign-in. With `fresh`, a new token is asked for even while
+   * the one held is still valid.
+   *
+   * It never sends the browser away. When the provider needs the user it
+   * rejects with InteractionNeeded, and the page offers authorizeService().
+   */
+  getServiceToken(scope: string, options?: { fresh?: boolean }): Promise<ServiceToken>;
+  /**
+   * Send the browser to the provider, to give consent for that service or to
+   * confirm the session. The page unloads.
+   */
+  authorizeService(scope: string): Promise<void>;
+}
+
+export interface AuthClientOptions {
+  /**
+   * Scopes of other services to ask consent for at sign-in, so that a consent
+   * screen, when there is one, is shown once and not once per service.
+   */
+  extraScopes?: readonly string[];
 }
 
 /** Builds the client once the app knows the sign-in settings. */
-export type CreateAuthClient = (config: AuthConfig) => Promise<AuthClient>;
+export type CreateAuthClient = (
+  config: AuthConfig,
+  options?: AuthClientOptions,
+) => Promise<AuthClient>;

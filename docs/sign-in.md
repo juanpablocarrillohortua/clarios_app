@@ -87,14 +87,27 @@ These are the settings the code depends on:
 | Expose an API | Scope | `access_as_user`, enabled, admins and users may consent |
 | Manifest | `requestedAccessTokenVersion` | `2` |
 | App roles | Values | `viewer`, `operator`, `engineer`, `admin`, for users |
+| API permissions | Power BI Service, delegated | `Report.Read.All`, with admin consent granted. The dashboard uses it to show the report with the user's own Power BI token ([powerbi.md](powerbi.md#the-report-inside-the-web-app)) |
+| API permissions | Microsoft Graph, delegated | `User.Read`, which a registration has from the start. Admin consent granted |
 | Enterprise apps > Properties | Assignment required | No. A user without a role then reaches the app's own no-access page |
 
-They were read back on 2026-10-12 with the Azure CLI, read-only, and matched
-this table.
+They were read back with the Azure CLI, read-only, and matched this table: on
+2026-10-12, and on 2026-10-13 for the two rows of API permissions.
 
-Three rules are easy to break:
+**To add the Power BI permission again** (after registering the app anew, for
+example): **API permissions > Add a permission > Microsoft APIs > Power BI
+Service > Delegated permissions > Report > `Report.Read.All` > Add
+permissions**, then **Grant admin consent** on the same page. The permission
+does not require an administrator: a user may consent to it. Admin consent is
+granted so that nobody is asked.
+
+Four rules are easy to break:
 
 - **The role values are exact.** `Operator` or `operators` grants nothing.
+- **Sign-in asks for the Power BI permission too,** so that its consent is
+  given on the same screen as the app's own. Removing `Report.Read.All` from
+  the registration while `POWERBI_*` is set in `.env` can therefore stop
+  sign-in for everyone, in a tenant where users may not consent themselves.
 - **Never register two `localhost` URIs that differ only by port.** Entra ID
   ignores the port of a `localhost` URI, so the two above already cover the dev
   server on port 5173. Tell URIs apart by their path.
@@ -210,6 +223,8 @@ The app's texts are Spanish. They are named here by their key in
 | Microsoft shows `AADSTS50011`, the redirect URI does not match | The app was opened under an address that is not registered, such as `127.0.0.1` or a host name | Open it as `http://localhost:8080`, or register the address (see "On a server with a host name") |
 | Microsoft shows `AADSTS50105`, the user is not assigned to a role | "Assignment required" was switched on for the enterprise app | Assign the user a role, or switch it off |
 | Microsoft shows `AADSTS65001`, consent is needed | The scope does not allow users to consent, or the tenant forbids it | Grant admin consent for `access_as_user` under API permissions |
+| Microsoft shows `AADSTS90094` or asks for an administrator's approval | Consent for the Power BI permission is missing, and users may not give it | Grant admin consent under API permissions ("The app registration", above) |
+| The dashboard asks to continue with Microsoft (`dashboard.problem.authorize`) | Microsoft will not issue the Power BI token without the user | Press the button. [powerbi.md](powerbi.md#what-the-messages-mean) lists the causes |
 | The app says that sign-in is not configured (text `problem.notConfigured`) | `ENTRA_TENANT_ID` or `ENTRA_CLIENT_ID` is empty in `.env`, or the API was not restarted after it changed | Fill both, then `make up` |
 | The app shows its no-access page (`noAccess`) to a user who was given a role | The user's token is older than the assignment, or the role value is misspelt | Sign out and in. Check the role's value in the registration |
 | The app says the session was not accepted (`problem.sessionRefused`) | The API refused the token. The log says why | See the next three rows |
@@ -226,11 +241,13 @@ The app's texts are Spanish. They are named here by their key in
 
 - [The API](api.md) — what it is in plain words, every endpoint, the token
   check, the errors, and how the app calls it.
-- [ADR 0004](adr/0004-react-spa-entra-and-embedded-power-bi.md) and
-  [ADR 0006](adr/0006-api-tokens-and-app-roles.md) — the decisions.
-- [frontend-plan.md](frontend-plan.md) — section 7, and increment 2.
-- [powerbi.md](powerbi.md) — the report users will open with the same sign-in
-  (increment 3).
+- [ADR 0004](adr/0004-react-spa-entra-and-embedded-power-bi.md),
+  [ADR 0006](adr/0006-api-tokens-and-app-roles.md) and
+  [ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md) — the
+  decisions.
+- [frontend-plan.md](frontend-plan.md) — section 7, and increments 2 and 3.
+- [powerbi.md](powerbi.md) — the report users open with the same sign-in, and
+  what a viewer needs besides a role.
 - Microsoft, access tokens: <https://learn.microsoft.com/en-us/entra/identity-platform/access-tokens>
 - Microsoft, app roles: <https://learn.microsoft.com/en-us/entra/identity-platform/howto-add-app-roles-in-apps>
 - Microsoft, the redirect page of MSAL Browser 5: <https://learn.microsoft.com/en-us/entra/msal/javascript/browser/redirect-bridge>

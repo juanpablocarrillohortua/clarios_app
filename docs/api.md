@@ -37,7 +37,8 @@ answers.
 
 The web app holds no data, and it takes no decision about who may see what. It
 draws its screens from the API's answers, with one exception: the dashboard
-will show a Power BI report, and Power BI gets its figures another way.
+shows a Power BI report, which the browser loads from Power BI itself, and
+Power BI gets its figures another way.
 
 The API is one of three ways into the database, and the only one the web app
 uses:
@@ -182,9 +183,14 @@ flowchart LR
 - **The report is as fresh as its last refresh.** Power BI keeps a copy of the
   data. A refresh needs the server, the door and the gateway all running, and
   none is scheduled yet.
-- **Where this is going.** The dashboard section of the web app will show this
-  report inside the page. Its figures will still come from Power BI, not from
-  the API.
+- **The web app shows this report** inside its dashboard section. The browser
+  loads it from Power BI directly, with a second pass that Microsoft issues for
+  Power BI at the same sign-in. Neither the report nor its figures pass through
+  the API: the API only tells the app which report to ask for.
+- **Seeing it therefore takes three things,** given separately: a role in the
+  app, access to the report's workspace in Power BI, and a Power BI licence.
+  Someone who lacks one of the last two gets a message saying so in place of
+  the report.
 
 [Connecting Power BI to the database](powerbi.md) is the guide to this path.
 
@@ -194,13 +200,13 @@ flowchart LR
 |---|---|
 | **Works** | Signing in, and the answer to "who am I, and what may I do?" |
 | **Works** | The health checks: is the API running, and can it reach the database? |
-| **Works** | The sign-in settings the app reads when it starts |
+| **Works** | The settings the app reads when it starts: where users sign in, and which report the dashboard shows |
 | **Works, outside the API** | Loading the exports and calculating the figures, by commands on the server |
 | **Works, outside the API** | Power BI reading the equivalent batteries through the reporting views |
 | **Defined, not built** | Loading a file from the web app, and the list of past loads |
 | **Defined, not built** | The history of processing runs |
 | **Defined, not built** | Readings sent by the plant's devices |
-| **Planned** | The Power BI report shown inside the web app's dashboard |
+| **Built, outside the API** | The Power BI report shown inside the web app's dashboard. Built on 2026-10-13; seeing it as a signed-in user is still to be checked in a browser |
 | **Planned** | Energy indicators (KPIs), shown in that same report |
 | **Will be removed** | Energy indicators served by the API. They were defined before the report existed, and no screen needs them |
 
@@ -297,7 +303,7 @@ refused, and how the app and Entra ID take part.
 |---|---|---|---|
 | `GET /api/health` | Anyone | Built | That the process is alive, with its name, version and environment. It touches nothing outside the process |
 | `GET /api/ready` | Anyone | Built | Each dependency check by name. 200 when healthy or degraded, 503 when unhealthy |
-| `GET /api/config` | Anyone | Built | The sign-in settings for the app, or `"auth": null` when there are none |
+| `GET /api/config` | Anyone | Built | The app's settings: where to sign in (`"auth"`) and which Power BI report the dashboard shows (`"powerbi"`). Each is `null` when it is not configured |
 | `GET /api/me` | Any signed-in person, with or without a role | Built | Who the caller is and what they may do |
 | `GET /api/kpis` | `dashboard:view` | Placeholder. To be removed in Phase 4 | One KPI as a time series for one plant |
 | `GET /api/kpis/summary` | `dashboard:view` | Placeholder. To be removed in Phase 4 | The latest value of every KPI |
@@ -353,12 +359,26 @@ refused, and how the app and Entra ID take part.
     "client_id": "22222222-2222-4222-8222-222222222222",
     "authority": "https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111",
     "api_scope": "api://22222222-2222-4222-8222-222222222222/access_as_user"
+  },
+  "powerbi": {
+    "workspace_id": "44444444-4444-4444-8444-444444444444",
+    "report_id": "55555555-5555-4555-8555-555555555555",
+    "scope": "https://analysis.windows.net/powerbi/api/Report.Read.All",
+    "report_api_url": "https://api.powerbi.com/v1.0/myorg/groups/44444444-4444-4444-8444-444444444444/reports/55555555-5555-4555-8555-555555555555",
+    "report_web_url": "https://app.powerbi.com/groups/44444444-4444-4444-8444-444444444444/reports/55555555-5555-4555-8555-555555555555"
   }
 }
 ```
 
-None of the four values is a secret: a browser shows them in the address of
-Microsoft's sign-in page.
+- **`auth`** is `null` when `ENTRA_TENANT_ID` and `ENTRA_CLIENT_ID` are not
+  both set, and **`powerbi`** is `null` when `POWERBI_WORKSPACE_ID` and
+  `POWERBI_REPORT_ID` are not both set. Neither depends on the other.
+- **None of the values is a secret.** A browser shows the first four in the
+  address of Microsoft's sign-in page, and the two Power BI identifiers in the
+  address of the report. The identifiers open nothing without the token of a
+  user who has access to the workspace.
+- **The API does not call Power BI.** `report_api_url` is where the *browser*
+  asks Power BI for the report, with the user's own token (section 9).
 
 `GET /api/me`, for an operator
 
@@ -614,10 +634,10 @@ docker compose logs api | grep <request id>
 | File | Does |
 |---|---|
 | [`frontend/src/api/client.ts`](../frontend/src/api/client.ts) | `createApi(auth).get(path)`: asks the sign-in client for a token, calls `/api` + `path` with `Authorization: Bearer`, and throws `ApiError(status, code)` for an answer that is not a success |
-| [`frontend/src/api/config.ts`](../frontend/src/api/config.ts) | `fetchClientConfig()`: `GET /api/config`, without a token |
+| [`frontend/src/api/config.ts`](../frontend/src/api/config.ts) | `fetchClientConfig()`: `GET /api/config`, without a token. Its answer also names the report of the dashboard |
 | [`frontend/src/api/me.ts`](../frontend/src/api/me.ts) | `fetchMe(api)`: `GET /api/me`, with the token |
 | [`frontend/src/api/health.ts`](../frontend/src/api/health.ts) | `fetchHealth()`: `GET /api/health`, without a token. The status line of the header asks every 30 seconds |
-| [`frontend/src/auth/msalAuthClient.ts`](../frontend/src/auth/msalAuthClient.ts) | The only file that imports Microsoft's library. `getApiToken()` returns the token from the tab's cache, or renews it |
+| [`frontend/src/auth/msalAuthClient.ts`](../frontend/src/auth/msalAuthClient.ts) | The only file that imports Microsoft's sign-in library. `getApiToken()` returns the token from the tab's cache, or renews it. `getServiceToken()` does the same for another service, which is how the dashboard gets its Power BI token |
 | [`frontend/src/auth/Session.tsx`](../frontend/src/auth/Session.tsx) | Starts the session. Nothing of the app is drawn before it has finished |
 
 **Starting up.** `Session.tsx` learns three things in order, and each one that
@@ -626,7 +646,7 @@ in `frontend/src/i18n/es.json`.
 
 | # | What | How | When it fails |
 |---|---|---|---|
-| 1 | The sign-in settings | `GET /api/config` | No answer: `problem.unreachable`, with a retry button. `"auth": null`: `problem.notConfigured` |
+| 1 | The sign-in settings, and the report of the dashboard | `GET /api/config` | No answer: `problem.unreachable`, with a retry button. `"auth": null`: `problem.notConfigured`. `"powerbi": null` stops nothing: only the dashboard section says that the report is not configured |
 | 2 | Who is signed in in this tab | MSAL, from the tab's storage or from Microsoft's answer. No call to the API | MSAL cannot start: `problem.cannotStart`. Nobody signed in: the browser goes to Microsoft, once per tab. Back without an account: the sign-in page (`signIn`), which waits for a click, so a failure cannot loop |
 | 3 | What that person may do | `GET /api/me` | 401: `problem.sessionRefused`. Any other failure: `problem.unreachable`. An empty permission list: the no-access page (`noAccess`) |
 
@@ -650,6 +670,9 @@ API helper, and the answer of `/api/me`.
   from another address.
 - **Only `GET` exists in the client so far.** Sending a file arrives with the
   data-loading increments of [the frontend plan](frontend-plan.md).
+- **The dashboard asks the API for nothing more.** Once it knows which report
+  to show, it talks to Entra ID and to Power BI (section 9, "The report inside
+  the web app").
 
 ### 9. What does not go through the API
 
@@ -706,23 +729,74 @@ diagram, the setup and the troubleshooting. What matters next to the API:
   until the next refresh. A refresh needs the stack, the bridge and the gateway
   all running. None is scheduled.
 
+#### The report inside the web app
+
+Built on 2026-10-13 (increment 3 of the frontend plan,
+[ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md)). That a signed-in
+user sees the report was not checked by a session: it needs a browser, and is
+the owner's check. [The frontend plan](frontend-plan.md#10-increment-3-in-detail-the-dashboard-page)
+has the checklist, and [docs/powerbi.md](powerbi.md#the-report-inside-the-web-app)
+what a viewer needs and what each message means.
+
+The dashboard section shows the published report in the model Microsoft calls
+"embed for your organization". It is not a new way into the database: the
+report shows the copy of the data that Power BI took at its last refresh.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser, the web app
+    participant A as API
+    participant E as Microsoft Entra ID
+    participant P as Power BI Service
+
+    B->>A: GET /api/config
+    A-->>B: which report, and the scope to ask for
+    B->>E: token request for the Power BI scope, without the user
+    E-->>B: access token for Power BI, as the signed-in user
+    B->>P: GET the report, with that token
+    P-->>B: the address to embed it from, or a refusal
+    B->>P: the report's frame, with the token
+    Note over B,P: before the token expires, the page hands the frame a new one
+```
+
+- **The API's whole part is step 1 and 2:** it tells the app which report to
+  ask for. It never calls Power BI and holds no Power BI secret.
+- **A second token, from the same sign-in.** It carries one delegated
+  permission, `Report.Read.All`: read the reports this user may already open.
+  The API's own token is not accepted by Power BI, nor Power BI's by the API.
+- **Access is decided twice, by two parties.** The app shows the section to a
+  holder of `dashboard:view`. Power BI shows the report to the people in its
+  workspace who hold a Power BI licence. The app cannot widen that.
+- **The app only reads.** `GET` is the only method it sends to Power BI.
+- **The token is kept fresh while the report is open,** so a report left on
+  screen does not go blank after an hour.
+- **A refusal becomes a message,** one per cause: no access to the workspace,
+  report not found, Power BI unreachable, Microsoft needing the user again.
+  `frontend/src/powerbi/reportProblem.ts` is where each of Power BI's answers
+  is given its meaning.
+- **Silence is not taken for a refusal.** When Power BI's frame reports
+  nothing for a minute, the frame stays in view and a line above it offers to
+  start over: whatever Power BI drew there remains readable.
+
+| File | Does |
+|---|---|
+| [`frontend/src/pages/DashboardPage.tsx`](../frontend/src/pages/DashboardPage.tsx) | The section: fetches the token, the report's address and the embedding library, draws the report, and shows a message when it cannot |
+| [`frontend/src/powerbi/reportLookup.ts`](../frontend/src/powerbi/reportLookup.ts) | The `GET` to Power BI's REST API |
+| [`frontend/src/powerbi/reportProblem.ts`](../frontend/src/powerbi/reportProblem.ts) | What each refusal means |
+| [`frontend/src/powerbi/tokenRenewal.ts`](../frontend/src/powerbi/tokenRenewal.ts) | Replaces the token before it expires |
+| [`frontend/src/powerbi/powerBiReportEmbed.ts`](../frontend/src/powerbi/powerBiReportEmbed.ts) | The only file that imports Microsoft's embedding library, `powerbi-client` |
+
 #### What is planned
 
-None of these is built. The first two are decisions of
-[the frontend plan](frontend-plan.md#power-bi-embedding), and the third of
-[ADR 0007](adr/0007-figures-reach-people-through-power-bi.md).
+Neither of these is built. The first is a decision of
+[ADR 0007](adr/0007-figures-reach-people-through-power-bi.md), and the second of
+[the frontend plan](frontend-plan.md#power-bi-embedding).
 
 - **Phase 4, the energy KPIs.** They reach people as new views of schema
   `reporting`, each row with its `coverage`, shown in the same report. The API
   serves no analytical figure: its three KPI endpoints are removed. What a load
   did, before the report is refreshed, is asked by run (`/api/runs/…`).
-- **Increment 3, the dashboard page.** The published report is embedded in the
-  app, in the model Microsoft calls "embed for your organization". The browser
-  obtains a second token from Entra ID, this one for the Power BI Service, and
-  loads the report from the Service. The report's data does not pass through
-  the API, and the plan lists no backend work for it. Access is then decided
-  twice: the app shows the section to a holder of `dashboard:view`, and Power
-  BI shows the report to the people with access to its workspace.
 - **Increment 10, updating the figures.** After a load, a job rebuilds Silver,
   refreshes Gold, and then asks Power BI to refresh the model. That will be the
   first time the platform itself calls Power BI. On shared capacity, where the
@@ -739,6 +813,8 @@ embed tokens, and a secret on the server. It is not decided.
 |---|---|---|
 | `ENTRA_TENANT_ID` | empty | The tenant whose tokens are accepted. A GUID |
 | `ENTRA_CLIENT_ID` | empty | The app registration tokens must be issued for. A GUID |
+| `POWERBI_WORKSPACE_ID` | empty | The Power BI workspace of the report the dashboard shows. A GUID |
+| `POWERBI_REPORT_ID` | empty | That report. A GUID |
 | `API_ROOT_PATH` | `/api` | The prefix Caddy removes. It must equal the Caddyfile's route |
 | `API_CORS_ORIGINS` | `http://localhost` | Other origins allowed to call the API from a browser, separated by commas |
 | `API_KEY_HEADER` | `X-API-Key` | The header devices will present their key in |
@@ -747,13 +823,19 @@ embed tokens, and a secret on the server. It is not decided.
 - With either `ENTRA_*` value empty the stack still starts. The public routes
   answer, a request with a token gets 503 `auth_not_configured`, and the app
   says that sign-in is not configured.
+- With either `POWERBI_*` value empty the stack starts too, and everything
+  works but the dashboard, which says that the report is not configured. The
+  API only passes the two values on: it does not check that the report exists.
+- A value of the four that is not a GUID stops the API at start.
 - The API reads its environment at start: after a change, `make up`.
 - The `api` container needs outbound HTTPS access to
-  `login.microsoftonline.com`.
+  `login.microsoftonline.com`. It needs none to Power BI: the browser does.
 - `ENTRA_CLIENT_SECRET` is read by nothing, and no container receives it.
 
-Where the two identifiers come from, and every setting of the app registration,
-is in [Sign-in and roles](sign-in.md#the-app-registration).
+Where the Entra identifiers come from, and every setting of the app
+registration, is in [Sign-in and roles](sign-in.md#the-app-registration). Where
+the Power BI identifiers come from is in
+[Connecting Power BI to the database](powerbi.md#the-report-inside-the-web-app).
 
 ### 11. Trying it by hand
 
@@ -786,6 +868,8 @@ ticket, a chat or this repository.
 | `tests/unit/test_architecture.py` | That `api/deps.py`, and no other module of `api`, imports an adapter |
 | `tests/integration/test_health_endpoint.py` | `/health` and `/ready` against a real database, and the 501 of a placeholder |
 | `frontend/src/auth/Session.test.tsx`, `msalAuthClient.test.ts` | The app's start-up, each failure page, and the calls to MSAL, with stand-ins for both |
+| `tests/unit/test_settings.py` | The settings, among them the two that name the report: empty means not configured, and a value that is not a GUID is refused |
+| `frontend/src/pages/DashboardPage.test.tsx`, `frontend/src/powerbi/*.test.ts` | The dashboard: the report shown, its token replaced, and each message, with stand-ins for sign-in and for Power BI. One file runs Microsoft's embedding library itself, in a test browser that loads nothing |
 
 - **Tests never reach Entra ID.** The fixture `token_verifier` replaces the
   bound adapter through `app.dependency_overrides`, and
@@ -814,6 +898,12 @@ ticket, a chat or this repository.
   as fresh as the report's last refresh.
 - **The command line and Power BI are outside this sign-in** (section 9). What
   protects them is access to the machine, and the limits of Power BI's login.
+- **The report in the dashboard was not seen by a session.** It is built and
+  tested with stand-ins for Microsoft. Seeing it as a signed-in user, and
+  seeing it outlive its first token, are the owner's checks in a browser.
+- **How Power BI refuses a user without a licence is not known.** That user
+  gets the general refusal message, which names the licence, until the answer
+  has been seen.
 - **Device keys.** `security.hash_api_key` and `verify_api_key` are
   placeholders, and the device routes are open (section 2).
 - **Filtering by plant.** Every person sees the one plant.
@@ -840,6 +930,8 @@ ticket, a chat or this repository.
   accepts, and how roles become permissions.
 - [ADR 0007](adr/0007-figures-reach-people-through-power-bi.md) — why the API
   serves no figure, and what Phase 4 removes.
+- [ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md) — how the
+  dashboard embeds the report: the permission, the token, the library.
 - [Architecture](architecture.md) — the layers, and where the API sits among
   them.
 - [Frontend plan](frontend-plan.md) — the web app's design and its increments.

@@ -302,6 +302,9 @@ with `openssl rand -hex 32`.
 | `REPORTING_DB_PASSWORD` | Its password | *(none)* | For `make powerbi` |
 | `REPORTING_BIND_ADDRESS` | Where the opt-in bridge listens | `127.0.0.1` | No |
 | `REPORTING_PORT` | Host port of the bridge | `5433` | No |
+| **Power BI (the report in the web app)** |
+| `POWERBI_WORKSPACE_ID` | The workspace the published report is in. An identifier, not a secret | *(none)* | To show the report |
+| `POWERBI_REPORT_ID` | The report the dashboard shows | *(none)* | To show the report |
 | **Orchestration** |
 | `PREFECT_API_URL` | Prefect API the worker talks to | `http://prefect-server:4200/api` | No |
 | `PREFECT_SERVER_API_HOST` | Server bind interface | `0.0.0.0` | No |
@@ -361,7 +364,7 @@ clarios-energy-prefect-worker-1  prefect-worker   Up 2 minutes (healthy)
 | API health | <http://localhost:8080/api/health> | `{"status":"ok",...}` |
 | API readiness | <http://localhost:8080/api/ready> | Per-dependency health |
 | **API docs** | <http://localhost:8080/api/docs> | Interactive OpenAPI UI |
-| **Web app** | <http://localhost:8080/> | Microsoft's sign-in, then the app's shell with the sections your role allows. Use `localhost`, not `127.0.0.1`. With `ENTRA_*` empty, a page saying that sign-in is not configured ([docs/sign-in.md](docs/sign-in.md)) |
+| **Web app** | <http://localhost:8080/> | Microsoft's sign-in, then the app's shell with the sections your role allows. Use `localhost`, not `127.0.0.1`. With `ENTRA_*` empty, a page saying that sign-in is not configured ([docs/sign-in.md](docs/sign-in.md)). The dashboard shows the published Power BI report; with `POWERBI_*` empty it says that the report is not configured ([docs/powerbi.md](docs/powerbi.md)) |
 | **Dash** | <http://localhost:8080/dash/> | Holding page until the Phase 5 energy charts |
 | **Prefect UI** | <http://localhost:8080/prefect/> | Flow runs and work pools |
 | **MinIO console** | <http://localhost:8080/minio/> | Log in with `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |

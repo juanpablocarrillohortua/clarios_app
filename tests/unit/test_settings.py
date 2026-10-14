@@ -12,7 +12,13 @@ from __future__ import annotations
 
 import pytest
 
-from energy.core.settings import ArchiveSettings, DashSettings, EntraSettings, EqusSettings
+from energy.core.settings import (
+    ArchiveSettings,
+    DashSettings,
+    EntraSettings,
+    EqusSettings,
+    PowerBISettings,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -204,3 +210,74 @@ def test_the_client_secret_is_not_read(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not [name for name in EntraSettings.model_fields if "secret" in name]
     assert "a-secret-that-must-stay-put" not in settings.model_dump_json()
     assert "a-secret-that-must-stay-put" not in repr(settings)
+
+
+WORKSPACE = "44444444-4444-4444-8444-444444444444"
+REPORT = "55555555-5555-4555-8555-555555555555"
+POWERBI_VARIABLES = ("POWERBI_WORKSPACE_ID", "POWERBI_REPORT_ID")
+
+
+def test_the_report_is_not_configured_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fresh clone names no report: the stack starts and the dashboard says so."""
+    for name in POWERBI_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+
+    settings = PowerBISettings(_env_file=None)
+
+    assert settings.is_configured is False
+    assert settings.workspace_id is None
+    assert settings.report_id is None
+    assert settings.report_api_url is None
+    assert settings.report_web_url is None
+
+
+@pytest.mark.parametrize("name", POWERBI_VARIABLES)
+@pytest.mark.parametrize("empty", ["", "   "])
+def test_one_empty_report_identifier_leaves_the_report_unconfigured(
+    monkeypatch: pytest.MonkeyPatch, name: str, empty: str
+) -> None:
+    """Half a configuration is none: no address is built from one identifier."""
+    monkeypatch.setenv("POWERBI_WORKSPACE_ID", WORKSPACE)
+    monkeypatch.setenv("POWERBI_REPORT_ID", REPORT)
+    monkeypatch.setenv(name, empty)
+
+    settings = PowerBISettings(_env_file=None)
+
+    assert settings.is_configured is False
+    assert settings.report_api_url is None
+    assert settings.report_web_url is None
+
+
+def test_the_report_identifiers_give_its_two_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both addresses are derived, so the app is never told two different reports."""
+    # Upper case and padded, as a careless paste would leave them.
+    monkeypatch.setenv("POWERBI_WORKSPACE_ID", f" {WORKSPACE.upper()} ")
+    monkeypatch.setenv("POWERBI_REPORT_ID", REPORT.upper())
+
+    settings = PowerBISettings(_env_file=None)
+
+    assert settings.is_configured is True
+    assert settings.workspace_id == WORKSPACE
+    assert settings.report_id == REPORT
+    assert settings.report_api_url == (
+        f"https://api.powerbi.com/v1.0/myorg/groups/{WORKSPACE}/reports/{REPORT}"
+    )
+    assert settings.report_web_url == (
+        f"https://app.powerbi.com/groups/{WORKSPACE}/reports/{REPORT}"
+    )
+
+
+@pytest.mark.parametrize("name", POWERBI_VARIABLES)
+@pytest.mark.parametrize("value", ["test", "Clarios Energy", "1234"])
+def test_a_report_identifier_must_be_a_guid(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    """A name is refused: a report can be renamed, and its identifier cannot."""
+    from pydantic import ValidationError  # noqa: PLC0415
+
+    monkeypatch.setenv("POWERBI_WORKSPACE_ID", WORKSPACE)
+    monkeypatch.setenv("POWERBI_REPORT_ID", REPORT)
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValidationError):
+        PowerBISettings(_env_file=None)

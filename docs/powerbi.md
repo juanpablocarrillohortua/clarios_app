@@ -9,6 +9,9 @@ Power BI reads the equivalent batteries straight from PostgreSQL, in two ways:
 Both use one login of their own, `powerbi`, which can read the views of schema
 `reporting` and nothing else.
 
+The published report is also what the web app shows in its dashboard section:
+see [The report inside the web app](#the-report-inside-the-web-app).
+
 ```mermaid
 flowchart LR
     PBI["Power BI Desktop<br/>this PC"] -->|"127.0.0.1:5433<br/>login powerbi"| BR["reporting-bridge<br/>opt-in container"]
@@ -232,6 +235,7 @@ known:
 | Latest refresh | On demand, completed on 2026-10-12 at 15:59 UTC, in 12 seconds | API |
 | Scheduled refresh | Disabled | API |
 | The report opens in the Service | Yes | Owner. The API confirms that the report exists, not that it renders |
+| Members of the workspace | One, the admin account, on 2026-10-13 | API |
 | A refresh needs the bridge | `127.0.0.1:5433` is the port that `make powerbi` opens | Owner. `docker-compose.yml` publishes that port from `reporting-bridge` only |
 
 **How this was checked.** With read-only `GET` calls to the Power BI REST API
@@ -342,6 +346,136 @@ settings, the machine, the stack, the bridge and the gateway must all be running
 at those times. Increment 10 of [the frontend plan](frontend-plan.md) makes the
 app ask for a refresh after each load.
 
+## The report inside the web app
+
+The dashboard section of the web app shows the published report, inside the
+page. It was built on 2026-10-13 (increment 3 of
+[the frontend plan](frontend-plan.md#10-increment-3-in-detail-the-dashboard-page),
+[ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md)). Seeing it as a
+signed-in user is checked in a browser, by the owner; the plan has the
+checklist.
+
+```mermaid
+flowchart LR
+    B["Browser<br/>the web app"] -->|"1. which report?"| A["API<br/>GET /api/config"]
+    B -->|"2. a token for Power BI,<br/>as the signed-in user"| E["Microsoft Entra ID"]
+    B -->|"3. the report,<br/>with that token"| P["Power BI Service"]
+    P --> M["semantic model<br/>the copy of the last refresh"]
+```
+
+- **The browser loads the report from the Power BI Service,** with a token
+  Microsoft issues for the signed-in user. The API only says which report; it
+  never calls Power BI, and the report's data never passes through it.
+- **The report shows the model's copy of the data,** as it does in the Service:
+  as fresh as the last refresh ([Refreshing](#refreshing)). With the machine
+  off, it still opens.
+- **The app only reads.** It sends Power BI nothing but `GET` requests.
+
+### What a viewer needs
+
+Three things, given separately. Removing any one takes the report away.
+
+| # | What | Where it is given | Without it |
+|---|---|---|---|
+| 1 | A role in the app | Entra admin center, **Enterprise apps > Clarios dash > Users and groups** ([Sign-in and roles](sign-in.md#giving-someone-access)) | The app shows its no-access page |
+| 2 | Access to the workspace | Power BI Service: **Workspaces > Clarios Energy > Manage access > Add people or groups**, role **Viewer** | The dashboard says that the account has no access to the workspace |
+| 3 | A Power BI licence: Pro, Premium Per User, or a trial | Microsoft 365 admin center: **Users > Active users**, the user, **Licenses and apps**. A user may also be offered a trial by the Power BI Service itself | Not known how Power BI answers: see below |
+
+- **Viewer is enough.** It lets the person open the report and nothing else in
+  the workspace.
+- **The licence is needed because the workspace is not on a capacity.** Each
+  person who opens its content needs their own.
+- **After giving access, the person opens the Power BI Service once.**
+  Microsoft documents that a refusal can persist until they do. The app's
+  message says so, and links there.
+- **Not checked:** which licences the tenant can assign, and whether it offers
+  a trial to a user. Both are read in the Microsoft 365 admin center.
+
+### What the app registration needs
+
+One delegated permission of the **Power BI Service**, `Report.Read.All`, with
+admin consent, so that nobody is asked. The owner added it on 2026-10-13 and it
+was read back that day. [Sign-in and roles](sign-in.md#the-app-registration)
+lists every setting of the registration.
+
+### Configuration
+
+Two variables in `.env`:
+
+```bash
+POWERBI_WORKSPACE_ID=<workspace ID>
+POWERBI_REPORT_ID=<report ID>
+```
+
+- **Where to find them.** Open the report in the Power BI Service. Its address
+  reads `https://app.powerbi.com/groups/<workspace ID>/reports/<report ID>/…`.
+- Both are identifiers, not secrets. They are kept out of the repository all
+  the same.
+- After changing them, run `make up`: the API reads its environment at start.
+- With either one empty, the dashboard says that the report is not configured,
+  and the rest of the app works.
+- **After publishing the report again from Desktop, look at its address.**
+  Replacing the report of the same name is expected to keep its ID; that was
+  not checked in this project. A report published under another name, or to
+  another workspace, has a new ID to put here.
+
+### The "data as of" line
+
+The app does not draw one: only someone who may change the model can read when
+it was last refreshed, and a viewer may not. It belongs in the report, where
+the refresh itself can write it. This is not done yet. One way:
+
+1. In Power BI Desktop, **Home > Transform data > New source > Blank query**,
+   name it `Actualizacion`, and give it this formula:
+
+   ```text
+   = #table(
+       type table [Actualizado = datetime],
+       {{DateTimeZone.RemoveZone(DateTimeZone.SwitchZone(DateTimeZone.UtcNow(), -5))}}
+     )
+   ```
+
+   It holds one row: the time of the refresh, in the plant's time zone (five
+   hours behind UTC, all year).
+2. **Close & Apply**, then put a **Card** on each page with the field
+   `Actualizado`.
+3. Publish, and map the semantic model to `clarios-reporting` again
+   ([Setting it up again](#setting-it-up-again), step 3): publishing drops
+   that link.
+
+The formula was not tried in this project: check the card after the first
+refresh.
+
+### What the messages mean
+
+The texts are Spanish and are named here by their key in
+`frontend/src/i18n/es.json`, under `dashboard.problem`. Each message ends with
+Power BI's code and the ID of its request, when there are any.
+
+| Key | Cause | What to do |
+|---|---|---|
+| `notConfigured` | `POWERBI_WORKSPACE_ID` or `POWERBI_REPORT_ID` is empty | Set both in `.env`, then `make up` |
+| `authorize` | Microsoft needs the user: consent was never given or was withdrawn, a policy asks for a second factor, or the sign-in is older than 24 hours | The user presses the button and continues at Microsoft. If Microsoft then asks for an administrator's approval, grant admin consent on the app registration |
+| `token` | No token for Power BI could be had, or Power BI did not accept it (`InvalidToken`, `TokenExpired`, `LoadReportFailed`) | Try again. If it stays, check that the permission `Report.Read.All` is still on the app registration. `LoadReportFailed` is a name Power BI's frame uses for more than one cause: read the status and the sentence the code line quotes after it |
+| `noAccess` | The account is not in the workspace (`GroupNotAccessible`). A wrong `POWERBI_WORKSPACE_ID` gives the same answer | Give the account access (row 2 above), and have the user open the Power BI Service once. If nobody can open the report, check the workspace ID |
+| `refused` | Power BI refused without naming the reason: any other 401 or 403 | Check the account's access and its licence. **A user without a licence is expected to land here**; how Power BI names that case has not been seen yet |
+| `notFound` | The workspace has no report with that ID (`PowerBIEntityNotFound`): it was deleted, or published under another name | Put the new report ID in `.env`, then `make up` |
+| `unreachable` | Power BI's REST API did not answer, or answered 429 or 5xx | Check that the browser reaches `api.powerbi.com`, and try again |
+| `failed` | Anything else, with its code | Quote the code and the request ID |
+
+One text is not under `dashboard.problem`, because it is not a failure by
+itself: `dashboard.slow`. It appears above the report's frame when Power BI
+has reported neither the report nor an error for a minute, and it has a retry
+button. The frame stays in view under it. So read the frame first: if Power BI
+drew a notice of its own there, that notice is the answer; if the frame is
+empty, check that the browser reaches `app.powerbi.com`.
+
+For an error that Power BI's frame reports, the code line quotes Power BI in
+full: its name for the error, then its status and its own sentence in
+brackets, in English. For a text that is no token it read
+`LoadReportFailed (403 · Fail to initialize - Could not resolve cluster)`
+(seen on 2026-10-13).
+
 ## Refreshing
 
 The views are always current: Power BI reads whatever Silver and Gold hold when
@@ -435,3 +569,6 @@ report either. The report keeps opening, with the data of its last refresh.
 | Power BI Service: *password authentication failed* | The password changed in `.env` but not in the connection | Enter it in `clarios-reporting` (Security, step 4) |
 | Power BI Service: the semantic model's settings offer no gateway | The report was published again, or its server and database are not exactly `127.0.0.1:5433` and `energy` | Map the model to `clarios-reporting` again; if the names differ, fix them in Desktop and publish |
 | *too many connections for role "powerbi"* | Desktop and the Service refreshed at the same time: the login may hold 10 connections | Let one finish, then refresh the other |
+| Web app: the dashboard shows a message in place of the report | The message says which of eight causes | [What the messages mean](#what-the-messages-mean) |
+| Web app: the report shows old figures | The model was not refreshed after the last load | **Refresh now** on the semantic model ([Refreshing](#refreshing)) |
+| Web app: the report asks to continue with Microsoft after a day | The sign-in of a browser app ends after 24 hours | Press the button; nothing is lost |

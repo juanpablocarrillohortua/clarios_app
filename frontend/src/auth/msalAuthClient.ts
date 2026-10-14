@@ -11,7 +11,7 @@ import {
 
 import type { AuthConfig } from "../api/config";
 import { paths, REDIRECT_PAGE } from "../paths";
-import type { AuthClient } from "./authClient";
+import { type AuthClient, type AuthClientOptions, InteractionNeeded } from "./authClient";
 
 /** The provider's code for an error, for the sign-in page and for support. */
 function errorCode(error: unknown): string {
@@ -24,7 +24,10 @@ function errorCode(error: unknown): string {
   return "unknown_error";
 }
 
-export async function createMsalAuthClient(config: AuthConfig): Promise<AuthClient> {
+export async function createMsalAuthClient(
+  config: AuthConfig,
+  { extraScopes = [] }: AuthClientOptions = {},
+): Promise<AuthClient> {
   // Built from the address bar, so the same build works on :8080, on the dev
   // server and on a deployed host. Each resulting URI must be registered on
   // the app registration.
@@ -65,12 +68,25 @@ export async function createMsalAuthClient(config: AuthConfig): Promise<AuthClie
   const scopes = [config.api_scope];
   const signedIn = account;
 
+  function mustBeSignedIn(): AccountInfo {
+    if (!signedIn) {
+      throw new Error("a token was asked for while nobody is signed in");
+    }
+    return signedIn;
+  }
+
   return {
     account: signedIn ? { name: signedIn.name ?? "", username: signedIn.username } : null,
     signInError,
 
     async signIn({ chooseAccount = false } = {}) {
-      await msal.loginRedirect({ scopes, prompt: chooseAccount ? "select_account" : undefined });
+      await msal.loginRedirect({
+        scopes,
+        // A token is for one service, so these cannot be in `scopes`. Named
+        // here, their consent is asked on the same screen as the API's.
+        extraScopesToConsent: [...extraScopes],
+        prompt: chooseAccount ? "select_account" : undefined,
+      });
     },
 
     async signOut() {
@@ -78,20 +94,46 @@ export async function createMsalAuthClient(config: AuthConfig): Promise<AuthClie
     },
 
     async getApiToken() {
-      if (!signedIn) {
-        throw new Error("a token was asked for while nobody is signed in");
-      }
+      const who = mustBeSignedIn();
       try {
         // From the cache, or renewed without the user when it is about to expire.
-        return (await msal.acquireTokenSilent({ scopes, account: signedIn })).accessToken;
+        return (await msal.acquireTokenSilent({ scopes, account: who })).accessToken;
       } catch (error) {
         if (error instanceof InteractionRequiredAuthError) {
-          await msal.acquireTokenRedirect({ scopes, account: signedIn });
+          await msal.acquireTokenRedirect({ scopes, account: who });
           // The page is leaving for Microsoft: there is no token to return.
           return new Promise<string>(() => {});
         }
         throw error;
       }
+    },
+
+    async getServiceToken(scope, { fresh = false } = {}) {
+      const who = mustBeSignedIn();
+      try {
+        const result = await msal.acquireTokenSilent({
+          scopes: [scope],
+          account: who,
+          forceRefresh: fresh,
+        });
+        return {
+          token: result.accessToken,
+          // MSAL dates every access token. One without a date counts as due
+          // now, so whoever keeps it fresh replaces it at the next check.
+          expiresAt: result.expiresOn ?? new Date(),
+        };
+      } catch (error) {
+        if (error instanceof InteractionRequiredAuthError) {
+          // Unlike the API's token, this one never takes the page away: the
+          // caller shows why and lets the user decide.
+          throw new InteractionNeeded(errorCode(error));
+        }
+        throw error;
+      }
+    },
+
+    async authorizeService(scope) {
+      await msal.acquireTokenRedirect({ scopes: [scope], account: mustBeSignedIn() });
     },
   };
 }

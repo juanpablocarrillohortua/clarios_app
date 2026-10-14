@@ -26,7 +26,8 @@ describe("the app shell", () => {
     renderAppAt("/");
 
     expect(await sectionHeading()).toHaveTextContent(es.dashboard.title);
-    expect(screen.getByText(es.dashboard.empty)).toBeInTheDocument();
+    // What the dashboard shows is in pages/DashboardPage.test.tsx.
+    expect(screen.getByRole("link", { name: es.dashboard.openInPowerBi })).toBeInTheDocument();
   });
 
   it("names the app in the header", async () => {

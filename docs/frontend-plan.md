@@ -1,7 +1,7 @@
 # Frontend plan
 
 **Status:** written 2026-10-11 and built in the increments of section 8.
-Increments 0 to 2 are done, all on 2026-10-12:
+Increments 0 to 2 are done, all on 2026-10-12, and increment 3 is built:
 
 - **Increment 0, decisions.** The questions of section 9 are answered, and the
   decisions are recorded in
@@ -13,6 +13,11 @@ Increments 0 to 2 are done, all on 2026-10-12:
   owner's check. Its decisions are in
   [ADR 0006](adr/0006-api-tokens-and-app-roles.md), and
   [docs/sign-in.md](sign-in.md) is the guide.
+- **Increment 3, the dashboard page.** Planned and built on 2026-10-13, and
+  tested with stand-ins for Microsoft. Its three "done when" checks need a
+  signed-in browser and are the owner's. Section 10 has the plan and the
+  checklist, and [ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md)
+  the decisions.
 
 The work is on the branch `feature/front-end`; the ADRs reach `main` when it is
 merged.
@@ -33,8 +38,8 @@ Build a **React single-page app (TypeScript, Vite)** on top of the **FastAPI
 backend that already exists** in this repository, and keep every rule in Python.
 Validation, failure reasons and the Bronze write all live in the backend, so the
 browser only renders what the API tells it. Users sign in with **Microsoft Entra
-ID**; the same sign-in shows the Power BI report through Microsoft's own React
-component (the "embed for your organization" model). User-entered data is checked
+ID**; the same sign-in shows the Power BI report through Microsoft's own
+embedding library (the "embed for your organization" model). User-entered data is checked
 in a **staging area** first, then lands in Bronze through the **existing landing
 port**, as one more `ingestion_runs` row with its load metadata. Plotly Dash stays
 in the stack for the Phase 5 energy charts but stops being the app's front door.
@@ -111,7 +116,7 @@ The backend plan in sections 5 to 7 is the same either way.
 | UI kit | Mantine | Stepper, dropzone, forms and notifications in one library |
 | Texts | i18next with `react-i18next` | Spanish, in `frontend/src/i18n/es.json` |
 | Sign-in | `@azure/msal-browser` | Microsoft Entra ID. Used alone, behind an interface of the app's own ([ADR 0006](adr/0006-api-tokens-and-app-roles.md)); the plan first named `@azure/msal-react` |
-| Power BI | `powerbi-client-react` | Microsoft's official component |
+| Power BI | `powerbi-client` | Microsoft's embedding library. Used alone, behind an interface of the app's own ([ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md)); the plan first named its React wrapper, `powerbi-client-react` |
 | Grid | Decided by a short spike in increment 6 | See below |
 | Format and lint | Biome | One tool for both, as ruff is on the Python side |
 | Tests | Vitest with Testing Library | Runs in `make frontend-check` and in CI |
@@ -131,7 +136,7 @@ cell, offer dropdowns and date and number formats, and scroll smoothly.
 ```mermaid
 flowchart TB
     subgraph browser["Browser: React app"]
-        DASHP["Dashboard page<br/>powerbi-client-react"]
+        DASHP["Dashboard page<br/>powerbi-client"]
         LOADP["Data loading pages<br/>upload, form, grid"]
     end
 
@@ -228,7 +233,8 @@ workspace permissions people already manage.
 
 - **Token refresh.** MSAL acquires the Power BI token silently. Before it
   expires, the page calls `report.setAccessToken()` with a fresh one, so a report
-  left open does not go blank.
+  left open does not go blank. Section 10 gives the triggers and how they are
+  proved.
 - **When to switch models.** If viewers have no Power BI licence, the customers
   model applies instead. It adds a `GET /api/powerbi/embed-token` endpoint, a
   service principal whose secret stays on the server, and a capacity.
@@ -266,15 +272,16 @@ its own and asks the API for no figure.
 - **A viewer needs two grants:** the app role, for the dashboard section to
   appear, and access to the Power BI workspace, for the report to open. They
   are given separately.
-- **Still to design, in increment 3:** the "data as of" line of the dashboard
-  page. No endpoint provides it today.
+- **The "data as of" line belongs to the report,** not to the app (decided
+  with increment 3, section 10). A viewer may not read a model's refresh
+  history, and no endpoint provides it.
 
 ## 4. Pages and user flows
 
 | Page | Who | What it does |
 |---|---|---|
 | Sign in | Everyone | Redirects to Entra ID |
-| Dashboard | viewer and above | The embedded report, full width, with a "data as of" line and a link to open it in Power BI |
+| Dashboard | viewer and above | The embedded report, full width, with a link to open it in Power BI. The "data as of" line is a card of the report itself (section 10) |
 | Data loading: new load | operator and above | The wizard below |
 | Data loading: history | operator and above | Every load: who, when, dataset type, input mode, file name, rows, state, warnings accepted. Opens the detail of a load |
 | Load detail | operator and above | The confirmation summary, the issues found, a download of the original file. `engineer` can void the load |
@@ -633,7 +640,7 @@ Each increment is small enough to review and has one test of "done".
 | 0 | **Decisions and prerequisites.** Answer the blocking questions of section 9; write the ADRs (stack, API composition root); register the Entra app; publish the report to a workspace. **Closed 2026-10-12:** the app registration issues a token with its client credentials, a test user signed in and reached `/auth/callback`, and the report is published. The Power BI REST API confirmed the workspace, the report, its binding to the gateway and a completed refresh that day ([docs/powerbi.md](powerbi.md)). The ADRs are committed on `feature/front-end` and reach `main` with that branch | Both ADRs are merged, a test user can sign in to the Entra app, and the report opens in the Power BI Service |
 | 1 | **App skeleton.** `frontend/` with Vite, React and TypeScript; Caddy serves it at `/`; Dash moves to `/dash/`; a CI job lints, type-checks, tests and builds it. **Done 2026-10-12:** verified against the running stack, and green in CI | `make up` shows the shell with two empty sections at `:8080`, and CI is green |
 | 2 | **Sign-in and roles.** MSAL in the app; token check and role mapping in the API; `GET /api/me`. Also `GET /api/config`, the permission table, and the rule that a route is protected unless listed as public ([ADR 0006](adr/0006-api-tokens-and-app-roles.md)). **Built 2026-10-12** and checked against the running stack: every guarded route answers 401 without a token and to forged ones, and a signed-out browser is sent to Microsoft with the registered redirect page and the API's scope. That a viewer is kept out of data loading and an operator let in is proved by tests of the API and of the app, with stand-ins for Entra ID; the same check by the two test users in a browser is the owner's | Without a token the API answers 401; a `viewer` cannot open data loading and an `operator` can |
-| 3 | **Dashboard page.** The embedded report with token refresh | A signed-in user sees the report; it still works after the first token expires; a user without workspace access gets a clear message |
+| 3 | **Dashboard page.** The embedded report with token refresh. Section 10 plans it in detail. **Built 2026-10-13:** the page, the second token, the token's renewal and one message per cause of failure are proved by tests of the app, with stand-ins for Entra ID and Power BI, and the embedding library is run itself in a test browser. The three checks at the right need a signed-in browser and are the owner's | A signed-in user sees the report; it still works after the first token expires; a user without workspace access gets a clear message |
 | 4 | **Dataset specs.** YAML for two pilots, one catalogue (`lineas_produccion`) and one export (`qad_facturas`); `GET /api/datasets`; template download | Specs load at startup and fail loudly when malformed; the downloaded template has exactly the headers of the spec |
 | 5 | **Staging, upload and schema checks.** Migration for `staging`; a streaming upload endpoint with the 300 MB limit enforced by the browser, Caddy and the API; streaming variants of the storage and reader ports; file and schema rules; the issues list. A file over 5 MB is archived but answers "not built yet" to validation until increment 12 | A deliberately broken file shows every failure with row, column and rule; the original is archived; Bronze is unchanged; a 300 MB file uploads through Caddy with progress while the API's memory stays flat, and a larger one is refused with a clear message |
 | 6 | **Reasons, grid and revalidation.** Reason detectors; the grid spike and choice; cell editing | Each defect of the table in section 5 yields its reason and fix; fixing a cell and revalidating clears it without a new upload |
@@ -688,11 +695,375 @@ figures" in section 3). It leaves one question for Phase 4 to ask the plant:
 how fresh must energy figures be? If the answer is "within minutes", that
 decision is reopened before anything is built.
 
+## 10. Increment 3 in detail: the dashboard page
+
+**Status:** planned and built on 2026-10-13. The three "done when" statements
+below wait for the owner's checks in a signed-in browser: the manual checklist
+of point 9.
+
+The increment shows the published report inside the dashboard section. The
+embedding model is decided ([ADR 0004](adr/0004-react-spa-entra-and-embedded-power-bi.md)):
+the browser obtains a second token from Entra ID, for the Power BI Service, and
+loads the report from the Service. The report's data never passes through the
+API. The decisions of this section are recorded in
+[ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md).
+
+It is done when:
+
+1. a signed-in user sees the report;
+2. it still works after the first token expires;
+3. a user without workspace access gets a clear message.
+
+### What was checked before planning
+
+On 2026-10-13, read-only: Microsoft's documentation, the npm registry, `GET`
+calls to the Power BI REST API with the session of the workspace admin account,
+and the app registration read back with the Azure CLI.
+
+| Fact | How we know |
+|---|---|
+| Viewing a report needs one delegated permission of the Power BI Service, `Report.Read.All` | Microsoft's tutorial for this embedding model |
+| Users may consent to that permission themselves; an admin may consent for everyone | The Power BI Service's entry in the tenant |
+| The workspace holds one report and is not on a dedicated capacity, so every viewer needs a Power BI licence | Power BI REST API |
+| Power BI's REST API answers a browser on another origin, and lets it read the headers `X-PowerBI-Error-Info` and `RequestId` | A `GET` sent with an `Origin` header and then, once the page was built, the same `GET` sent by a real browser from a page of the app, which sends its preflight request by itself (point 9) |
+| A workspace the caller is not in answers 401 with `X-PowerBI-Error-Info: GroupNotAccessible` and an empty body | A `GET` with a made-up workspace ID |
+| A report that does not exist answers 404 with the code `PowerBIEntityNotFound` | A `GET` with a made-up report ID |
+| A text that is not a token answers 403 with `InvalidToken` | A `GET` |
+| The report's embed address carries more than its two IDs: a `config` parameter Power BI adds | The answer of `GET /groups/{workspace}/reports/{report}` |
+| A token in a live report is replaced with `report.setAccessToken()`. For this embedding model the frame can also ask the page for a new token, through the `accessTokenProvider` hook | Microsoft's page on refreshing the access token |
+| Reading a model's refresh history needs Write permission on the model | Microsoft's REST reference |
+| An access token for Power BI lasted 78 minutes | The token the Azure CLI held. Entra ID gives each token between 60 and 90 minutes |
+| **Not known:** how Power BI answers a user who has workspace access and no licence | No page of Microsoft's says. A browser test with such a user shows it |
+
+### 1. Tokens and consent
+
+- **One scope:** `https://analysis.windows.net/powerbi/api/Report.Read.All`.
+  It lets the app read reports the user may already open, and nothing else: no
+  write, no refresh, no other kind of item.
+- **A second token, from the same sign-in.** The user signs in once. MSAL then
+  obtains the Power BI token without the user, as it obtains the API's.
+  `AuthClient` gains two operations:
+
+  | Operation | Does |
+  |---|---|
+  | `getServiceToken(scope, { fresh })` | Returns a token and the time it expires. It never sends the browser away: when Microsoft needs the user, it fails with `InteractionNeeded`. With `fresh`, it asks Entra ID for a new token even when the tab still holds a valid one |
+  | `authorizeService(scope)` | Sends the browser to Microsoft, to give consent or confirm the session. The page unloads |
+
+- **No second consent prompt.** Two measures:
+  - an administrator grants consent for the whole tenant, once (point 2), so
+    nobody is asked;
+  - the app also names the Power BI scope at sign-in (MSAL's
+    `extraScopesToConsent`). In a tenant without admin consent, the user then
+    sees one screen for both.
+- **When Microsoft needs the user** (`interaction_required`: consent was never
+  given or was withdrawn, a policy asks for a second factor, the session
+  ended), the page does not leave by itself. It shows a message and a button,
+  and the button calls `authorizeService`. A refusal brings the user back to
+  the same message, with Microsoft's error code, so it cannot loop.
+
+  The API's token keeps its own rule from increment 2: when it cannot be
+  renewed, the page goes to Microsoft unasked.
+
+### 2. The app registration
+
+One change, made by the owner on 2026-10-13 and read back the same day:
+
+1. **Entra admin center > App registrations > Clarios dash > API
+   permissions.**
+2. **Add a permission > Microsoft APIs > Power BI Service > Delegated
+   permissions > Report > `Report.Read.All` > Add permissions.**
+3. On the same page, **Grant admin consent for** the tenant, then **Yes**.
+
+Admin consent is not required by the permission: a user may consent to it. It
+is granted so that nobody sees a prompt, whatever the tenant's setting for user
+consent is. No redirect URI changes.
+
+### 3. Configuration
+
+Two variables in `.env`, both GUIDs, both empty in `.env.example`:
+
+| Variable | Holds |
+|---|---|
+| `POWERBI_WORKSPACE_ID` | The workspace the report is published in |
+| `POWERBI_REPORT_ID` | The report |
+
+- **Where to find them.** In the address of the report in the Power BI
+  Service: `…/groups/<workspace ID>/reports/<report ID>/…`.
+- **How they reach the app.** Compose passes them to the api container, and
+  `GET /api/config` returns a `powerbi` object beside `auth`: the two IDs, the
+  scope, the address to ask Power BI for the report, and the report's address
+  in the Service. The app holds no Microsoft address of its own.
+- **They are identifiers, not secrets,** like the tenant and client IDs: they
+  open nothing without a token of a user who has access. They are still kept
+  out of the repository and out of the images.
+- **Not set.** With either one empty, `powerbi` is `null`. The dashboard
+  section then says that the report is not configured, and the rest of the app
+  works. A value that is not a GUID stops the API at start, as for the Entra
+  IDs.
+- **The report and the model are named `test` today.** Nothing depends on a
+  name.
+
+### 4. The embed library
+
+- **`powerbi-client` 2.25.0,** Microsoft's JavaScript library for embedding.
+  MIT licence, published 2026-09-24. Its four dependencies are Microsoft's and
+  MIT too.
+- **Not `powerbi-client-react`,** which section 2 and ADR 0004 had named. The
+  wrapper is a single component around this library. The app needs four
+  operations of it (embed, listen, set a token, remove), and wrapping them
+  itself keeps the library in one file and out of every test but one. The same
+  choice was made for MSAL in ADR 0006.
+- **Where it sits,** in `frontend/src/powerbi/`:
+
+  | File | Holds |
+  |---|---|
+  | `reportEmbed.ts` | The app's own interface: embed a report, replace its token, remove it |
+  | `powerBiReportEmbed.ts` | The only file that imports `powerbi-client` |
+  | `reportLookup.ts` | The `GET` that asks Power BI for the report |
+  | `reportProblem.ts` | What each refusal means, wherever it comes from: the sign-in client, the REST API or the frame |
+  | `tokenRenewal.ts` | Keeps the token of a live report fresh. No React and no library in it |
+
+- **Loaded on demand.** The library is fetched when the dashboard opens, not
+  with the app: the app's main script is already 636 kB.
+
+### 5. Token refresh
+
+One function obtains a new token, with `getServiceToken(scope, { fresh: true
+})`. Three things call it, and each ends in `report.setAccessToken()`:
+
+| Trigger | Why |
+|---|---|
+| A check every 30 seconds, which renews when fewer than 10 minutes remain | The main path. The two values are those of Microsoft's sample |
+| The tab becoming visible again | Browsers slow the timers of a hidden tab, and a sleeping PC stops them |
+| Power BI asking: the `accessTokenProvider` hook, and an error named `TokenExpired` | The fallback, should the first two have missed |
+
+- **A renewal that fails is tried again at the next check.** The report stays
+  on screen while its token is valid. If the token runs out, the report is
+  replaced by the message of the cause.
+- **How long a session lasts.** The sign-in itself ends after 24 hours in a
+  single-page app. The renewal then fails with `interaction_required`, and the
+  page shows the message of point 1.
+
+**Proving it without waiting an hour:**
+
+1. **Unit tests with a fake clock** drive every trigger: a renewal before the
+   expiry, another after the new token's lifetime, one on becoming visible, one
+   when Power BI asks, and none after the page is closed.
+2. **A switch on the dev server only:** `/dashboard?tokenLife=60`. The page
+   then treats every token as expiring 60 seconds after it was obtained, so
+   every check renews: a real new token from Entra ID goes into the live
+   report every 30 seconds. The browser's console names each renewal. The
+   switch is compiled out of the production build.
+3. **The real expiry is a manual check:** the report left open for 95 minutes,
+   then used.
+
+What the second proves is that a token can be replaced in a live report as
+often as needed. That the report survives the expiry of the first token rests
+on that and on the third check.
+
+### 6. Errors and messages
+
+Every message is a key of `frontend/src/i18n/es.json`, in Spanish. It is shown
+inside the dashboard section, so the navigation stays. Under it, a support line
+gives Power BI's code and request ID when there are any.
+
+| Failure | Identified by | How sure |
+|---|---|---|
+| The report is not configured | `"powerbi": null` in `GET /api/config` | Certain: it is the app's own answer |
+| Microsoft needs the user: consent, a second factor, an ended session | MSAL's `InteractionRequiredAuthError` | High: it is the library's documented class |
+| Any other token failure | Another MSAL error. From Power BI, 403 with `InvalidToken` or `TokenExpired`, or the frame's `LoadReportFailed` | High. `InvalidToken` was seen on 2026-10-13, and so was the frame's answer to a text that is no token: `LoadReportFailed`, 403, "Could not resolve cluster". The name is a general one: after the report was looked up with the same token, it may mean something else, so the code line quotes the status and the sentence |
+| No workspace access | 401 with `GroupNotAccessible`, or with `PowerBINotAuthorizedException`, the name in Microsoft's table | Seen on 2026-10-13. A wrong `POWERBI_WORKSPACE_ID` gives the same answer: Power BI does not tell "does not exist" from "not yours" |
+| The report was not found | 404, `PowerBIEntityNotFound` | Seen on 2026-10-13 |
+| **No Power BI licence** | **Not known** | Until it is seen in a browser, it falls under the next row |
+| Refused for another reason | Any other 401 or 403 | The message names both things to check: access to the workspace, and the licence |
+| Power BI cannot be reached | The request fails, or answers 429 or 5xx | High |
+| Power BI's frame stays silent | No `loaded` event and no error within 60 seconds | Not a failure by itself: a slow network looks the same, and so might a notice Power BI draws in its frame. The frame stays in view, and a line above it offers to start over |
+| Anything else | An error of the frame before the report has loaded | The message gives the code |
+
+- **The frame is never covered or removed on silence alone** (changed on
+  2026-10-13, after the check in a browser described under point 9). The first
+  build covered the frame until Power BI said `loaded`, and replaced it with
+  the "cannot be reached" message after 60 seconds. Whether Power BI sends any
+  event when it draws a notice of its own in the frame, for a user without a
+  licence for instance, is not known. Had it sent none, that notice would
+  never have been seen.
+- **Power BI may send one error twice.** The page takes the second as the
+  first.
+- **A user who was just given access may still be refused.** Microsoft
+  documents a 401 that goes away once the user has opened the Power BI
+  Service. Its fix is a `POST` to Power BI, which this increment does not make.
+  The no-access message therefore says to open Power BI once, and links to it.
+- **After the report has loaded,** an error of one visual is shown by Power BI
+  inside the frame. The app replaces the report only for an expired token it
+  could not renew.
+
+### 7. Security headers
+
+Nothing changes in the Caddyfile.
+
+- **`X-Frame-Options SAMEORIGIN` stays.** It says who may put *our* pages in a
+  frame. It does not limit the frames our page opens.
+- **No Content-Security-Policy is sent today,** so nothing restricts the
+  Power BI frame or the app's scripts. The library is part of the app's own
+  script: no script is loaded from Microsoft's servers by the page itself.
+- **None is added in this increment.** A wrong policy breaks sign-in or the
+  report, and only a signed-in browser shows it. It belongs to increment 13,
+  with the end-to-end tests. It will have to allow at least:
+  - frames from `https://app.powerbi.com`;
+  - requests to the app's own origin, `https://login.microsoftonline.com` and
+    `https://api.powerbi.com`;
+  - inline styles, which Mantine writes.
+- **Two headers must never be added:** `Cross-Origin-Opener-Policy`, which
+  breaks the sign-in page, and `Cross-Origin-Embedder-Policy`, which would
+  block the Power BI frame.
+- **Outside `localhost`** the report, like sign-in, needs HTTPS.
+
+### 8. Layout
+
+- **Size.** The report takes the section's full width and the height left
+  under the title, down to the footer, with a minimum of 320 pixels. Power BI
+  fits the report page inside that area and keeps its proportions; the area's
+  background is transparent, so the margins take the app's colour.
+- **Narrow screens.** The page shrinks to the width. A phone layout is used
+  only by a report that defines one, which this one does not; it is left for
+  later.
+- **Loading.** A line of text while the token and the report's address are
+  fetched. Then a line above the frame, never over it, until Power BI says the
+  report has loaded: Power BI shows its own progress inside the frame. After
+  60 seconds of silence the line becomes a notice with a retry button.
+- **Empty.** With the report not configured, a message says so.
+- **Page navigation: visible,** at the bottom, as in the Power BI Service. A
+  report with several pages is unusable without it.
+- **Filter pane: available, collapsed.** What it holds is the report author's
+  decision, who can hide a filter or the whole pane in the report. The app
+  does not override that; collapsed, the pane costs a narrow strip.
+- **Power BI's own texts** (pane titles, tooltips) are asked for in Spanish.
+- **A link opens the report in Power BI,** in a new tab.
+- **The "data as of" line is not drawn by the app.** The time of the last
+  refresh belongs to the model's copy of the data, and a viewer may not read
+  the refresh history. It goes in the report, as a card fed by the refresh
+  itself; [docs/powerbi.md](powerbi.md) says how. An endpoint could serve it
+  once the platform itself calls Power BI, in increment 10.
+
+### 9. Tests
+
+**Unit tests,** with stand-ins for MSAL and for the embed library:
+
+| File | Checks |
+|---|---|
+| `auth/msalAuthClient.test.ts` | The Power BI scope is named at sign-in; a token comes with its expiry; `fresh` asks for a new one; `interaction_required` is reported and never redirects; `authorizeService` goes to Microsoft |
+| `powerbi/reportLookup.test.ts` | Every row of the table of point 6: Power BI's answers, a frame's errors, and a token that cannot be had |
+| `powerbi/tokenRenewal.test.ts` | Every trigger of point 5, with a fake clock |
+| `powerbi/powerBiReportEmbed.test.ts` | What is asked of the library, and that its events reach the app. It runs Microsoft's library itself, in a test browser that loads nothing, so it also checks the bundler's conversion |
+| `pages/DashboardPage.test.tsx` | The whole app: not configured, loading, the report shown, the token replaced, each message, the authorize button, and a silent frame left in view |
+| `stackRoutes.test.ts` | The dev server keeps the app's own pages, `/dashboard` among them, and hands the stack's paths over |
+| `tests/unit/test_settings.py`, `tests/unit/test_api_auth.py` | The two variables, and the `powerbi` object of `GET /api/config` |
+
+**One check in a real browser, without signing in** (2026-10-13). The built
+module was run in headless Edge, on a page the stack served, with a made-up
+report ID, a made-up workspace ID and a text that is no token. It is the only
+check in which Microsoft's library talks to Power BI's real frame:
+
+| Seen | What it shows |
+|---|---|
+| The frame loaded from `app.powerbi.com/reportEmbed` | Caddy's headers do not stop the page from framing Power BI |
+| The frame's address carried `language` and `formatLocale` | The Spanish locale is asked for |
+| The frame took the whole size of its container, with no border and the title given | The layout of point 8 |
+| Power BI answered within 5 seconds: `LoadReportFailed`, status 403, "Fail to initialize - Could not resolve cluster", with a request ID, sent twice | The library and the frame talk, and an error reaches the page. This is the row "any other token failure" of point 6 |
+| Edge's tracking prevention logged that it blocked storage for Power BI's style sheets and images | The frame worked all the same. Whether a report draws under it is the owner's first check |
+| The same on the dev server, with the module as Vite serves it there | The dev server's conversion of the library works too, which the fast check of the token needs |
+| The page's own `GET` to Power BI's REST API, sent from that browser with the same headers and a text that is no token, came back as 403 with `X-PowerBI-Error-Info: InvalidToken` and a `RequestId`, both readable by the page | The browser lets the request through, preflight included, and the page can read what names a refusal |
+
+That check found three things, all changed the same day:
+
+- **The frame was covered until Power BI said `loaded`,** and replaced after
+  60 seconds of silence. Point 6 says what the page does now.
+- **The dev server forwarded `/dashboard` to the stack.** It matched the
+  stack's paths by prefix, and `/dash` is the beginning of `/dashboard`. The
+  page then held the stack's built scripts, which the dev server does not
+  have, and stayed blank. It had done so since increment 1; nobody had opened
+  the dashboard's own address on the dev server. The paths are now matched by
+  whole segment, as the Caddyfile matches them
+  (`frontend/src/stackRoutes.ts`, with a test).
+- **Power BI's errors reached the window.** The library raises an error as a
+  page event named `error` that travels up to the window, where it passes for
+  an uncaught error with whatever listens there. The dev server's client
+  printed it as one. The module that owns the library now stops it there.
+
+**The manual checklist,** for the owner, one check per "done when":
+
+| "Done when" | Check |
+|---|---|
+| 3. A user without workspace access gets a clear message | Before adding the viewer to the workspace: sign in as the viewer and open the dashboard. The no-access message appears, with the code `GroupNotAccessible` |
+| *(the unknown of point 6)* | Add the viewer to the workspace, as **Viewer**. If the account has no Power BI licence, open the dashboard again and note what appears: the message's title and its code line, or what Power BI draws inside the frame, and whether the line above the frame turns into the notice with a retry button (`dashboard.slow`) after a minute |
+| 1. A signed-in user sees the report | With a licence: the report appears, with its pages at the bottom and the filter pane collapsed. The link opens it in Power BI |
+| 2. It still works after the first token expires | Fast: `make frontend-dev`, open `http://localhost:5173/dashboard?tokenLife=60` with the console open; a renewal is named every 30 seconds while the report keeps answering. If signing in drops `?tokenLife=60` from the address, type it again. Real: on `:8080`, leave the dashboard open for 95 minutes, then change page or use a slicer |
+
+### 10. Risks and open questions
+
+- **A viewer without a licence sees no report.** The workspace is not on a
+  capacity, so each viewer needs Power BI Pro, Premium Per User or a trial. If
+  the plant's viewers turn out to have none, the model changes to "embed for
+  your customers" (section 3): an endpoint of the API that hands out embed
+  tokens, a service principal with a secret on the server, and a paid
+  capacity.
+- **The trial ends around 2026-12-11** (ADR 0004). After it, an account
+  without a paid licence can no longer open the report, in the app or in the
+  Service.
+- **How Power BI refuses an unlicensed user is not known.** Until it is seen,
+  that user gets the general refusal message.
+- **A viewer needs three things, given separately:** the app role, access to
+  the workspace, and a licence.
+- **The browser's preflight request** was a risk when this was planned: only
+  `GET` could be sent by hand. It passed on 2026-10-13, sent by a real browser
+  with the page's own request (point 9).
+- **The library has no ES module build.** The bundler converts it; the build,
+  a test that loads the real library, and the check in a real browser cover
+  that.
+- **Browsers that block third-party storage.** The frame receives its token
+  from the page, not from a cookie, so it is expected to work. Only Edge and
+  Chrome are checked.
+- **`GET /api/config` is public and now names the workspace and the report.**
+  Accepted: they are identifiers. Serving them from `GET /api/me` instead
+  would hide them from a caller who is not signed in.
+
+### Build checklist
+
+- [x] The decisions: this section, and ADR 0008.
+- [x] API: the two variables, the `powerbi` object of `GET /api/config`,
+      compose, `.env.example`, the README's variable table, tests.
+- [x] Sign-in client: `getServiceToken`, `authorizeService`, the scope at
+      sign-in.
+- [x] `frontend/src/powerbi/`: the interface, the library's module, the
+      lookup, the renewal.
+- [x] The dashboard page and its messages.
+- [x] Frontend tests.
+- [x] Documents: `docs/api.md`, `docs/powerbi.md`, `docs/sign-in.md`,
+      `CLAUDE.md`.
+- [x] `make frontend-check` and `make check`. The whole gate passed as one
+      command on 2026-10-13: 133 frontend tests, and 861 Python tests passed
+      with 39 skipped. The three changes the browser check led to came after
+      it and touch the frontend only: `make frontend-check` passed again with
+      163 tests, and the Python tests were not run again.
+- [x] The stack rebuilt and checked with the report not configured:
+      `"powerbi": null`, the routes and Caddy's headers as before, and sign-in
+      asking for the API's scope only.
+- [x] The two IDs in `.env`, and the report switched on: `GET /api/config`
+      carries the `powerbi` object, and a signed-out browser reaches
+      Microsoft's sign-in page with both scopes and no error, from `:8080` and
+      from the dev server.
+- [ ] The owner's manual checklist.
+
 ## References
 
 - AG Grid, clipboard (Enterprise): <https://www.ag-grid.com/react-data-grid/clipboard/>
 - Handsontable licence key and non-commercial licence: <https://handsontable.com/docs/tutorial-license-key.html>
 - Power BI embedded analytics: <https://learn.microsoft.com/azure/power-bi-embedded/>
+- Embedding a report for your organization, and the permission it needs: <https://learn.microsoft.com/en-us/power-bi/developer/embedded/embed-organization-app>
+- Refreshing the access token of an embedded report: <https://learn.microsoft.com/en-us/javascript/api/overview/powerbi/refresh-token>
+- Errors of an embedded report: <https://learn.microsoft.com/en-us/power-bi/developer/embedded/embedded-troubleshoot>
+- Power BI REST API, Get Report In Group: <https://learn.microsoft.com/en-us/rest/api/power-bi/reports/get-report-in-group>
+- Power BI REST API, Get Refresh History In Group (who may read it): <https://learn.microsoft.com/en-us/rest/api/power-bi/datasets/get-refresh-history-in-group>
 - MSAL Browser v5, the redirect bridge page: <https://learn.microsoft.com/en-us/entra/msal/javascript/browser/redirect-bridge>
 - Entra ID redirect URI restrictions (the `localhost` port rule): <https://learn.microsoft.com/en-us/entra/identity-platform/reply-url>
 - Microsoft Fabric trial: <https://learn.microsoft.com/en-us/fabric/fundamentals/fabric-trial>

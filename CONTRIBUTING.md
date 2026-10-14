@@ -263,6 +263,12 @@ make frontend-check     # the gate: format, lint, type-check, test, build
   `msalAuthClient.ts` imports Microsoft's library; tests hand the app a
   stand-in. A new section is a row in `frontend/src/sections.ts`, with its
   permission, and a route wrapped in `RequirePermission`.
+- **The Power BI report is behind `EmbedReport`**
+  (`frontend/src/powerbi/reportEmbed.ts`), in the same way. Only
+  `powerBiReportEmbed.ts` imports Microsoft's embedding library, and the app
+  loads that file when the dashboard opens. The app sends Power BI nothing but
+  `GET` requests, and what each of its answers means is written in one place,
+  `reportProblem.ts` ([docs/powerbi.md](docs/powerbi.md#the-report-inside-the-web-app)).
 - **Every text the user sees is a key in `frontend/src/i18n/es.json`.** The
   interface is Spanish; keys, code and comments are English. A key that does not
   exist fails the type-check.

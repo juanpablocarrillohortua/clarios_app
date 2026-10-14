@@ -33,6 +33,8 @@ pytestmark = pytest.mark.unit
 
 TENANT = "11111111-1111-4111-8111-111111111111"
 CLIENT = "33333333-3333-4333-8333-333333333333"
+WORKSPACE = "44444444-4444-4444-8444-444444444444"
+REPORT = "55555555-5555-4555-8555-555555555555"
 A_RUN = "0b7a2d0e-6f0f-4c59-9a3e-2f1d4c5b6a70"
 
 GUARDED = ["/me", "/kpis/summary", "/uploads", "/runs", f"/runs/{A_RUN}"]
@@ -40,18 +42,23 @@ GUARDED = ["/me", "/kpis/summary", "/uploads", "/runs", f"/runs/{A_RUN}"]
 
 @pytest.fixture
 def entra_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
-    """Return a function that sets the sign-in variables for one test.
+    """Return a function that sets the app's settings for one test.
 
-    The developer's own ``.env`` may hold real values. The environment wins over
-    that file, so each test states what it needs, and an empty value means "not
-    set".
+    They are the sign-in variables and the two that name the dashboard's
+    report. The developer's own ``.env`` may hold real values. The environment
+    wins over that file, so each test states what it needs, and an empty value
+    means "not set".
     """
 
     from energy.core.settings import get_settings  # noqa: PLC0415
 
-    def _set(tenant_id: str = "", client_id: str = "") -> None:
+    def _set(
+        tenant_id: str = "", client_id: str = "", workspace_id: str = "", report_id: str = ""
+    ) -> None:
         monkeypatch.setenv("ENTRA_TENANT_ID", tenant_id)
         monkeypatch.setenv("ENTRA_CLIENT_ID", client_id)
+        monkeypatch.setenv("POWERBI_WORKSPACE_ID", workspace_id)
+        monkeypatch.setenv("POWERBI_REPORT_ID", report_id)
         get_settings.cache_clear()
 
     yield _set
@@ -273,7 +280,8 @@ def test_config_gives_the_app_its_sign_in_settings(client: TestClient, entra_env
             "client_id": CLIENT,
             "authority": f"https://login.microsoftonline.com/{TENANT}",
             "api_scope": f"api://{CLIENT}/access_as_user",
-        }
+        },
+        "powerbi": None,
     }
 
 
@@ -288,16 +296,69 @@ def test_config_says_when_sign_in_is_not_configured(
     response = client.get("/config")
 
     assert response.status_code == 200
-    assert response.json() == {"auth": None}
+    assert response.json() == {"auth": None, "powerbi": None}
 
 
 def test_config_never_carries_the_client_secret(
     client: TestClient, entra_env: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ENTRA_CLIENT_SECRET", "a-secret-that-must-stay-put")
-    entra_env(tenant_id=TENANT, client_id=CLIENT)
+    entra_env(tenant_id=TENANT, client_id=CLIENT, workspace_id=WORKSPACE, report_id=REPORT)
 
     assert "a-secret-that-must-stay-put" not in client.get("/config").text
+
+
+def test_config_tells_the_app_which_report_the_dashboard_shows(
+    client: TestClient, entra_env: Any
+) -> None:
+    """The app is handed whole addresses, so it holds no address of Power BI's itself."""
+    # Upper case on purpose: the identifiers are returned in lower case.
+    entra_env(
+        tenant_id=TENANT,
+        client_id=CLIENT,
+        workspace_id=WORKSPACE.upper(),
+        report_id=REPORT.upper(),
+    )
+
+    response = client.get("/config")
+
+    assert response.status_code == 200
+    assert response.json()["powerbi"] == {
+        "workspace_id": WORKSPACE,
+        "report_id": REPORT,
+        "scope": "https://analysis.windows.net/powerbi/api/Report.Read.All",
+        "report_api_url": (
+            f"https://api.powerbi.com/v1.0/myorg/groups/{WORKSPACE}/reports/{REPORT}"
+        ),
+        "report_web_url": f"https://app.powerbi.com/groups/{WORKSPACE}/reports/{REPORT}",
+    }
+
+
+@pytest.mark.parametrize(
+    ("workspace_id", "report_id"), [("", ""), (WORKSPACE, ""), ("", REPORT), ("  ", "  ")]
+)
+def test_config_says_when_the_report_is_not_configured(
+    client: TestClient, entra_env: Any, workspace_id: str, report_id: str
+) -> None:
+    """Sign-in does not depend on the report: the rest of the app must still start."""
+    entra_env(tenant_id=TENANT, client_id=CLIENT, workspace_id=workspace_id, report_id=report_id)
+
+    body = client.get("/config").json()
+
+    assert body["powerbi"] is None
+    assert body["auth"] is not None
+
+
+def test_config_names_the_report_even_when_sign_in_is_not_configured(
+    client: TestClient, entra_env: Any
+) -> None:
+    """The two halves are independent; neither is derived from the other."""
+    entra_env(workspace_id=WORKSPACE, report_id=REPORT)
+
+    body = client.get("/config").json()
+
+    assert body["auth"] is None
+    assert body["powerbi"]["report_id"] == REPORT
 
 
 # =============================================================================

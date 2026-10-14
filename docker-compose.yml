@@ -241,6 +241,11 @@ services:
       # not passed: the API checks tokens with Entra ID's public keys.
       ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
       ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
+      # The published report the dashboard shows (docs/powerbi.md). Identifiers
+      # too: the API hands them to the web app and never calls Power BI itself.
+      # Left empty, the dashboard says that the report is not configured.
+      POWERBI_WORKSPACE_ID: ${POWERBI_WORKSPACE_ID:-}
+      POWERBI_REPORT_ID: ${POWERBI_REPORT_ID:-}
     networks: [backend]
     depends_on:
       db:

@@ -3,8 +3,8 @@
 Layer: core
 
 Settings are grouped into nested models (database, API, MinIO, archive, Prefect,
-Dash, logging, data, EQUS, reporting, Entra ID) so that each layer depends only
-on the slice it needs. Values come
+Dash, logging, data, EQUS, reporting, Entra ID, Power BI) so that each layer
+depends only on the slice it needs. Values come
 from environment variables first and from ``.env`` second; there are no hardcoded
 credentials and no runtime mutation. Call :func:`get_settings` - it is cached, so
 the environment is read once per process.
@@ -23,7 +23,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, PostgresDsn, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from energy.core.constants import ENTRA_API_SCOPE_NAME, ENTRA_LOGIN_HOST
+from energy.core.constants import (
+    ENTRA_API_SCOPE_NAME,
+    ENTRA_LOGIN_HOST,
+    POWERBI_API_URL,
+    POWERBI_SERVICE_URL,
+)
 
 Environment = Literal["local", "ci", "staging", "production"]
 LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
@@ -41,6 +46,31 @@ _BASE_CONFIG = SettingsConfigDict(
     case_sensitive=False,
     extra="ignore",
 )
+
+
+def _blank_is_unset(value: object) -> object:
+    """Return ``None`` for an empty or blank string, and any other value as it is.
+
+    Compose hands a variable that is missing from ``.env`` to the container as
+    an empty string, which must read as "not configured".
+    """
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
+def _as_guid(value: str | None, message: str) -> str | None:
+    """Return an identifier in the lower-case GUID form, or ``None`` if unset.
+
+    Raises:
+        ValueError: with ``message``, if the value is not a GUID.
+    """
+    if value is None:
+        return None
+    try:
+        return str(UUID(value.strip()))
+    except ValueError as exc:
+        raise ValueError(message) from exc
 
 
 class DatabaseSettings(BaseSettings):
@@ -346,9 +376,7 @@ class EntraSettings(BaseSettings):
         Compose hands a variable that is missing from ``.env`` to the container
         as an empty string, which must read as "sign-in is not configured".
         """
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
+        return _blank_is_unset(value)
 
     @field_validator("tenant_id", "client_id")
     @classmethod
@@ -359,13 +387,7 @@ class EntraSettings(BaseSettings):
             ValueError: if the value is not a GUID. A tenant's domain name is
                 refused too: the issuer of its tokens is written with the GUID.
         """
-        if value is None:
-            return None
-        try:
-            return str(UUID(value.strip()))
-        except ValueError as exc:
-            msg = "ENTRA_TENANT_ID and ENTRA_CLIENT_ID must each be a GUID"
-            raise ValueError(msg) from exc
+        return _as_guid(value, "ENTRA_TENANT_ID and ENTRA_CLIENT_ID must each be a GUID")
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -384,6 +406,61 @@ class EntraSettings(BaseSettings):
     def api_scope(self) -> str | None:
         """Return the full scope the web app requests a token for, or ``None`` if unset."""
         return f"api://{self.client_id}/{ENTRA_API_SCOPE_NAME}" if self.client_id else None
+
+
+class PowerBISettings(BaseSettings):
+    """The published Power BI report the web app's dashboard shows.
+
+    The browser loads the report from the Power BI Service with the signed-in
+    user's own token. This process never calls Power BI: it only tells the app
+    which report to ask for. The two identifiers appear in the report's address
+    and open nothing without the token of a user who has access; they are kept
+    out of the repository all the same.
+    """
+
+    model_config = _BASE_CONFIG
+
+    workspace_id: str | None = Field(default=None, validation_alias="POWERBI_WORKSPACE_ID")
+    report_id: str | None = Field(default=None, validation_alias="POWERBI_REPORT_ID")
+
+    @field_validator("workspace_id", "report_id", mode="before")
+    @classmethod
+    def _empty_is_unset(cls, value: object) -> object:
+        """Treat an empty value as no value: the report is then not configured."""
+        return _blank_is_unset(value)
+
+    @field_validator("workspace_id", "report_id")
+    @classmethod
+    def _must_be_a_guid(cls, value: str | None) -> str | None:
+        """Accept only the GUID form of an identifier, and return it in lower case.
+
+        Raises:
+            ValueError: if the value is not a GUID. A name is refused: a report
+                or a workspace can be renamed, and its identifier cannot.
+        """
+        return _as_guid(value, "POWERBI_WORKSPACE_ID and POWERBI_REPORT_ID must each be a GUID")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_configured(self) -> bool:
+        """Return whether both identifiers are set, so there is a report to show."""
+        return self.workspace_id is not None and self.report_id is not None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def report_api_url(self) -> str | None:
+        """Return where Power BI's REST API answers for the report, or ``None`` if unset."""
+        if not self.is_configured:
+            return None
+        return f"{POWERBI_API_URL}/groups/{self.workspace_id}/reports/{self.report_id}"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def report_web_url(self) -> str | None:
+        """Return the report's address in the Power BI Service, or ``None`` if unset."""
+        if not self.is_configured:
+            return None
+        return f"{POWERBI_SERVICE_URL}/groups/{self.workspace_id}/reports/{self.report_id}"
 
 
 class Settings(BaseSettings):
@@ -407,6 +484,7 @@ class Settings(BaseSettings):
     equs: EqusSettings = Field(default_factory=EqusSettings)
     reporting: ReportingSettings = Field(default_factory=ReportingSettings)
     entra: EntraSettings = Field(default_factory=EntraSettings)
+    powerbi: PowerBISettings = Field(default_factory=PowerBISettings)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -445,6 +523,7 @@ __all__ = [
     "LogLevel",
     "LoggingSettings",
     "MinioSettings",
+    "PowerBISettings",
     "PrefectSettings",
     "Settings",
     "get_settings",

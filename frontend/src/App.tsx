@@ -1,6 +1,7 @@
 // The app's providers and its route table. The router itself is supplied by
-// the caller (the browser's in main.tsx, an in-memory one in tests), and so is
-// the sign-in client: this file never names the sign-in library.
+// the caller (the browser's in main.tsx, an in-memory one in tests), and so are
+// the sign-in client and what draws the Power BI report: this file never names
+// Microsoft's libraries.
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
@@ -14,6 +15,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { DataLoadingPage } from "./pages/DataLoadingPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { paths } from "./paths";
+import type { LoadEmbedReport } from "./powerbi/reportEmbed";
 import { sections } from "./sections";
 import { theme } from "./theme";
 
@@ -27,9 +29,11 @@ function Home() {
 interface AppProps {
   /** Builds the sign-in client: MSAL's in the browser, a stand-in in tests. */
   createAuthClient: CreateAuthClient;
+  /** Fetches what draws the Power BI report: Microsoft's library, or a stand-in. */
+  loadEmbedReport: LoadEmbedReport;
 }
 
-export function App({ createAuthClient }: AppProps) {
+export function App({ createAuthClient, loadEmbedReport }: AppProps) {
   // One client per mounted app, so two renders (as in tests) share no cache.
   const [queryClient] = useState(() => new QueryClient());
 
@@ -45,7 +49,7 @@ export function App({ createAuthClient }: AppProps) {
                 path={paths.dashboard}
                 element={
                   <RequirePermission permission="dashboard:view">
-                    <DashboardPage />
+                    <DashboardPage loadEmbedReport={loadEmbedReport} />
                   </RequirePermission>
                 }
               />

@@ -49,15 +49,19 @@ is the guide.
 serves at `/`; Dash moved to `/dash/`. It is built in the increments of
 [docs/frontend-plan.md](docs/frontend-plan.md): increment 0 (decisions),
 increment 1 (the shell, with two empty sections) and increment 2 (sign-in with
-Microsoft Entra ID, and roles) are done. The decisions are in
+Microsoft Entra ID, and roles) are done. Increment 3 (the dashboard, with the
+embedded Power BI report) is built, and waits for the owner's checks in a
+signed-in browser. The decisions are in
 [ADR 0004](docs/adr/0004-react-spa-entra-and-embedded-power-bi.md) (stack, Entra
 ID sign-in, embedded Power BI),
 [ADR 0005](docs/adr/0005-api-composition-root.md) (`api/deps.py` may import
 adapters), [ADR 0006](docs/adr/0006-api-tokens-and-app-roles.md) (which token
-the API accepts, roles and permissions) and
+the API accepts, roles and permissions),
 [ADR 0007](docs/adr/0007-figures-reach-people-through-power-bi.md) (figures
 reach people through Power BI only; the API's KPI endpoints are removed when
-Phase 4 starts). [docs/sign-in.md](docs/sign-in.md) is
+Phase 4 starts) and
+[ADR 0008](docs/adr/0008-embedding-the-report-in-the-dashboard.md) (how the
+dashboard embeds the report). [docs/sign-in.md](docs/sign-in.md) is
 the guide to sign-in, and [docs/api.md](docs/api.md) the guide to the API: a
 part in plain words for readers who do not write code, and a technical
 reference with every endpoint. Read the plan before touching `frontend/`.
@@ -83,10 +87,11 @@ Definition-of-Done item is verified against a running stack.
 | `/api/ready` payload | `degraded` (connectivity+extensions healthy, Silver empty) - correct, returns 200 not 503 |
 | Placeholder endpoint | `/api/kpis/summary` -> **501** with `code=not_implemented` for a signed-in caller (in the tests); 401 without a token |
 | `X-Request-Id` | Present and propagated |
-| `make check` | Every step passes on the code of increment 2 (2026-10-12): format, lint, mypy strict (111 files), bandit, pip-audit, `frontend-check`, tests (24 minutes). The one run of the whole chain that day failed at the tests, for a test-module import since fixed (see "Sign-in and roles"); the steps were then run again, not the chain as one command |
-| `make frontend-check` | **Exit 0** (2026-10-12) - Biome on 44 files, `tsc`, 45 Vitest tests, production build of two pages. About 10 seconds on an idle machine |
-| `make test` | **841 passed, 39 skipped** (24 minutes with the workbooks present, 2026-10-12). Two unit tests were added afterwards, with the guide to the API (`test_api_reference.py`): `make test-unit`'s selection then passed, 648 with 30 skipped, and the whole suite was not run again |
-| Coverage | **95.86%** (threshold 70%) |
+| `make check` | **Exit 0**, the whole chain as one command, on the code of increment 3 (2026-10-13): format, lint, mypy strict (111 files), bandit, pip-audit, `frontend-check`, tests (22 minutes). Three changes to the frontend alone came after that run (the frame left in view, the dev server's routes, Power BI's error kept from the window): `make frontend-check` passed again, and the Python steps were not run again |
+| `make frontend-check` | **Exit 0** (2026-10-13) - Biome on 55 files, `tsc`, 163 Vitest tests in 9 files, production build of two pages, with the Power BI library in a file of its own (229 kB). About 10 seconds on an idle machine |
+| Dashboard (2026-10-13) | With the two IDs empty, `GET /api/config` answers `"powerbi": null` and sign-in asks for the API's scope only. With them set, it carries the `powerbi` object, and a signed-out headless browser reaches Microsoft's sign-in page with both scopes and no error, from `:8080` and from the dev server. The built embedding module, run in headless Edge with made-up IDs and a text that is no token, loads Power BI's frame and receives its refusal. Caddy's headers are unchanged. **Not done by a session:** seeing the report as a signed-in user |
+| `make test` | **861 passed, 39 skipped** (22 minutes with the workbooks present, 2026-10-13, inside `make check`) |
+| Coverage | **95.91%** (threshold 70%) |
 | `make test-integration` | **118 passed** against real TimescaleDB and MinIO, with the workbooks present (2026-10-07; not re-run on its own since) |
 | `make powerbi` | **Exit 0** in the stack: the bridge healthy on 127.0.0.1:5433; the login reads the reporting views from Windows through it, is refused on gold/silver and with a wrong password; `make powerbi-down` closes the port without touching the db container |
 | No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer. Two deliberate exceptions: `docs/equs_calculation_explained.es.md`, the Spanish translation of the non-technical explanation (asked for on 2026-10-08), and `frontend/src/i18n/es.json`, the texts of the web app's interface (decided on 2026-10-12, ADR 0004) |
@@ -98,8 +103,12 @@ otherwise wins and points at the compose-internal host). The integration row
 dates from 2026-10-07 and the other rows from 2026-09-19. On 2026-10-12, with
 the web app added, `make up`, the routes and `make frontend-check` were verified
 again. Later that day, with sign-in added (increment 2), `make up`, the routes,
-`make test` and every other step of the gate were run again; the `make test`
-and coverage rows are from that run.
+`make test` and every other step of the gate were run again. On 2026-10-13,
+with the dashboard added (increment 3), `make check` ran whole and passed: the
+`make check`, `make test` and coverage rows are from that run, and the
+`make frontend-check` row from the run after the last change to the frontend.
+`make up` was run that day too (13 minutes, the README having changed), and
+the routes were checked again with the report configured and not.
 
 **Integration tests can be skipped silently.** They start a TimescaleDB container
 and wait 120 s for it. On 2026-10-06, with the machine busy, the container needed
@@ -401,7 +410,15 @@ test raising would fail the suite. Keep that distinction.
   - `admin off` means Caddy cannot reload: after editing the Caddyfile,
     `docker compose restart caddy`.
   - Never add a `Cross-Origin-Opener-Policy` header: MSAL's redirect page
-    (increment 2) stops working with it.
+    (increment 2) stops working with it. Nor a
+    `Cross-Origin-Embedder-Policy`: it would block the Power BI frame.
+  - No Content-Security-Policy is sent. One belongs to increment 13, proved in
+    a signed-in browser; section 10 of the plan lists what it must allow.
+  - The dev server forwards the stack's paths as the Caddyfile matches them,
+    by whole segment: `frontend/src/stackRoutes.ts`, read by `vite.config.ts`
+    and kept by a test. Until 2026-10-13 it matched by prefix, so `/dash` took
+    `/dashboard` and that page stayed blank on the dev server. A new route of
+    the Caddyfile needs its entry there.
 - **Dash's base path is fixed in compose** (`DASH_URL_BASE_PATHNAME: /dash/`),
   not read from `.env`, because it must equal the Caddyfile's route. The image's
   healthcheck probes the same variable.
@@ -420,10 +437,13 @@ test raising would fail the suite. Keep that distinction.
 - **`make frontend-check`** is `biome ci`, two `tsc` runs, `vitest run` and
   `vite build`. `make check` runs it before the Python tests.
 - **Tests** render the whole app in jsdom through `renderAppAt()`, in React's
-  strict mode as `main.tsx` does, with a stand-in for sign-in (`fakeAuth()`) and
-  for the API (`stubApi()`); `frontend/src/test/setup.ts` supplies `matchMedia`
+  strict mode as `main.tsx` does, with a stand-in for sign-in (`fakeAuth()`),
+  for the API and Power BI's REST API (`stubApi()`) and for the embedding
+  library (`fakeEmbed()`); `frontend/src/test/setup.ts` supplies `matchMedia`
   and `ResizeObserver`, which Mantine's shell needs and jsdom lacks. The app
   starts with three requests, so a test waits for what it looks at (`findBy…`).
+  A test that moves the clock uses `vi.useFakeTimers({ shouldAdvanceTime: true
+  })`, or `findBy…` never returns.
 
 **Sign-in and roles** (increment 2, built 2026-10-12;
 [docs/sign-in.md](docs/sign-in.md), ADR 0006):
@@ -499,6 +519,83 @@ test raising would fail the suite. Keep that distinction.
   Azure CLI session, `GET` only (`az ad app show`), and print no identifier.
 - **Not covered:** `/dash/`, `/prefect/` and `/minio/` are served without this
   sign-in. That must be closed before the stack runs on a shared host.
+
+**The dashboard and the embedded report** (increment 3, built 2026-10-13;
+section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
+[docs/powerbi.md](docs/powerbi.md)):
+
+- **The browser loads the report from the Power BI Service** with the signed-in
+  user's own token ("embed for your organization"). The API never calls Power
+  BI and holds no Power BI secret. Its whole part is `GET /api/config`, which
+  names the report.
+- **`POWERBI_WORKSPACE_ID` and `POWERBI_REPORT_ID`** are in `.env`, reach the
+  api container through compose and the app through `"powerbi"` of
+  `GET /api/config`, with the scope and two addresses built from them
+  (`core/constants.py` holds Power BI's hosts). Empty means "not configured":
+  the dashboard says so and the rest of the app works. They are in no image
+  and no file of the repository; tests use made-up GUIDs. Nothing depends on
+  the report's name.
+- **A test that reads `GET /config` empties those two variables first**
+  (`entra_env` in `test_api_auth.py` does), or it would read the developer's
+  real IDs from `.env`.
+- **One permission:** `Report.Read.All` of the Power BI Service, delegated,
+  with admin consent. The app names that scope at sign-in
+  (`extraScopesToConsent`), so removing the permission can stop sign-in.
+- **In the app, only `powerbi/powerBiReportEmbed.ts` imports `powerbi-client`.**
+  Everything else uses the `EmbedReport` interface of `powerbi/reportEmbed.ts`.
+  `main.tsx` imports that file on demand, so the library is a file of its own
+  in the build. Its test runs the real library in jsdom.
+- **`getServiceToken()` never sends the page away,** unlike `getApiToken()`.
+  When Microsoft needs the user it rejects with `InteractionNeeded`, and the
+  dashboard shows a message with a button. Keep it so: a consent that cannot
+  be given would otherwise loop.
+- **The app sends Power BI nothing but `GET`.** `powerbi/reportLookup.ts` asks
+  for the report before embedding it: the embed address carries a `config`
+  parameter only Power BI knows, and a refusal arrives as a status and the
+  header `X-PowerBI-Error-Info`.
+- **`powerbi/reportProblem.ts` is the one place where Power BI's answers get a
+  meaning.** Seen on 2026-10-13: 401 `GroupNotAccessible` for a workspace the
+  caller is not in (a wrong workspace ID looks the same), 404
+  `PowerBIEntityNotFound`, 403 `InvalidToken`. **How Power BI refuses a user
+  without a licence is not known:** that user gets the `refused` message,
+  which names the licence. Add the code to `KIND_OF_CODE` once it is seen.
+- **The page never covers or removes the frame on silence alone.** The line
+  about loading sits above the frame. After 60 seconds without `loaded` or an
+  error it becomes a notice with a retry (`dashboard.slow`), and the frame
+  stays. Whether Power BI sends an event when it draws a notice of its own in
+  the frame (a missing licence, for instance) is not known, so nothing may
+  hide the frame.
+- **Seen in a real browser on 2026-10-13,** with the built module, made-up
+  IDs and a text that is no token: the frame loads from `app.powerbi.com`
+  under Caddy's headers, and Power BI answers `LoadReportFailed`, status 403,
+  "Could not resolve cluster", twice in the same instant. A frame's error
+  therefore reaches the page with its status and sentence (`EmbedError.detail`),
+  quoted on the code line, because that name covers more than one cause.
+- **The library raises its errors as page events named `error` that bubble.**
+  `powerBiReportEmbed.ts` stops them at the report's element: at the window
+  they pass for uncaught errors with whatever listens there (the dev server's
+  client did, and an error reporter would).
+- **That browser check needs no sign-in and can be repeated:** headless Edge
+  driven through its debugging port, on a page of the app that does not go to
+  Microsoft (`/signed-out`), importing the built file of the embedding module.
+  The same browser sent the page's own `GET` to Power BI's REST API with a
+  text that is no token: the request passes the browser's cross-origin rules,
+  and the page reads the status, `X-PowerBI-Error-Info` and `RequestId`.
+- **`powerbi/tokenRenewal.ts` keeps the token fresh:** a check every 30
+  seconds that renews when under 10 minutes remain, the tab becoming visible,
+  and Power BI asking (`accessTokenProvider`, or an error named
+  `TokenExpired`). The library has no `tokenExpired` event.
+- **`/dashboard?tokenLife=60` exists on the dev server only.** It makes every
+  check renew, and is compiled out of the production build.
+- **The dashboard's query does not use TanStack's `signal`.** With it, strict
+  mode's first unmount cancels the request and a second token is asked for.
+- **A viewer needs three things:** an app role, access to the workspace, and a
+  Power BI licence. On 2026-10-13 the workspace had one member, the admin
+  account, and no account had both a role and access.
+- **The "data as of" line is the report's,** not the app's: reading a model's
+  refresh history needs Write permission on it.
+- **Not done by a session:** seeing the report as a signed-in user, and seeing
+  it outlive its first token. Both are the owner's checks, listed in the plan.
 
 **EQUS Bronze loader** (built 2026-10-07):
 
@@ -647,8 +744,9 @@ All deliberate; each is explained where it lives.
 
 The web app has its own roadmap, in section 8 of
 [docs/frontend-plan.md](docs/frontend-plan.md): fourteen increments, of which 0
-to 2 are done. Increment 3 is the dashboard page, with the embedded Power BI
-report.
+to 2 are done and 3 (the dashboard page, with the embedded Power BI report) is
+built and waits for the owner's browser checks. Increment 4 is the dataset
+specifications.
 
 When implementing a placeholder: read its docstring first (it is the spec), keep
 and update the docstring, remove the `Implemented in: Phase N` line, and un-skip

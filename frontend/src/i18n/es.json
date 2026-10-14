@@ -10,7 +10,50 @@
   },
   "dashboard": {
     "title": "Tablero",
-    "empty": "Aquí se mostrará el informe de Power BI."
+    "preparing": "Preparando el informe…",
+    "loading": "Cargando el informe…",
+    "slow": "Power BI aún no ha mostrado el informe. Si el recuadro de abajo sigue vacío, revise su conexión e intente de nuevo.",
+    "reportTitle": "Informe de Power BI",
+    "openInPowerBi": "Abrir en Power BI",
+    "problem": {
+      "code": "Código: {{code}}",
+      "requestId": "Solicitud de Power BI: {{id}}",
+      "notConfigured": {
+        "title": "Informe no configurado",
+        "text": "El servidor no tiene configurado el informe de Power BI. Avise a un administrador."
+      },
+      "authorize": {
+        "title": "Power BI necesita su confirmación",
+        "text": "Microsoft debe confirmar su acceso a Power BI antes de mostrar el informe.",
+        "action": "Continuar con Microsoft"
+      },
+      "token": {
+        "title": "No se pudo obtener acceso a Power BI",
+        "text": "Microsoft no entregó el permiso para leer el informe, o Power BI no lo aceptó. Intente de nuevo; si el problema continúa, avise a un administrador."
+      },
+      "noAccess": {
+        "title": "Sin acceso al informe",
+        "text": "Su cuenta no tiene acceso al área de trabajo de Power BI donde está el informe. Pida a un administrador que se lo dé.",
+        "hint": "Si se lo acaban de dar, abra Power BI una vez y vuelva a intentarlo.",
+        "open": "Abrir Power BI"
+      },
+      "refused": {
+        "title": "Power BI no permitió abrir el informe",
+        "text": "Para ver el informe, su cuenta necesita acceso al área de trabajo y una licencia de Power BI. Pida a un administrador que revise ambas."
+      },
+      "notFound": {
+        "title": "Informe no encontrado",
+        "text": "El informe configurado no existe en Power BI o fue movido. Avise a un administrador."
+      },
+      "unreachable": {
+        "title": "Power BI no responde",
+        "text": "No fue posible comunicarse con Power BI. Revise su conexión e intente de nuevo en unos minutos."
+      },
+      "failed": {
+        "title": "No se pudo mostrar el informe",
+        "text": "Power BI informó un error al abrir el informe. Intente de nuevo; si el problema continúa, avise a un administrador con el código que aparece abajo."
+      }
+    }
   },
   "loads": {
     "title": "Carga de datos",

@@ -1,7 +1,8 @@
 // Starts the user's session and hands it to the pages. Nothing of the app is
 // drawn until three things are known, in this order:
 //
-//   1. the sign-in settings, from GET /api/config;
+//   1. the sign-in settings, from GET /api/config, which also names the
+//      Power BI report of the dashboard;
 //   2. who is signed in in this tab; with nobody, the browser goes to Microsoft;
 //   3. what that person may do, from GET /api/me.
 //
@@ -13,7 +14,7 @@ import { useTranslation } from "react-i18next";
 import { useLocation } from "react-router";
 
 import { type Api, ApiError, createApi } from "../api/client";
-import { type AuthConfig, fetchClientConfig } from "../api/config";
+import { type AuthConfig, fetchClientConfig, type PowerBiConfig } from "../api/config";
 import { fetchMe, type Me } from "../api/me";
 import { Loading } from "../components/Loading";
 import { NoAccessPage } from "../pages/NoAccessPage";
@@ -28,6 +29,8 @@ export interface SessionValue {
   api: Api;
   /** The API's answer about the user: name, roles and permissions. */
   me: Me;
+  /** The report the dashboard shows; null when the server names none. */
+  powerBi: PowerBiConfig | null;
 }
 
 const SessionContext = createContext<SessionValue | null>(null);
@@ -94,7 +97,11 @@ export function Session({ createAuthClient, children }: SessionProps) {
     return <ProblemPage kind="notConfigured" />;
   }
   return (
-    <WithAuthClient config={config.data.auth} createAuthClient={createAuthClient}>
+    <WithAuthClient
+      config={config.data.auth}
+      powerBi={config.data.powerbi}
+      createAuthClient={createAuthClient}
+    >
       {children}
     </WithAuthClient>
   );
@@ -102,15 +109,18 @@ export function Session({ createAuthClient, children }: SessionProps) {
 
 interface WithAuthClientProps extends SessionProps {
   config: AuthConfig;
+  powerBi: PowerBiConfig | null;
 }
 
-function WithAuthClient({ config, createAuthClient, children }: WithAuthClientProps) {
+function WithAuthClient({ config, powerBi, createAuthClient, children }: WithAuthClientProps) {
   const { t } = useTranslation();
   // A query, so the client is built once however often React renders: building
   // it reads the answer Microsoft left, which can be read only once.
   const client = useQuery({
     queryKey: ["auth-client", config.client_id],
-    queryFn: () => createAuthClient(config),
+    // Power BI's scope is named at sign-in, so its consent is asked together
+    // with the API's and the dashboard needs no second trip to Microsoft.
+    queryFn: () => createAuthClient(config, { extraScopes: powerBi ? [powerBi.scope] : [] }),
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: Number.POSITIVE_INFINITY,
     retry: false,
@@ -128,7 +138,7 @@ function WithAuthClient({ config, createAuthClient, children }: WithAuthClientPr
     return <SignedOut auth={auth} />;
   }
   return (
-    <SignedIn auth={auth} account={auth.account}>
+    <SignedIn auth={auth} account={auth.account} powerBi={powerBi}>
       {children}
     </SignedIn>
   );
@@ -171,10 +181,11 @@ function SignedOut({ auth }: { auth: AuthClient }) {
 interface SignedInProps {
   auth: AuthClient;
   account: Account;
+  powerBi: PowerBiConfig | null;
   children: ReactNode;
 }
 
-function SignedIn({ auth, account, children }: SignedInProps) {
+function SignedIn({ auth, account, powerBi, children }: SignedInProps) {
   const { t } = useTranslation();
   const api = useMemo(() => createApi(auth), [auth]);
   const me = useQuery({
@@ -185,8 +196,8 @@ function SignedIn({ auth, account, children }: SignedInProps) {
     retry: false,
   });
   const session = useMemo(
-    () => (me.data ? { auth, api, me: me.data } : null),
-    [auth, api, me.data],
+    () => (me.data ? { auth, api, me: me.data, powerBi } : null),
+    [auth, api, me.data, powerBi],
   );
 
   useEffect(() => {

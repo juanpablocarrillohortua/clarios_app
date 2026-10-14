@@ -107,6 +107,20 @@ ENTRA_LOGIN_HOST: Final = "https://login.microsoftonline.com"
 # asks for a token with it, and the API accepts no token without it.
 ENTRA_API_SCOPE_NAME: Final = "access_as_user"
 
+# -----------------------------------------------------------------------------
+# The embedded report (Power BI Service, public cloud)
+# -----------------------------------------------------------------------------
+# The web app shows the published report with the signed-in user's own token.
+# This process never calls Power BI: it only tells the app where to ask.
+#
+# The one delegated permission the app requests: read the reports the user may
+# already open. Nothing here lets it write or refresh.
+POWERBI_REPORT_SCOPE: Final = "https://analysis.windows.net/powerbi/api/Report.Read.All"
+# Power BI's REST API, as the signed-in user ("myorg" is the user's own tenant).
+POWERBI_API_URL: Final = "https://api.powerbi.com/v1.0/myorg"
+# The Power BI Service, where a person opens the report.
+POWERBI_SERVICE_URL: Final = "https://app.powerbi.com"
+
 __all__ = [
     "ALL_SCHEMAS",
     "BRONZE_SCHEMA",
@@ -122,6 +136,9 @@ __all__ = [
     "LAYER_GOLD",
     "LAYER_SILVER",
     "MEDALLION_SCHEMAS",
+    "POWERBI_API_URL",
+    "POWERBI_REPORT_SCOPE",
+    "POWERBI_SERVICE_URL",
     "PROVENANCE_COLUMNS",
     "QUALITY_FLAGS",
     "QUALITY_FLAG_ESTIMATED",

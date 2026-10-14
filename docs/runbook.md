@@ -70,6 +70,16 @@ means the API container cannot reach `login.microsoftonline.com`. The
 troubleshooting table of [Sign-in and roles](sign-in.md#troubleshooting) lists
 each reason with its fix.
 
+### The dashboard shows a message in place of the report
+
+The report is loaded by the browser from the Power BI Service, not by this
+stack, so the API's log says nothing about it. The message itself names the
+cause, and ends with Power BI's code and the ID of its request.
+[What the messages mean](powerbi.md#what-the-messages-mean) lists each one with
+its fix. The one this stack can cause is "report not configured":
+`POWERBI_WORKSPACE_ID` or `POWERBI_REPORT_ID` is empty in `.env`, or the API was
+not restarted after they changed.
+
 ---
 
 ## 2. Database down

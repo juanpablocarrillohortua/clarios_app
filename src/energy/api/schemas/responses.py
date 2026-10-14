@@ -75,15 +75,42 @@ class AuthClientConfig(ResponseModel):
     api_scope: str
 
 
+class PowerBIClientConfig(ResponseModel):
+    """Which Power BI report the dashboard shows, and where the app asks for it.
+
+    The app loads the report from the Power BI Service with the signed-in
+    user's own token. None of these values is a secret, and none opens anything
+    without that token.
+
+    Attributes:
+        workspace_id: the workspace the report is published in.
+        report_id: the report.
+        scope: the scope to request a Power BI access token for.
+        report_api_url: the address of Power BI's REST API that returns the
+            report, with the address to embed it from.
+        report_web_url: the report's address in the Power BI Service, for a
+            link a person follows.
+    """
+
+    workspace_id: str
+    report_id: str
+    scope: str
+    report_api_url: str
+    report_web_url: str
+
+
 class ClientConfigResponse(ResponseModel):
     """Settings the web app reads before anyone is signed in.
 
     Attributes:
         auth: the sign-in settings, or ``None`` when sign-in is not configured
             on this server.
+        powerbi: the report of the dashboard, or ``None`` when none is
+            configured on this server.
     """
 
     auth: AuthClientConfig | None
+    powerbi: PowerBIClientConfig | None
 
 
 class MeResponse(ResponseModel):
@@ -428,6 +455,7 @@ __all__ = [
     "KPISummaryResponse",
     "LayerCounts",
     "MeResponse",
+    "PowerBIClientConfig",
     "ReadinessResponse",
     "RejectedReading",
     "RunDetailResponse",
