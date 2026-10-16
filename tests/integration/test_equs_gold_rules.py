@@ -11,9 +11,9 @@ invoices. Every expected number below follows from those rows and the seeded
 version 1 of the equation. They need no file from the business, so they run
 everywhere.
 
-Three classes, each on a database of its own: the views and the report, which
-change nothing they keep; the monthly close, which commits; and the refresh
-with its lock.
+Four classes, each on a database of its own: the views and the report, which
+change nothing they keep; the daily view and the series of the battery
+processes; the monthly close, which commits; and the refresh with its lock.
 """
 
 from __future__ import annotations
@@ -33,6 +33,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
+from energy.adapters.postgres_equs_gold import PostgresGoldReader
+from energy.domain.equs_gold import DateRange
+from energy.domain.equs_series import totals
 from energy.domain.exceptions import (
     CloseRefusedError,
     ConfigurationError,
@@ -41,6 +44,7 @@ from energy.domain.exceptions import (
 )
 from energy.pipelines.flows.equs_gold import close_month, refresh_gold, resumen_equ
 from energy.pipelines.flows.equs_report import build_report, load_schema
+from energy.services.equs_gold import BatterySeries
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -754,6 +758,119 @@ class TestGoldViews:
             build_report(connection, "2026-09-01", "2026-09-30", source="closed")
 
 
+def _days(connection: Connection, cuenta: str) -> list[tuple[date, int, Decimal]]:
+    rows = connection.execute(
+        text(
+            "SELECT fecha_efectiva, version, cantidad FROM gold.v_resumen_equ_diario "
+            "WHERE cuenta_stats = :cuenta ORDER BY fecha_efectiva"
+        ),
+        {"cuenta": cuenta},
+    )
+    return [tuple(row) for row in rows]  # type: ignore[misc]
+
+
+def _series(connection: Connection, start: date, end: date, **options: Any) -> Any:
+    reader = PostgresGoldReader(connection)
+    return BatterySeries(reader, reader).series(DateRange(start, end), **options)
+
+
+class TestDailyEquivalents:
+    """The daily view (revision 0006) and the series of the battery processes."""
+
+    def test_each_day_sums_the_rows_of_its_accounting_date(self, connection: Connection) -> None:
+        """Oxide on two days of September and one of August; sales net of the credit note."""
+        assert _days(connection, "OXPROD_KG") == [
+            (date(2026, 8, 10), 1, Decimal(2000)),
+            (date(2026, 9, 5), 1, Decimal(1000)),
+            (date(2026, 9, 20), 1, Decimal(500)),
+        ]
+        assert _days(connection, "UNITSHIP") == [
+            (date(2026, 9, 5), 1, Decimal(30)),
+            (date(2026, 9, 25), 1, Decimal(5)),
+            (date(2026, 9, 26), 1, Decimal(-2)),
+        ]
+        assert _days(connection, "POS_ACT_MTL") == [(date(2026, 9, 7), 1, Decimal("114.48"))]
+
+    def test_the_days_add_up_to_the_month_exactly(self, connection: Connection) -> None:
+        """Every driver of every month, the informative ones too, digit for digit."""
+        reconciled = PostgresGoldReader(connection).daily_reconciliation(
+            DateRange(AUGUST, date(2026, 9, 30))
+        )
+        assert len(reconciled) == len(_month(connection, AUGUST)) + len(
+            _month(connection, SEPTEMBER)
+        )
+        assert [item.cuenta_stats for item in reconciled if not item.equal] == []
+        assert {item.cuenta_stats for item in reconciled} >= {"LEADPROD", "UNITSHIP"}
+
+    def test_a_changed_rule_still_adds_up(self, connection: Connection) -> None:
+        """A second, negative rule and a new receipt: the days follow the month."""
+        connection.execute(
+            text(
+                "INSERT INTO silver.instrucc (version, cuenta_stats, regla_n, campo_equs, signo) "
+                "VALUES (1, 'OXPROD_KG', 2, 'PLACASLI', -1)"
+            )
+        )
+        reconciled = PostgresGoldReader(connection).daily_reconciliation(
+            DateRange.of_month(SEPTEMBER)
+        )
+        assert all(item.equal for item in reconciled)
+        oxide = next(item for item in reconciled if item.cuenta_stats == "OXPROD_KG")
+        assert oxide.daily_cantidad == 1500 - 840
+
+    def test_a_day_uses_the_version_in_force_in_its_month(self, connection: Connection) -> None:
+        """Version 2 from September: every September day uses it, August keeps version 1."""
+        _add_version_2(connection)
+        versions = {day.month: version for day, version, _ in _days(connection, "OXPROD_KG")}
+        assert versions == {8: 1, 9: 2}
+
+    def test_a_version_starting_mid_month_does_not_split_it(self, connection: Connection) -> None:
+        """The version of a month is the one in force on its first day, for every day."""
+        connection.execute(
+            text("UPDATE silver.equs_version SET vigente_desde = '2026-09-15' WHERE version = 1")
+        )
+        assert [day for day, _, _ in _days(connection, "OXPROD_KG")] == []
+        with pytest.raises(InvalidPeriodError, match="no version"):
+            _series(connection, date(2026, 9, 16), date(2026, 9, 30))
+
+    def test_the_series_keeps_the_battery_processes(self, connection: Connection) -> None:
+        """No informative driver; each day's total; the whole month is checked."""
+        series = _series(connection, SEPTEMBER, date(2026, 9, 30))
+
+        assert series.procesos == ("OREC", "ENSAMBLE", "FORMACION", "DECORADO", "SHIPPING")
+        assert {row.cuenta_stats for row in series.rows}.isdisjoint(
+            {"LEADPROD", "FORM_PRD_SLI", "15BATPRD"}
+        )
+        factors = _factors(connection)
+        by_day = {total.start: total for total in totals(series)}
+        assert by_day[date(2026, 9, 5)].by_process["OREC"] == 1000 * factors["OXPROD_KG"] + (
+            840 * factors["PLATEPRD_SLI"]
+        )
+        assert by_day[date(2026, 9, 26)].by_process["SHIPPING"] == -2 * factors["UNITSHIP"]
+        month = connection.execute(
+            text("SELECT equs_batt FROM gold.v_equs_batt_mes WHERE mes = :mes"),
+            {"mes": SEPTEMBER},
+        ).scalar_one()
+        assert sum(total.total for total in by_day.values()) == month
+        assert series.reconciled_months == (SEPTEMBER,)
+        assert series.mismatches == ()
+
+    def test_a_series_by_area_and_by_month(self, connection: Connection) -> None:
+        """F&A is formation and decoration; by month it is v_equs_batt_mes."""
+        series = _series(connection, AUGUST, date(2026, 9, 30), frequency="month", areas=["F&A"])
+
+        assert series.procesos == ("FORMACION", "DECORADO")
+        row = connection.execute(
+            text("SELECT * FROM gold.v_equs_batt_mes WHERE mes = :mes"), {"mes": SEPTEMBER}
+        ).one()
+        september = totals(series)[1]
+        assert september.by_process == {
+            "FORMACION": row.equs_formacion,
+            "DECORADO": row.equs_decorado,
+        }
+        assert totals(series)[0].total == 0
+        assert series.reconciliation == ()
+
+
 class TestMonthlyClose:
     """Closing a month freezes it; only a reclose changes it, and keeps what it replaced."""
 
@@ -1049,7 +1166,7 @@ def test_make_help_lists_the_targets() -> None:
     """Each target with its one-line description."""
     listed = _make("help")
     assert listed.returncode == 0
-    for target in ("refresh", "refresh-all", "resumen", "close", "report", "equs-load"):
+    for target in ("refresh", "refresh-all", "resumen", "daily", "close", "report", "equs-load"):
         assert f"{target} " in listed.stdout
 
 
@@ -1062,6 +1179,8 @@ def test_make_help_lists_the_targets() -> None:
         (("report",), "START and END"),
         (("report", "START=2026-09-01"), "START and END"),
         (("report", "END=2026-09-30"), "START and END"),
+        (("daily",), "MONTH or START and END"),
+        (("daily", "START=2026-09-01"), "MONTH or START and END"),
     ],
 )
 def test_make_targets_refuse_a_missing_variable(arguments: tuple[str, ...], missing: str) -> None:

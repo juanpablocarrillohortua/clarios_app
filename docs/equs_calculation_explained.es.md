@@ -305,6 +305,11 @@ no tiene regla.
 
 - **`gold.v_equs_batt_mes`** suma la columna H por proceso y da **EQUS BATT**:
   las filas 36 a 45 de RESUMEN EQU. Solo cuentan las cuentas que suman al total.
+- **Día a día.** `gold.v_resumen_equ_diario` es la columna H de cada día en
+  lugar de cada mes. Un recibo o una factura cuenta en su fecha contable, y cada
+  día usa las reglas que aplican a su mes. Los días de un mes suman exactamente
+  el mes: en septiembre de 2026 dan las mismas 215,590.33. `make daily
+  MONTH=2026-09` imprime una línea por día con las EQ de cada proceso.
 - **EQUS POLY** (inyección de plástico, almacén 1010) es un indicador aparte, en
   `gold.inyeccion`. Nunca se suma a EQUS BATT.
 - **El cierre oficial.** `make close MONTH=2026-09` copia un mes de

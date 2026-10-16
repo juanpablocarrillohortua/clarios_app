@@ -81,6 +81,7 @@ EQUS_GOLD_VIEWS: tuple[str, ...] = (
     "lineas_de_pdcto",
     "v_cantidad_cuenta",
     "v_resumen_equ",
+    "v_resumen_equ_diario",
     "v_equs_batt_mes",
     "inyeccion",
     "v_costo_por_eq",
@@ -154,7 +155,7 @@ def test_migrations_apply_to_head(migrated_engine: Engine) -> None:
         version = connection.execute(
             text("SELECT version_num FROM public.alembic_version")
         ).scalar_one()
-    assert version == "0005"
+    assert version == "0006"
 
 
 def test_all_schemas_exist(migrated_engine: Engine) -> None:
@@ -820,7 +821,7 @@ class TestGoldRevision:
     def test_creates_the_equs_objects_beside_the_energy_tables(
         self, gold_connection: Connection, gold_engine: Engine
     ) -> None:
-        """Six tables, fifteen views and eight functions; nothing materialized."""
+        """Six tables, sixteen views and eight functions; nothing materialized."""
         inspector = inspect(gold_engine)
         assert set(inspector.get_table_names(schema=GOLD_SCHEMA)) == EXPECTED_TABLES[GOLD_SCHEMA]
         assert set(inspector.get_view_names(schema=GOLD_SCHEMA)) == {
@@ -1018,7 +1019,7 @@ def test_gold_downgrades_to_silver_and_up_again(database_url: str) -> None:
             version = connection.execute(
                 text("SELECT version_num FROM public.alembic_version")
             ).scalar_one()
-        assert version == "0005"
+        assert version == "0006"
     finally:
         with engine.begin() as connection:
             for schema in reversed(ALL_SCHEMAS):
@@ -1166,6 +1167,42 @@ def test_silver_live_uniqueness_allows_superseded_rows(migrated_engine: Engine) 
         # A second live row for the same interval is not.
         with pytest.raises(IntegrityError):
             connection.execute(insert, {**params, "value": 3.0, "superseded": None})
+
+
+def test_the_daily_view_goes_down_alone(database_url: str) -> None:
+    """Revision 0006 drops its view and nothing else of Gold, the close tables included."""
+    import os  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from alembic import command  # noqa: PLC0415
+    from alembic.config import Config  # noqa: PLC0415
+
+    previous = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = database_url
+    root = Path(__file__).resolve().parent.parent.parent
+    config = Config(toml_file=str(root / "pyproject.toml"))
+    config.set_main_option("script_location", str(root / "migrations"))
+
+    engine = create_engine(database_url, future=True)
+    try:
+        command.upgrade(config, "head")
+        command.downgrade(config, "0005")
+        views = set(inspect(engine).get_view_names(schema=GOLD_SCHEMA))
+        tables = set(inspect(engine).get_table_names(schema=GOLD_SCHEMA))
+        assert views == {*EQUS_GOLD_VIEWS, *EQUS_DQ_VIEWS} - {"v_resumen_equ_diario"}
+        assert {"resumen_equ", "cierre_mes", "resumen_equ_historial"} <= tables
+        command.upgrade(config, "head")
+        assert "v_resumen_equ_diario" in inspect(engine).get_view_names(schema=GOLD_SCHEMA)
+    finally:
+        with engine.begin() as connection:
+            for schema in reversed(ALL_SCHEMAS):
+                connection.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            connection.execute(text("DROP TABLE IF EXISTS public.alembic_version"))
+        engine.dispose()
+        if previous is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous
 
 
 def test_downgrade_reverts_cleanly(database_url: str) -> None:

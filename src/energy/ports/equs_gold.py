@@ -18,7 +18,12 @@ Responsibility:
         closes from running at once, refreshing the conversion tables Gold
         reads, refreshing statistics, and freezing a month.
 
-    Neither protocol mentions SQL, a table or a view.
+    :class:`DailyGoldReader`
+        The same calculation day by day: what each driver summed on each day,
+        and whether the days of a month add up to the month. A protocol of its
+        own, so that a reader of months need not answer days.
+
+    No protocol mentions SQL, a table or a view.
 
 Depends on:
     ``energy.domain``, standard library typing only.
@@ -44,6 +49,7 @@ if TYPE_CHECKING:
         RefreshStep,
         VersionMonth,
     )
+    from energy.domain.equs_series import DailyDriverAmount, ReconciledAmount
 
 
 @runtime_checkable
@@ -158,4 +164,33 @@ class GoldMaintenance(Protocol):
         ...
 
 
-__all__ = ["GoldMaintenance", "GoldReader"]
+@runtime_checkable
+class DailyGoldReader(Protocol):
+    """Read-only access to the EQUS Gold calculation, day by day."""
+
+    def daily_amounts(self, period: DateRange) -> tuple[DailyDriverAmount, ...]:
+        """Return what each driver summed on each day of a period, and its EQ.
+
+        Args:
+            period: the days, both ends included.
+
+        Returns:
+            One row per day and driver that something fed, with the version in
+            force in the day's month. A day nothing fed has no row.
+        """
+        ...
+
+    def daily_reconciliation(self, months: DateRange) -> tuple[ReconciledAmount, ...]:
+        """Compare each driver of whole months with the sum of its days.
+
+        Args:
+            months: whole months, from the first day of one to the last of another.
+
+        Returns:
+            One row per month and driver that the month or its days have, with
+            both sides and whether they are equal, digit for digit.
+        """
+        ...
+
+
+__all__ = ["DailyGoldReader", "GoldMaintenance", "GoldReader"]

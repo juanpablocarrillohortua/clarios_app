@@ -3,10 +3,11 @@
 Layer: adapters
 
 Responsibility:
-    Implements :class:`~energy.ports.equs_gold.GoldReader` and
+    Implements :class:`~energy.ports.equs_gold.GoldReader`,
+    :class:`~energy.ports.equs_gold.DailyGoldReader` and
     :class:`~energy.ports.equs_gold.GoldMaintenance` against the ``gold`` and
-    ``silver`` schemas. The calculation is the views and functions of revision
-    0004; this module asks them questions and turns the rows into domain
+    ``silver`` schemas. The calculation is the views and functions of revisions
+    0004 and 0006; this module asks them questions and turns the rows into domain
     records, using the statements of :mod:`energy.adapters.equs_gold_sql`.
 
     The reader works on whatever it is given: an engine, from which it takes a
@@ -47,6 +48,7 @@ from energy.domain.equs_gold import (
     RefreshStep,
     VersionMonth,
 )
+from energy.domain.equs_series import DailyDriverAmount, ReconciledAmount
 from energy.domain.exceptions import CloseRefusedError, LockTimeoutError, RepositoryError
 
 if TYPE_CHECKING:
@@ -202,6 +204,32 @@ class PostgresGoldReader:
         """Return the latest month with production receipts, if any."""
         rows = self._rows(sql.LATEST_PRODUCTION_MONTH)
         return rows[0][0] if rows else None
+
+    # -- DailyGoldReader ---------------------------------------------------------
+    def daily_amounts(self, period: DateRange) -> tuple[DailyDriverAmount, ...]:
+        """Return what each driver summed on each day of a period, and its EQ."""
+        return tuple(
+            DailyDriverAmount(
+                row.fecha_efectiva, row.mes, row.version, row.cuenta_stats, row.cantidad, row.equs
+            )
+            for row in self._rows(sql.DAILY_AMOUNTS, **self._period(period))
+        )
+
+    def daily_reconciliation(self, months: DateRange) -> tuple[ReconciledAmount, ...]:
+        """Compare each driver of whole months with the sum of its days."""
+        return tuple(
+            ReconciledAmount(
+                month=row.mes,
+                version=row.version,
+                cuenta_stats=row.cuenta_stats,
+                monthly_cantidad=row.cantidad_mes,
+                daily_cantidad=row.cantidad_dias,
+                monthly_equs=row.equs_mes,
+                daily_equs=row.equs_dias,
+                equal=row.coincide,
+            )
+            for row in self._rows(sql.DAILY_RECONCILIATION, **self._period(months))
+        )
 
 
 class PostgresGoldMaintenance:

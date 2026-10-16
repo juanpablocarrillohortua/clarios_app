@@ -681,3 +681,148 @@ def test_a_malformed_command_line_exits_1_not_2(
     with pytest.raises(SystemExit) as finished:
         getattr(cli, entry)()
     assert finished.value.code == code
+
+
+# -----------------------------------------------------------------------------
+# EQUS Gold: daily
+# -----------------------------------------------------------------------------
+def _series(*, equal: bool = True, frequency: str = "day") -> Any:
+    """Return a series of two days of September 2026, built as the real one is."""
+    from decimal import Decimal  # noqa: PLC0415
+
+    from energy.domain.equs_gold import DateRange, VersionMonth  # noqa: PLC0415
+    from energy.domain.equs_series import (  # noqa: PLC0415
+        BatteryEquivalents,
+        ReconciledAmount,
+        SeriesRow,
+    )
+
+    month = date(2026, 9, 1)
+    factor = Decimal("0.354")
+    # A monthly series has one row per month, dated on its first day.
+    days = ((month, 150),) if frequency == "month" else ((month, 100), (date(2026, 9, 2), 50))
+    rows = tuple(
+        SeriesRow(start, 1, "ENSAMBLE", "Ensamble", "COSPRODU_SLI", Decimal(quantity), factor,
+                  Decimal(quantity) * factor)
+        for start, quantity in days
+    )  # fmt: skip
+    reconciled = ReconciledAmount(
+        month, 1, "COSPRODU_SLI", Decimal(150), Decimal(150 if equal else 149),
+        Decimal("53.1"), Decimal("53.1"), equal=equal,
+    )  # fmt: skip
+    return BatteryEquivalents(
+        period=DateRange(month, date(2026, 9, 30)),
+        frequency="month" if frequency == "month" else "day",
+        procesos=("OREC", "ENSAMBLE"),
+        filtered=False,
+        versions=(VersionMonth(month, 1, "STD FY26"),),
+        rows=rows,
+        reconciliation=(reconciled,) if frequency == "day" else (),
+    )
+
+
+@pytest.fixture
+def daily(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Replace the series flow, recording how it is called."""
+    recorded: dict[str, Any] = {"equal": True}
+
+    def fake_battery_equivalents(period: Any, **options: Any) -> Any:
+        recorded["call"] = (period, options)
+        if "raise" in recorded:
+            raise recorded["raise"]
+        return _series(equal=recorded["equal"], frequency=options["frequency"])
+
+    monkeypatch.setattr(cli, "battery_equivalents", fake_battery_equivalents)
+    return recorded
+
+
+def test_help_lists_the_daily_command() -> None:
+    """Beside the other Gold commands."""
+    result = runner.invoke(cli.build_app(), ["equs", "--help"])
+
+    assert result.exit_code == 0
+    assert "daily" in result.output
+
+
+def test_daily_prints_a_line_per_day_and_the_reconciliation(daily: dict[str, Any]) -> None:
+    """A month by default by day, every battery process, a table."""
+    result = runner.invoke(cli.build_app(), ["equs", "daily", "--month", "2026-09"])
+
+    assert result.exit_code == 0, result.output
+    period, options = daily["call"]
+    assert (period.start, period.end) == (date(2026, 9, 1), date(2026, 9, 30))
+    assert options == {"frequency": "day", "procesos": (), "areas": ()}
+    assert "Equivalent batteries by day, 2026-09-01 to 2026-09-30 (live)" in result.output
+    assert "2026-09-01" in result.output
+    assert "35.40" in result.output
+    assert "The days add up to gold.v_resumen_equ exactly: 2026-09" in result.output
+
+
+def test_daily_passes_its_options_and_writes_json_and_csv(daily: dict[str, Any]) -> None:
+    """A range, by month, filtered; then the same rows for a machine."""
+    as_json = runner.invoke(
+        cli.build_app(),
+        ["equs", "daily", "--start", "2026-08-15", "--end", "2026-09-30", "--frequency", "MONTH",
+         "--process", "ENSAMBLE", "--process", "OREC", "--area", "F&A", "--format", "json"],
+    )  # fmt: skip
+    assert as_json.exit_code == 0, as_json.output
+    period, options = daily["call"]
+    assert (period.start, period.end) == (date(2026, 8, 15), date(2026, 9, 30))
+    assert options == {"frequency": "month", "procesos": ["ENSAMBLE", "OREC"], "areas": ["F&A"]}
+    payload = json.loads(as_json.output)
+    assert payload["frecuencia"] == "month"
+    assert payload["filas"][0]["cuenta_stats"] == "COSPRODU_SLI"
+
+    as_csv = runner.invoke(
+        cli.build_app(), ["equs", "daily", "--month", "2026-09", "--format", "csv"]
+    )
+    assert as_csv.exit_code == 0, as_csv.output
+    lines = as_csv.output.splitlines()
+    assert lines[0] == "periodo,version,proceso,area_planta,cuenta_stats,cantidad,factor,equs"
+    assert lines[1] == "2026-09-01,1,ENSAMBLE,Ensamble,COSPRODU_SLI,100,0.354,35.4"
+
+
+@pytest.mark.usefixtures("daily")
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["equs", "daily"],
+        ["equs", "daily", "--start", "2026-09-01"],
+        ["equs", "daily", "--month", "2026-09", "--start", "2026-09-01", "--end", "2026-09-30"],
+        ["equs", "daily", "--month", "2026-9"],
+        ["equs", "daily", "--start", "2026-09-31", "--end", "2026-10-01"],
+        ["equs", "daily", "--start", "2026-09-30", "--end", "2026-09-01"],
+        ["equs", "daily", "--month", "2026-09", "--frequency", "week"],
+        ["equs", "daily", "--month", "2026-09", "--format", "xml"],
+    ],
+)
+def test_daily_refuses_invalid_arguments(arguments: list[str]) -> None:
+    """Exit 1, with the reason."""
+    result = runner.invoke(cli.build_app(), arguments)
+
+    assert result.exit_code == 1
+    assert "error:" in result.output
+
+
+@pytest.mark.parametrize(("error", "code"), [("database", 2), ("refused", 1)])
+def test_daily_exit_code_says_what_went_wrong(daily: dict[str, Any], error: str, code: int) -> None:
+    """2 for the database, 1 for a request that cannot be answered."""
+    from energy.domain.exceptions import InvalidPeriodError  # noqa: PLC0415
+
+    daily["raise"] = {
+        "database": RepositoryError("could not reach the database"),
+        "refused": InvalidPeriodError("not a battery process"),
+    }[error]
+    result = runner.invoke(cli.build_app(), ["equs", "daily", "--month", "2026-09"])
+
+    assert result.exit_code == code, result.output
+
+
+def test_daily_fails_when_the_days_do_not_add_up(daily: dict[str, Any]) -> None:
+    """The series is printed, the difference listed, and the exit is 1."""
+    daily["equal"] = False
+    result = runner.invoke(cli.build_app(), ["equs", "daily", "--month", "2026-09"])
+
+    assert result.exit_code == 1
+    assert "1 of 1 driver-months of 2026-09 do not add up" in result.output
+    assert "error: the days do not add up to gold.v_resumen_equ" in result.output

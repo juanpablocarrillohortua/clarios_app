@@ -97,6 +97,47 @@ AMOUNTS_CLOSED: Final = (
     "FROM gold.resumen_equ_cierre_mes(:desde, :hasta)"
 )
 
+# -- Day by day (revision 0006) ------------------------------------------------
+DAILY_AMOUNTS: Final = """
+SELECT fecha_efectiva, mes, version, cuenta_stats, cantidad, equs
+FROM gold.v_resumen_equ_diario
+WHERE fecha_efectiva BETWEEN :desde AND :hasta
+ORDER BY fecha_efectiva, cuenta_stats
+"""
+
+# Each driver of whole months as v_resumen_equ gives it and as its days add up.
+# The comparison is made here because NUMERIC adds without rounding and Python's
+# Decimal, at its default precision, does not.
+DAILY_RECONCILIATION: Final = """
+WITH diario AS (
+    SELECT dia.mes, dia.version, dia.cuenta_stats,
+           sum(dia.cantidad) AS cantidad, sum(dia.equs) AS equs
+    FROM gold.v_resumen_equ_diario AS dia
+    WHERE dia.fecha_efectiva BETWEEN :desde AND :hasta
+    GROUP BY dia.mes, dia.version, dia.cuenta_stats
+),
+mensual AS (
+    SELECT resumen.mes, resumen.version, resumen.cuenta_stats, resumen.cantidad, resumen.equs
+    FROM gold.v_resumen_equ AS resumen
+    WHERE resumen.mes BETWEEN :desde AND :hasta
+)
+SELECT coalesce(mensual.mes, diario.mes) AS mes,
+       coalesce(mensual.version, diario.version) AS version,
+       coalesce(mensual.cuenta_stats, diario.cuenta_stats) AS cuenta_stats,
+       mensual.cantidad AS cantidad_mes,
+       diario.cantidad AS cantidad_dias,
+       mensual.equs AS equs_mes,
+       diario.equs AS equs_dias,
+       mensual.cantidad IS NOT DISTINCT FROM diario.cantidad
+           AND mensual.equs IS NOT DISTINCT FROM diario.equs AS coincide
+FROM mensual
+FULL JOIN diario
+  ON diario.mes = mensual.mes
+ AND diario.version = mensual.version
+ AND diario.cuenta_stats = mensual.cuenta_stats
+ORDER BY 1, 3
+"""
+
 POLY: Final = """
 SELECT poly.mes, poly.cuenta, poly.categoria, poly.area_planta, poly.piezas,
        poly.piezas_con_equ, poly.factor_equ, poly.equs, fila.fila
@@ -175,6 +216,8 @@ __all__ = [
     "CLOSED_MONTHS",
     "CLOSED_PROCESSES",
     "COUNT_LIVE_ROWS",
+    "DAILY_AMOUNTS",
+    "DAILY_RECONCILIATION",
     "DRIVERS",
     "DROP_LEFTOVER_ROWS",
     "FREEZE",

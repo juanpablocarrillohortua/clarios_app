@@ -1,6 +1,44 @@
-# CLAUDE.md — project context and build state
+# CLAUDE.md
 
-Working notes for Claude Code sessions on this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+---
+
+## Commands
+
+Every `make` target is listed by `make help`. The ones used most:
+
+| Task | Command |
+|---|---|
+| Full quality gate (what CI runs) | `make check` (format-check → lint → typecheck → security → test) |
+| Format / lint / types | `make format`, `make lint`, `make typecheck` (mypy strict) |
+| Unit tests only (no containers) | `make test-unit` |
+| Integration tests (testcontainers) | `make test-integration` |
+| One test file / one test | `uv run pytest tests/unit/test_settings.py --no-cov -q` / `uv run pytest "tests/unit/test_settings.py::test_name" --no-cov` |
+| By marker | `uv run pytest -m unit --no-cov` (markers: `unit`, `integration`, `e2e`; `--strict-markers` is on) |
+| Stack | `make up` / `make down` / `make logs` |
+| Migrations | `make db-upgrade`, `make db-downgrade`, `make db-revision msg="..."` |
+| EQUS pipeline | `make equs-load`, `make equs-silver`, `make refresh MONTH=YYYY-MM`, `make refresh-all`, `make resumen MONTH=YYYY-MM`, `make daily MONTH=YYYY-MM`, `make close MONTH=YYYY-MM`, `make report START=... END=...` |
+
+Coverage (`fail_under = 70`) is switched on only by `make test`, which passes
+`--cov`; a plain `uv run pytest` collects none. Never add `--cov` to a partial
+run: the floor is measured on the whole suite and a subset falls below it.
+
+## Code map
+
+`src/energy/` follows the hexagon. `domain/` holds pure rules, `ports/` the
+interfaces, `adapters/` the implementations (Postgres, MinIO, calamine, and the
+EQUS SQL in `equs_silver_sql.py` / `equs_gold_sql.py`). `services/` holds the use
+cases, and `pipelines/`, `api/` and `dashboards/` are the entry points that wire
+them together. `core/` has settings and logging; `db/` has the engine, models
+and health checks. `schemas/` holds the per-layer data contracts and
+`analytics/` the Phase 5 models (baseline, decomposition, anomaly, changepoint,
+attribution); both are still placeholders. `__main__.py` defines two console
+scripts: `energy` (Typer; only the `equs` group is registered so far) and
+`equs-report` (the date-range report as JSON). `migrations/` is Alembic
+(`0001`–`0006`). Tests live in `tests/unit`, `tests/integration` and
+`tests/e2e`. `notebooks/` holds EDA notebooks: outside the package, but ruff still
+lints them (with relaxed rules for prints).
 
 ---
 
@@ -123,6 +161,11 @@ check free space first.
 - The GitHub Actions workflows have not run on a real push.
 
 ## Environment specifics
+
+These values describe the machine where Phase 1 was verified. Other checkouts
+differ: on one, uv is on the PATH at `C:\Users\Stephanie\.local\bin`, and the repo
+is under `C:\Users\Stephanie\Escritorio\proyectos\clarios_app`. Check the paths
+before you rely on them.
 
 | Item | Value |
 |---|---|
@@ -257,6 +300,31 @@ test raising would fail the suite. Keep that distinction.
 - The engine's connect hook (`db/session.py`) commits its `SET TIME ZONE`. It
   used to leave the connection in a transaction, which made autocommit connections
   impossible and let the pool's rollback undo the setting after the first use.
+
+**EQUS daily equivalents** (built 2026-10-15, revision `0006`):
+
+- `gold.v_resumen_equ_diario` is column H by accounting date (`fecha_efectiva`). It
+  reads the two pairing views filtered on `en_vigor`, so every day uses the version
+  in force on the first day of its month; a version starting mid-month changes
+  nothing until the next month. It holds every driver; `suma_eq` marks EQUS BATT.
+- **The days of a month add up to `v_resumen_equ` exactly.** The reconciliation
+  runs in SQL (`DAILY_RECONCILIATION`), not in Python: Decimal's default
+  28-digit context could round a sum that NUMERIC keeps exact. Verified on FY26
+  of the dev data, 2026-10-15: 2026-09 has 13 driver-months, all equal.
+- `0006` is a revision of its own, not part of `0004`: taking a rewritten `0004`
+  means going down to `0003`, which drops every closed month. Going down from `0006`
+  drops the view alone.
+- `BatterySeries` (`services/equs_gold.py`) reads it through the separate port
+  `DailyGoldReader`, so the `GoldReader` fakes did not change. It keeps the
+  `suma_eq` drivers only; `--process` filters by `proceso`, `--area` by
+  `gold.secciones_reporte.area_planta` (SHIPPING has none). The version checks are
+  shared with `RangeReporter` (`_versions_in_force`).
+- `make daily` / `energy equs daily` exits 1 when the days of a whole month do not
+  add up, after printing the series. Tables round half up, as the workbook does:
+  `format()` on a Decimal rounds half to even (July 2026 shipping is 9,015.285).
+- Energy pairing (kWh per EQ) is not built: it comes next, in per-plant notebooks.
+  Only Formation has measured, hourly energy (three rectifiers, Jul–Oct 2026); OREC,
+  Ensamble and Decoration have monthly, allocated kWh; Shipping has none.
 
 **EQUS Bronze loader** (built 2026-10-07):
 

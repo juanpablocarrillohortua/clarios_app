@@ -20,8 +20,9 @@ Responsibility:
     its result: a table, CSV or JSON that can be piped.
 
     Exit codes of the EQUS Gold commands (``refresh-gold``, ``resumen-equ``,
-    ``close-month``, ``equs-report``): 0 success; 1 invalid arguments, or a
-    request refused (a month already closed, a blocking data-quality check);
+    ``close-month``, ``daily``, ``equs-report``): 0 success; 1 invalid
+    arguments, or a request refused (a month already closed, a blocking
+    data-quality check, days that do not add up to their month);
     2 a database error; 3 the refresh lock was not released in time. A
     malformed command line exits 1 too, rather than Click's usual 2, so that 2
     always means the database.
@@ -47,9 +48,18 @@ from energy.core.logging import configure_from_settings
 from energy.domain.equs_gold import (
     COLUMN_H_FIELDS,
     REPORT_SOURCES,
+    DateRange,
     describe_close,
     describe_quality,
+    month_label,
+    parse_day,
     parse_month,
+)
+from energy.domain.equs_series import (
+    FREQUENCIES,
+    describe_series,
+    series_csv_rows,
+    series_json,
 )
 from energy.domain.equs_silver import DEFAULT_EXAMPLES, describe
 from energy.domain.exceptions import (
@@ -67,6 +77,7 @@ from energy.pipelines.flows.equs_bronze_load import (
     load_workbook,
 )
 from energy.pipelines.flows.equs_gold import (
+    battery_equivalents,
     close_month,
     latest_production_month,
     refresh_gold,
@@ -722,6 +733,87 @@ def equs_report(
     typer.echo(f"Report written to {output}.", err=True)
 
 
+def _series_period(month: str | None, start: str | None, end: str | None) -> DateRange:
+    """Read the range of ``equs daily``: a month, or a start and an end."""
+    if month and (start or end):
+        raise InvalidPeriodError("give --month, or --start and --end, not both")
+    if month:
+        return DateRange.of_month(parse_month(month))
+    if not start or not end:
+        raise InvalidPeriodError("give --month YYYY-MM, or both --start and --end as YYYY-MM-DD")
+    return DateRange(parse_day(start, name="--start"), parse_day(end, name="--end"))
+
+
+def equs_daily(
+    month: Annotated[str | None, typer.Option("--month", help="A whole month, as YYYY-MM.")] = None,
+    start: Annotated[
+        str | None, typer.Option("--start", help="First day, YYYY-MM-DD, included.")
+    ] = None,
+    end: Annotated[
+        str | None, typer.Option("--end", help="Last day, YYYY-MM-DD, included.")
+    ] = None,
+    frequency: Annotated[str, typer.Option("--frequency", help="day or month.")] = "day",
+    process: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--process",
+            help="Keep only this battery process (OREC, ENSAMBLE, FORMACION, DECORADO, "
+            "SHIPPING). Repeat for several.",
+        ),
+    ] = None,
+    area: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--area",
+            help="Keep only the processes of this plant area (OREC, Ensamble, F&A). "
+            "Repeat for several. SHIPPING has no area.",
+        ),
+    ] = None,
+    output_format: Annotated[str, typer.Option("--format", help="table, json or csv.")] = "table",
+) -> None:
+    """Print the equivalent batteries of EQUS BATT day by day (or month by month).
+
+    Read-only and live. Only the drivers that add to EQUS BATT: OREC, ENSAMBLE,
+    FORMACION, DECORADO and SHIPPING. A day belongs to its accounting date
+    (Fecha Efectiva) and uses the version of the equation in force in its
+    month. By day, every whole month of the range is also checked: its days
+    must add up to gold.v_resumen_equ exactly.
+    """
+    try:
+        period = _series_period(month, start, end)
+        chosen = _choice(frequency, FREQUENCIES, "--frequency")
+        output = _choice(output_format, _TABLE_FORMATS, "--format")
+        series = battery_equivalents(
+            period,
+            frequency="month" if chosen == "month" else "day",
+            procesos=process or (),
+            areas=area or (),
+        )
+    except EnergyError as error:
+        raise _stop(error) from error
+
+    if output == "json":
+        typer.echo(json.dumps(series_json(series), ensure_ascii=False, indent=2))
+    elif output == "csv":
+        buffer = io.StringIO()
+        csv.writer(buffer, lineterminator="\n").writerows(series_csv_rows(series))
+        typer.echo(buffer.getvalue(), nl=False)
+    else:
+        for line in describe_series(series):
+            typer.echo(line)
+        for partial in series.period.partial_months if series.frequency == "month" else ():
+            typer.secho(
+                f"warning: {month_label(partial)} is only partly in the range",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+    if series.mismatches:
+        typer.secho(
+            "error: the days do not add up to gold.v_resumen_equ", err=True, fg=typer.colors.RED
+        )
+        raise typer.Exit(code=EXIT_INVALID)
+
+
 def build_app() -> typer.Typer:
     """Build the Typer application with every implemented command.
 
@@ -730,8 +822,9 @@ def build_app() -> typer.Typer:
         ``energy equs load-all`` lands a directory of them,
         ``energy equs build-silver`` builds Silver from what was landed,
         ``energy equs refresh-gold`` brings Gold up to date,
-        ``energy equs resumen-equ`` prints column H of a month and
-        ``energy equs close-month`` freezes a month.
+        ``energy equs resumen-equ`` prints column H of a month,
+        ``energy equs close-month`` freezes a month and
+        ``energy equs daily`` prints the EQ of EQUS BATT day by day.
     """
     app = typer.Typer(
         name="energy",
@@ -752,6 +845,7 @@ def build_app() -> typer.Typer:
     equs.command("refresh-gold")(equs_refresh_gold)
     equs.command("resumen-equ")(equs_resumen_equ)
     equs.command("close-month")(equs_close_month)
+    equs.command("daily")(equs_daily)
     app.add_typer(equs, name="equs")
     return app
 

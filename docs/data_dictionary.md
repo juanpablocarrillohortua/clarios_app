@@ -787,9 +787,17 @@ would, so the foreign key holds on a database that was never built. Downgrading
 | `lineas_de_pdcto` | month × product line × Campo Equs | `descripcion`, `cantidad`, `mat_activo`, `comp_deco` | Pivot LINEAS DE PDCTO, per month |
 | `v_cantidad_cuenta` | version × driver × month | `cantidad` (Q_k), `en_vigor` | Column D of RESUMEN EQU, for every version |
 | `v_resumen_equ` | month × driver, version in force | `version`, `proceso`, `descripcion`, `cantidad`, `factor`, `equs` = cantidad × factor, `suma_eq` | **Column H of RESUMEN EQU** |
+| `v_resumen_equ_diario` | day × driver, version in force in the day's month (revision 0006) | `fecha_efectiva`, `mes`, `version`, `proceso`, `cuenta_stats`, `descripcion`, `cantidad`, `factor`, `equs` = cantidad × factor, `suma_eq` | New: column H day by day. The days of a month add up to `v_resumen_equ` digit for digit |
 | `v_equs_batt_mes` | month | `equs_orec`, `equs_ensamble`, `equs_formacion`, `equs_decorado`, `equs_shipping`, `equs_batt` | Rows 36–45 |
 | `inyeccion` | month × account × category | `piezas`, `valor_equ` (EQUS POLY, warehouse 1010; not added to EQUS BATT) | Pivot INYECCION, rows 20–34 |
 | `v_costo_por_eq` | month × process | `equs`, `costo_cop` (summed over plant areas), `cop_por_eq` (null without cost or EQ) | New |
+
+`v_resumen_equ_diario` sums the same two pairing views as `v_cantidad_cuenta`,
+grouped by `fecha_efectiva` instead of by month, and keeps only the pairs whose
+version is in force in the row's month. A version that starts in the middle of a
+month therefore applies from the next month, for every day, as it does for the
+month. `make daily` (`energy equs daily`) reads it for the drivers that add to
+EQUS BATT and checks every whole month of the range against `v_resumen_equ`.
 
 A driver with no rule, or whose rules matched nothing in the month, has no row in
 `v_cantidad_cuenta` or `v_resumen_equ` (`GRIDS_REG_POS` and `CARTON_BATT` in

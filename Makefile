@@ -73,7 +73,7 @@ endif
 .PHONY: help install up down logs restart format format-check lint typecheck \
         security test test-unit test-integration check db-upgrade db-downgrade \
         db-revision db-reset seed equs-load equs-silver refresh refresh-all resumen \
-        close report clean
+        daily close report clean
 
 # -----------------------------------------------------------------------------
 # Meta
@@ -192,6 +192,11 @@ refresh-all: ## Land data/raw_excels, build Silver, refresh Gold [MONTH=YYYY-MM]
 resumen: ## Column H of a month: MONTH=YYYY-MM [FORMAT=json|csv] [SOURCE=closed]
 	@test -n "$(MONTH)" || { echo "error: MONTH is required, for example: make resumen MONTH=2026-09" >&2; exit 1; }
 	$(ENERGY) equs resumen-equ --month $(MONTH) $(if $(FORMAT),--format $(FORMAT)) $(if $(SOURCE),--source $(SOURCE))
+
+# PROCESS and AREA take one or more names separated by spaces: PROCESS="OREC ENSAMBLE".
+daily: ## EQUS BATT by day: MONTH=YYYY-MM or START= END= [FREQUENCY=month] [PROCESS=] [AREA=] [FORMAT=]
+	@test -n "$(MONTH)" || test -n "$(START)" -a -n "$(END)" || { echo "error: MONTH or START and END are required, for example: make daily MONTH=2026-09" >&2; exit 1; }
+	$(ENERGY) equs daily $(if $(MONTH),--month $(MONTH)) $(if $(START),--start $(START)) $(if $(END),--end $(END)) $(if $(FREQUENCY),--frequency $(FREQUENCY)) $(foreach p,$(PROCESS),--process "$(p)") $(foreach a,$(AREA),--area "$(a)") $(if $(FORMAT),--format $(FORMAT))
 
 close: ## Freeze a month's close: MONTH=YYYY-MM [ACCEPT_WARNINGS=1] [RECLOSE=1]
 	@test -n "$(MONTH)" || { echo "error: MONTH is required, for example: make close MONTH=2026-09" >&2; exit 1; }
