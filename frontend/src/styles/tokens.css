@@ -1,0 +1,266 @@
+/*
+ * The app's design tokens: every colour, gradient, glow, radius and motion
+ * value. This is the only file with colour values; everything else refers to
+ * these names (a test, checks/designTokens.test.ts, keeps it so).
+ *
+ * The palette is the Power BI report's, so the app and the report read as one
+ * product. Each colour keeps the job it has in the report. The app is dark
+ * only.
+ *
+ * Contrast (WCAG 2.2), on surface / canvas-top:
+ *   text 15.39 / 16.47 · text-secondary 9.87 / 10.56 · text-muted 6.49 / 6.95
+ *   text-disabled 3.10 / 3.31 (inactive text is exempt)
+ *   error 6.01 / 6.43 · success 10.29 / 11.01 · link (blue) 6.33 / 6.78
+ *   meta (cyan) 10.07 / 10.77 · warning (amber) 8.96 / 9.59
+ *   text-on-accent on pink 5.71 (white would be 3.44, below AA)
+ *   focus (pink) against canvas 5.66, against surface 5.29
+ *   border-control against surface 3.47
+ */
+
+:root {
+  /* Structure and surfaces ------------------------------------------------ */
+
+  /* Behind the shell: the report's outspace around its canvas. */
+  --ce-outspace: #070a1c;
+  /* The content area: the report's page background, top to bottom. */
+  --ce-canvas-top: #080b20;
+  --ce-canvas-bottom: #05071a;
+  /* The dark purple glow at the top centre of every report page. */
+  --ce-glow-top: #490e6f;
+  /* The report's faint background grid. */
+  --ce-grid: #3a3f80;
+  /* Panels, the sidebar, inactive nav items, secondary buttons, inputs,
+     table headers: the report's panel fill. */
+  --ce-surface: #0e1330;
+  /* Hover rows and nav items, totals rows. */
+  --ce-surface-raised: #151b42;
+  /* Alternating rows; the low end of a data scale. */
+  --ce-surface-sunken: #10143a;
+  /* Hover fill of secondary buttons ("Cerrar sesión", "Reintentar"). */
+  --ce-hover-secondary: #5b1a4a;
+
+  /* Lines ------------------------------------------------------------------- */
+
+  /* Default border of panels, cards, nav items and inputs. */
+  --ce-border: #2a2f6a;
+  /* Dividers and hairlines: the report's chart gridlines. */
+  --ce-hairline: #1c2150;
+  /* The edge of a form control, and every border in high-contrast mode. */
+  --ce-border-control: #5e66b0;
+
+  /* Accents ----------------------------------------------------------------- */
+
+  --ce-pink: #ff2e9a;
+  --ce-blue: #2d9cff;
+  --ce-purple: #8b5cf6;
+  --ce-cyan: #22d3ee;
+  --ce-magenta: #e040fb;
+  --ce-amber: #ffa100;
+  --ce-violet: #6d28d9;
+  --ce-navy: #1e3a8a;
+
+  /* Text -------------------------------------------------------------------- */
+
+  --ce-text: #e8ecf7;
+  --ce-text-secondary: #b7beda;
+  --ce-text-muted: #9099bf;
+  --ce-text-disabled: #5b6386;
+  /* On a pink or gradient fill. */
+  --ce-text-on-accent: var(--ce-outspace);
+
+  /* Status ------------------------------------------------------------------ */
+
+  /* Red, 31 degrees of hue away from the pink, so pink never means error. */
+  --ce-error: #ff5c5c;
+  /* Mint, not cyan: cyan means metadata and "online". */
+  --ce-success: #3ddc97;
+  --ce-warning: var(--ce-amber);
+  --ce-info: var(--ce-blue);
+
+  /* Roles ------------------------------------------------------------------- */
+
+  /* The one most important element of a view. */
+  --ce-accent: var(--ce-pink);
+  --ce-accent-hover: color-mix(in srgb, var(--ce-pink), white 14%);
+  --ce-accent-tint: color-mix(in srgb, var(--ce-pink) 14%, transparent);
+  --ce-link: var(--ce-blue);
+  --ce-meta: var(--ce-cyan);
+  --ce-online: var(--ce-cyan);
+  --ce-focus: var(--ce-pink);
+  --ce-selection: color-mix(in srgb, var(--ce-pink) 35%, transparent);
+  /* The translucent material of the header and footer. */
+  --ce-material: color-mix(in srgb, var(--ce-surface) 72%, transparent);
+  --ce-material-blur: blur(16px) saturate(140%);
+
+  /* Gradients --------------------------------------------------------------- */
+
+  --ce-gradient-header: linear-gradient(
+    90deg,
+    var(--ce-amber),
+    var(--ce-pink),
+    var(--ce-purple),
+    var(--ce-blue)
+  );
+  --ce-gradient-nav-active: linear-gradient(
+    120deg,
+    var(--ce-pink),
+    var(--ce-magenta),
+    var(--ce-purple)
+  );
+  --ce-gradient-panel-top: linear-gradient(90deg, var(--ce-pink), var(--ce-purple), var(--ce-blue));
+  --ce-gradient-pill: linear-gradient(90deg, var(--ce-glow-top), var(--ce-violet), var(--ce-navy));
+  --ce-gradient-scale: linear-gradient(
+    90deg,
+    var(--ce-surface-sunken),
+    var(--ce-violet),
+    var(--ce-pink)
+  );
+  --ce-gradient-canvas: linear-gradient(180deg, var(--ce-canvas-top), var(--ce-canvas-bottom));
+
+  /* Glows: accents, never the default state of everything ------------------- */
+
+  /* Strong: the primary element of a view, and nothing else. */
+  --ce-glow-primary:
+    0 0 0 1px color-mix(in srgb, var(--ce-pink) 55%, transparent),
+    0 0 20px color-mix(in srgb, var(--ce-pink) 42%, transparent);
+  /* Soft: the active nav item. */
+  --ce-glow-nav: 0 0 14px color-mix(in srgb, var(--ce-pink) 30%, transparent);
+  /* Panels: a large, faint violet halo. */
+  --ce-glow-panel: 0 18px 48px -18px color-mix(in srgb, var(--ce-violet) 45%, transparent);
+  /* The ambient light of the content area: purple at the top centre, blue at
+     the bottom right, violet at the bottom left. */
+  --ce-glow-ambient:
+    radial-gradient(
+      60% 45% at 50% 0%,
+      color-mix(in srgb, var(--ce-glow-top) 75%, transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      45% 40% at 100% 100%,
+      color-mix(in srgb, var(--ce-blue) 9%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      45% 40% at 0% 100%,
+      color-mix(in srgb, var(--ce-violet) 14%, transparent),
+      transparent 70%
+    );
+  --ce-grid-line: color-mix(in srgb, var(--ce-grid) 14%, transparent);
+  --ce-grid-size: 40px;
+
+  /* Card accents, as the report's KPI cards: a left bar and a top line. Set by
+     [data-accent] on a panel; nothing uses them yet. */
+  --ce-accent-pink: var(--ce-pink);
+  --ce-accent-blue: var(--ce-blue);
+  --ce-accent-purple: var(--ce-purple);
+  --ce-accent-cyan: var(--ce-cyan);
+  --ce-accent-magenta: var(--ce-magenta);
+  --ce-accent-amber: var(--ce-amber);
+
+  /* Data: the report's theme order for series, and its heat-map scale. The
+     app draws no chart yet. */
+  --ce-chart-1: var(--ce-blue);
+  --ce-chart-2: var(--ce-purple);
+  --ce-chart-3: var(--ce-cyan);
+  --ce-chart-4: var(--ce-magenta);
+  --ce-chart-5: var(--ce-amber);
+  --ce-scale-low: var(--ce-surface-sunken);
+  --ce-scale-mid: var(--ce-violet);
+  --ce-scale-high: var(--ce-pink);
+  --ce-row-alternate: var(--ce-surface-sunken);
+  --ce-row-hover: var(--ce-surface-raised);
+  --ce-row-total: var(--ce-surface-raised);
+
+  /* Radii ------------------------------------------------------------------- */
+
+  --ce-radius-xs: 4px;
+  --ce-radius-sm: 8px;
+  --ce-radius-md: 12px;
+  --ce-radius-pill: 999px;
+
+  /* Typography -------------------------------------------------------------- */
+
+  /* The platform's own face: optical sizes and legibility tuning for free. */
+  --ce-font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji";
+  --ce-weight-title: 600;
+  --ce-leading-title: 1.2;
+  --ce-leading-body: 1.55;
+  /* Tracking by size: tighter as type grows, a little looser when small. */
+  --ce-tracking-display: -0.02em;
+  --ce-tracking-title: -0.01em;
+  --ce-tracking-small: 0.01em;
+
+  /* Motion ------------------------------------------------------------------ */
+
+  /* A critically damped spring (damping 1.0, response 0.3 s): no overshoot,
+     settled within 0.5 % after 360 ms. Sampled from
+     x(t) = 1 - (1 + wt) e^(-wt), w = 2 pi / 0.3. Nothing in the app is
+     flicked, so nothing bounces. */
+  --ce-ease-spring: linear(
+    0,
+    0.067,
+    0.205,
+    0.358,
+    0.499,
+    0.619,
+    0.715,
+    0.79,
+    0.848,
+    0.89,
+    0.921,
+    0.944,
+    0.96,
+    0.972,
+    0.981,
+    0.986,
+    0.991,
+    0.993,
+    1
+  );
+  --ce-duration-spring: 360ms;
+  --ce-ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ce-duration-press: 100ms;
+  --ce-duration-fade: 180ms;
+  /* A pressed control shrinks a little, on pointer-down. */
+  --ce-press-scale: 0.97;
+  /* How far a panel rises as it appears. */
+  --ce-enter-offset: 4px;
+}
+
+/* Reduced motion: no glow and no movement. What remains is a short fade. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ce-glow-primary: 0 0 0 1px var(--ce-pink);
+    --ce-glow-nav: none;
+    --ce-glow-panel: none;
+    --ce-glow-ambient: none;
+    --ce-duration-spring: 0ms;
+    --ce-duration-press: 0ms;
+    --ce-duration-fade: 120ms;
+    --ce-press-scale: 1;
+    --ce-enter-offset: 0px;
+  }
+}
+
+/* Reduced transparency: solid materials. */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --ce-material: var(--ce-surface);
+    --ce-material-blur: none;
+  }
+}
+
+/* More contrast: defined edges, no ambient light, no grid, no faint text. */
+@media (prefers-contrast: more) {
+  :root {
+    --ce-border: var(--ce-border-control);
+    --ce-hairline: var(--ce-border-control);
+    --ce-text-muted: var(--ce-text-secondary);
+    --ce-material: var(--ce-surface);
+    --ce-material-blur: none;
+    --ce-glow-ambient: none;
+    --ce-grid-line: transparent;
+  }
+}

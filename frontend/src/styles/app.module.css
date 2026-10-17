@@ -1,0 +1,173 @@
+/*
+ * The app's own pieces: the canvas of a page outside the shell, panels, the
+ * status line, the report's frame. All values come from tokens.css.
+ */
+
+/* A page outside the shell (sign-in, a problem, loading) stands on the same
+   canvas as the content area. */
+.canvas {
+  background: var(--ce-glow-ambient), var(--ce-gradient-canvas);
+  background-color: var(--ce-canvas-bottom);
+}
+
+/* Panels -------------------------------------------------------------------- */
+
+.panel {
+  --ce-panel-marker: transparent;
+  --ce-panel-top: var(--ce-gradient-panel-top);
+
+  position: relative;
+  overflow: hidden;
+  padding: var(--mantine-spacing-lg);
+  border: 1px solid var(--ce-border);
+  border-radius: var(--ce-radius-md);
+  background-color: var(--ce-surface);
+  box-shadow: var(--ce-glow-panel);
+  transition:
+    opacity var(--ce-duration-fade) var(--ce-ease-out),
+    translate var(--ce-duration-spring) var(--ce-ease-spring);
+}
+
+/* A panel arrives: it rises a little and fades in, on the spring. */
+@starting-style {
+  .panel {
+    opacity: 0;
+    translate: 0 var(--ce-enter-offset);
+  }
+}
+
+/* The top line, as on the report's panels. */
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--ce-panel-top);
+}
+
+/* The marker bar on the left: what kind of message this is. It only repeats
+   what the title says. */
+.panel[data-tone],
+.panel[data-accent] {
+  padding-inline-start: calc(var(--mantine-spacing-lg) + 3px);
+}
+
+.panel[data-tone]::after,
+.panel[data-accent]::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--ce-panel-marker);
+}
+
+.panel[data-tone="error"] {
+  --ce-panel-marker: var(--ce-error);
+}
+
+.panel[data-tone="warning"] {
+  --ce-panel-marker: var(--ce-warning);
+}
+
+.panel[data-tone="info"] {
+  --ce-panel-marker: var(--ce-info);
+}
+
+/* Card accents, as the report's KPI cards: the bar and the top line in one
+   colour. Defined for summary cards to come; nothing uses them yet. */
+.panel[data-accent="pink"] {
+  --ce-panel-marker: var(--ce-accent-pink);
+  --ce-panel-top: var(--ce-accent-pink);
+}
+
+.panel[data-accent="blue"] {
+  --ce-panel-marker: var(--ce-accent-blue);
+  --ce-panel-top: var(--ce-accent-blue);
+}
+
+.panel[data-accent="purple"] {
+  --ce-panel-marker: var(--ce-accent-purple);
+  --ce-panel-top: var(--ce-accent-purple);
+}
+
+.panel[data-accent="cyan"] {
+  --ce-panel-marker: var(--ce-accent-cyan);
+  --ce-panel-top: var(--ce-accent-cyan);
+}
+
+.panel[data-accent="magenta"] {
+  --ce-panel-marker: var(--ce-accent-magenta);
+  --ce-panel-top: var(--ce-accent-magenta);
+}
+
+.panel[data-accent="amber"] {
+  --ce-panel-marker: var(--ce-accent-amber);
+  --ce-panel-top: var(--ce-accent-amber);
+}
+
+/* Status: a dot and a line ---------------------------------------------------- */
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--ce-radius-pill);
+  background-color: var(--ce-text-muted);
+  transition: background-color var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+.dot[data-tone="online"] {
+  background-color: var(--ce-online);
+}
+
+.dot[data-tone="error"] {
+  background-color: var(--ce-error);
+}
+
+.dot[data-tone="warning"] {
+  background-color: var(--ce-warning);
+}
+
+.status {
+  color: var(--ce-text-muted);
+  letter-spacing: var(--ce-tracking-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.status[data-tone="online"] {
+  color: var(--ce-meta);
+}
+
+.status[data-tone="error"] {
+  color: var(--ce-error);
+}
+
+/* Secondary text: the signed-in name, the lines under a title. */
+.secondary {
+  color: var(--ce-text-secondary);
+}
+
+/* The report ------------------------------------------------------------------ */
+
+/* The report draws its own pages, dark by design (powerBiReportEmbed.ts).
+   color-scheme: normal stays all the same: a frame whose element is "dark"
+   while its page is not gets an opaque white backdrop from the browser (CSS
+   Color Adjustment), which would show wherever Power BI leaves the frame
+   unpainted. */
+.reportFrame {
+  overflow: hidden;
+  border: 1px solid var(--ce-border);
+  border-radius: var(--ce-radius-md);
+  background-color: transparent;
+  color-scheme: normal;
+}
+
+/* Power BI's own page is white until the report has loaded: the report waits
+   out of sight, then fades in (DashboardPage.tsx says when). */
+.report {
+  transition: opacity var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+.report[data-waiting] {
+  opacity: 0;
+}

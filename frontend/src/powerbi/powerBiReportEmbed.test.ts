@@ -7,6 +7,7 @@
 // The library is the real one on purpose. It has no ES module build, so this
 // is also the check that the bundler's conversion gives the app what it
 // imports.
+import { models, service } from "powerbi-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { embedPowerBiReport } from "./powerBiReportEmbed";
@@ -49,6 +50,7 @@ afterEach(() => {
     report.remove();
   }
   document.body.replaceChildren();
+  vi.restoreAllMocks();
 });
 
 describe("embedding the report", () => {
@@ -64,6 +66,19 @@ describe("embedding the report", () => {
 
     expect(frame?.style.borderWidth).toBe("0px");
     expect(frame?.getAttribute("title")).toBe("The report's name");
+  });
+
+  it("asks Power BI to draw the report's own page background, not a transparent one", () => {
+    // The report's pages are dark by design. Made transparent, they lost that
+    // background and their light text stood on white (seen signed in,
+    // 2026-10-16).
+    const asked = vi.spyOn(service.Service.prototype, "embed");
+
+    embed();
+
+    expect(asked.mock.calls[0]?.[1]).toMatchObject({
+      settings: { background: models.BackgroundType.Default },
+    });
   });
 
   it("refuses an address that is not Power BI's", () => {

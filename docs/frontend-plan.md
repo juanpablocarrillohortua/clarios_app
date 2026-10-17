@@ -922,14 +922,19 @@ Nothing changes in the Caddyfile.
 
 - **Size.** The report takes the section's full width and the height left
   under the title, down to the footer, with a minimum of 320 pixels. Power BI
-  fits the report page inside that area and keeps its proportions; the area's
-  background is transparent, so the margins take the app's colour.
+  fits the report page inside that area and keeps its proportions. The report
+  keeps its own page background, as designed: embedded as transparent, its
+  dark pages lost their background and their light text stood on white
+  (seen signed in, 2026-10-16). Beside a page that does not fill the area,
+  Power BI draws the report's wallpaper.
 - **Narrow screens.** The page shrinks to the width. A phone layout is used
   only by a report that defines one, which this one does not; it is left for
   later.
 - **Loading.** A line of text while the token and the report's address are
   fetched. Then a line above the frame, never over it, until Power BI says the
-  report has loaded: Power BI shows its own progress inside the frame. After
+  report has loaded. The frame itself stays out of sight until then, for 10
+  seconds at most, because Power BI's own loading page is white; after that,
+  whatever Power BI draws in it (a notice, say) is seen. After
   60 seconds of silence the line becomes a notice with a retry button.
 - **Empty.** With the report not configured, a message says so.
 - **Page navigation: visible,** at the bottom, as in the Power BI Service. A
@@ -996,7 +1001,7 @@ That check found three things, all changed the same day:
 |---|---|
 | 3. A user without workspace access gets a clear message | Before adding the viewer to the workspace: sign in as the viewer and open the dashboard. The no-access message appears, with the code `GroupNotAccessible` |
 | *(the unknown of point 6)* | Add the viewer to the workspace, as **Viewer**. If the account has no Power BI licence, open the dashboard again and note what appears: the message's title and its code line, or what Power BI draws inside the frame, and whether the line above the frame turns into the notice with a retry button (`dashboard.slow`) after a minute |
-| 1. A signed-in user sees the report | With a licence: the report appears, with its pages at the bottom and the filter pane collapsed. The link opens it in Power BI |
+| 1. A signed-in user sees the report | With a licence: the report appears on its own dark pages, with nothing white around them or while it loads, with its pages at the bottom and the filter pane collapsed. The link opens it in Power BI |
 | 2. It still works after the first token expires | Fast: `make frontend-dev`, open `http://localhost:5173/dashboard?tokenLife=60` with the console open; a renewal is named every 30 seconds while the report keeps answering. If signing in drops `?tokenLife=60` from the address, type it again. Real: on `:8080`, leave the dashboard open for 95 minutes, then change page or use a slicer |
 
 ### 10. Risks and open questions

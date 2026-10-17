@@ -17,6 +17,7 @@ import { useSearchParams } from "react-router";
 import type { PowerBiConfig } from "../api/config";
 import type { AuthClient, ServiceToken } from "../auth/authClient";
 import { useSession } from "../auth/Session";
+import { Panel, type PanelTone } from "../components/Panel";
 import type { EmbeddedReport, EmbedReport, LoadEmbedReport } from "../powerbi/reportEmbed";
 import { lookUpReport } from "../powerbi/reportLookup";
 import {
@@ -26,9 +27,16 @@ import {
   type ReportProblemKind,
 } from "../powerbi/reportProblem";
 import { keepTokenFresh, type TokenRenewal } from "../powerbi/tokenRenewal";
+import classes from "../styles/app.module.css";
 
 // How long the frame may take to say that the report has loaded.
 export const LOAD_TIMEOUT_MS = 60_000;
+
+// Power BI's own page is white while the report loads, so the frame waits out
+// of sight until the report has loaded. If Power BI reports nothing, the frame
+// shows after this long all the same, so a notice Power BI draws in it (a
+// missing licence, for instance) is still seen.
+export const REVEAL_AFTER_MS = 10_000;
 
 // Power BI's name, in a frame's error, for a token that ran out.
 const TOKEN_EXPIRED = "TokenExpired";
@@ -170,6 +178,7 @@ function ReportFrame({ prepared, config, auth, onProblem, onRetry }: ReportFrame
   const container = useRef<HTMLDivElement>(null);
   const [loaded, setLoaded] = useState(false);
   const [slow, setSlow] = useState(false);
+  const [waited, setWaited] = useState(false);
   const maxLifetimeMs = useSimulatedTokenLife();
   const title = t("dashboard.reportTitle");
   const language = i18n.language;
@@ -185,8 +194,10 @@ function ReportFrame({ prepared, config, auth, onProblem, onRetry }: ReportFrame
     // A frame that cannot reach Power BI reports nothing at all. Nor is it
     // known to report anything when Power BI draws a notice of its own in
     // place of the report. So silence is not taken for a failure: the frame
-    // stays in view, and a line above it offers to start over.
+    // is shown after REVEAL_AFTER_MS, and later a line above it offers to
+    // start over.
     const tooSlow = setTimeout(() => setSlow(true), LOAD_TIMEOUT_MS);
+    const reveal = setTimeout(() => setWaited(true), REVEAL_AFTER_MS);
     try {
       report = prepared.embedReport({
         container: element,
@@ -213,6 +224,7 @@ function ReportFrame({ prepared, config, auth, onProblem, onRetry }: ReportFrame
       });
     } catch {
       clearTimeout(tooSlow);
+      clearTimeout(reveal);
       onProblem(new ReportProblem("failed", "embed_refused"));
       return;
     }
@@ -228,30 +240,41 @@ function ReportFrame({ prepared, config, auth, onProblem, onRetry }: ReportFrame
 
     return () => {
       clearTimeout(tooSlow);
+      clearTimeout(reveal);
       renewal?.stop();
       report.remove();
       setLoaded(false);
       setSlow(false);
+      setWaited(false);
     };
   }, [prepared, config, auth, onProblem, language, title, maxLifetimeMs]);
 
-  // The line about loading sits above the frame and never over it: what Power
-  // BI draws in its frame before the report (its own progress, a notice) must
-  // stay readable.
+  // The line about loading sits above the frame and never over it. The frame
+  // itself waits out of sight while Power BI's white loading page is up, and
+  // is never hidden for longer than REVEAL_AFTER_MS: a notice Power BI draws
+  // in place of the report must stay readable.
   return (
     <Stack gap="xs" flex={1} mih={REPORT_MIN_HEIGHT}>
       {!loaded && !slow && <Status text={t("dashboard.loading")} />}
       {!loaded && slow && (
         <Group gap="sm" role="status">
-          <Text c="dimmed">{t("dashboard.slow")}</Text>
+          <span className={classes.dot} data-tone="warning" aria-hidden="true" />
+          <Text className={classes.secondary}>{t("dashboard.slow")}</Text>
           <Button variant="default" size="compact-sm" onClick={onRetry}>
             {t("problem.retry")}
           </Button>
         </Group>
       )}
-      <Box pos="relative" flex={1}>
+      <Box pos="relative" flex={1} className={classes.reportFrame}>
         {/* Power BI's library fills this element; React draws nothing in it. */}
-        <Box ref={container} pos="absolute" inset={0} data-testid="report" />
+        <Box
+          ref={container}
+          pos="absolute"
+          inset={0}
+          className={classes.report}
+          data-waiting={loaded || waited ? undefined : true}
+          data-testid="report"
+        />
       </Box>
     </Stack>
   );
@@ -309,6 +332,19 @@ interface MessageProps {
 // is not there.
 const NO_RETRY: ReadonlySet<MessageProps["kind"]> = new Set(["notConfigured", "notFound"]);
 
+// The panel's marker: a failure, or a state someone has to act on. The title
+// says the same in words.
+const TONE: Record<MessageProps["kind"], PanelTone> = {
+  notConfigured: "info",
+  authorize: "info",
+  noAccess: "info",
+  token: "error",
+  refused: "error",
+  notFound: "error",
+  unreachable: "error",
+  failed: "error",
+};
+
 function Message({ kind, code, requestId, webUrl, onRetry, onAuthorize }: MessageProps) {
   const { t } = useTranslation();
 
@@ -324,32 +360,36 @@ function Message({ kind, code, requestId, webUrl, onRetry, onAuthorize }: Messag
   }
 
   return (
-    <Stack gap="xs" maw={560} align="flex-start">
-      <Title order={3} size="h4">
-        {t(`dashboard.problem.${kind}.title`)}
-      </Title>
-      <Text>{t(`dashboard.problem.${kind}.text`)}</Text>
-      {kind === "noAccess" && (
-        <Text>
-          {t("dashboard.problem.noAccess.hint")}{" "}
-          {webUrl && (
-            <Anchor href={webUrl} target="_blank" rel="noopener noreferrer">
-              {t("dashboard.problem.noAccess.open")}
-            </Anchor>
-          )}
-        </Text>
-      )}
-      {code && (
-        <Text size="sm" c="dimmed">
-          {t("dashboard.problem.code", { code })}
-        </Text>
-      )}
-      {requestId && (
-        <Text size="sm" c="dimmed">
-          {t("dashboard.problem.requestId", { id: requestId })}
-        </Text>
-      )}
-      {action}
-    </Stack>
+    <Panel tone={TONE[kind]} maw={560}>
+      <Stack gap="xs" align="flex-start">
+        <Title order={3} size="h4">
+          {t(`dashboard.problem.${kind}.title`)}
+        </Title>
+        <Text className={classes.secondary}>{t(`dashboard.problem.${kind}.text`)}</Text>
+        {kind === "noAccess" && (
+          <Text className={classes.secondary}>
+            {t("dashboard.problem.noAccess.hint")}{" "}
+            {webUrl && (
+              // Inside a sentence a link is underlined: colour alone would not
+              // tell it from the words around it.
+              <Anchor href={webUrl} target="_blank" rel="noopener noreferrer" underline="always">
+                {t("dashboard.problem.noAccess.open")}
+              </Anchor>
+            )}
+          </Text>
+        )}
+        {code && (
+          <Text size="sm" c="dimmed">
+            {t("dashboard.problem.code", { code })}
+          </Text>
+        )}
+        {requestId && (
+          <Text size="sm" c="dimmed">
+            {t("dashboard.problem.requestId", { id: requestId })}
+          </Text>
+        )}
+        {action}
+      </Stack>
+    </Panel>
   );
 }

@@ -3,6 +3,7 @@ import { Button, Group, Text } from "@mantine/core";
 import { useTranslation } from "react-i18next";
 
 import { useSession } from "../auth/Session";
+import classes from "../styles/app.module.css";
 
 export function UserMenu() {
   const { t } = useTranslation();
@@ -12,10 +13,10 @@ export function UserMenu() {
   return (
     <Group gap="sm" wrap="nowrap">
       {/* On a narrow screen the name gives its room to the title. */}
-      <Text size="sm" visibleFrom="sm" data-testid="signed-in-as">
+      <Text size="sm" visibleFrom="sm" className={classes.secondary} data-testid="signed-in-as">
         {name}
       </Text>
-      <Button variant="subtle" size="compact-sm" onClick={() => void auth.signOut()}>
+      <Button variant="default" size="compact-sm" onClick={() => void auth.signOut()}>
         {t("user.signOut")}
       </Button>
     </Group>

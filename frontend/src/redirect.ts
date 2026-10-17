@@ -5,6 +5,11 @@
 //
 // It must stay this small. It is not the app and must not load it, and Caddy
 // must never serve it with a Cross-Origin-Opener-Policy header.
+// The page's own background only, so coming back from Microsoft does not
+// flash white.
+import "./styles/tokens.css";
+import "./styles/global.css";
+
 import { broadcastResponseToMainFrame } from "@azure/msal-browser/redirect-bridge";
 
 broadcastResponseToMainFrame().catch(() => {

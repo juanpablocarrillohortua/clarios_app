@@ -1,6 +1,9 @@
 // Browser entry point: mounts the app under the address-bar router, with
 // Microsoft's sign-in and Microsoft's Power BI embedding.
 import "@mantine/core/styles.css";
+// After Mantine's styles, so the app's own base wins where both set a value.
+import "./styles/tokens.css";
+import "./styles/global.css";
 import "./i18n";
 
 import { StrictMode } from "react";

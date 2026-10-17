@@ -19,6 +19,7 @@ export function SignInPage({ reason, errorCode, onSignIn }: SignInPageProps) {
   return (
     <Notice
       title={t("signIn.title")}
+      tone={reason === "failed" ? "error" : "info"}
       action={<Button onClick={onSignIn}>{t("signIn.action")}</Button>}
     >
       <NoticeLine>{t(reason === "signedOut" ? "signIn.signedOut" : "signIn.failed")}</NoticeLine>

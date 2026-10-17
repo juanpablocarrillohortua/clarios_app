@@ -370,6 +370,16 @@ flowchart LR
   as fresh as the last refresh ([Refreshing](#refreshing)). With the machine
   off, it still opens.
 - **The app only reads.** It sends Power BI nothing but `GET` requests.
+- **The report keeps its own background.** The app shows the pages as they
+  were designed in Desktop, page background included. Embedded as
+  transparent, the dark pages lost their background and their light text
+  stood on white (seen on 2026-10-16).
+  - Beside a page that does not fill the frame, Power BI draws the report's
+    wallpaper (Desktop: the page's **Format** pane, **Wallpaper**). How that
+    looks in the app has not been seen yet.
+  - If it is light, the wallpaper is the place to change it, not the app.
+    Publishing again from Desktop drops the gateway mapping:
+    [Setting it up again](#setting-it-up-again).
 
 ### What a viewer needs
 

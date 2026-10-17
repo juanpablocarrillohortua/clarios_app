@@ -28,8 +28,10 @@ export const embedPowerBiReport: EmbedReport = (options) => {
     viewMode: models.ViewMode.View,
     eventHooks: { accessTokenProvider: options.freshToken },
     settings: {
-      // The margins around the report page take the app's own colour.
-      background: models.BackgroundType.Transparent,
+      // The report draws its own page background, as designed: its pages are
+      // dark. Made transparent, they lost it and their light text stood on
+      // white (seen signed in, 2026-10-16).
+      background: models.BackgroundType.Default,
       localeSettings: { language: options.language, formatLocale: options.language },
       panes: {
         // What the pane holds is the report author's decision, so it stays

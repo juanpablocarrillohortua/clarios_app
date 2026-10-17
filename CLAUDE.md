@@ -419,6 +419,31 @@ test raising would fail the suite. Keep that distinction.
     and kept by a test. Until 2026-10-13 it matched by prefix, so `/dash` took
     `/dashboard` and that page stayed blank on the dev server. A new route of
     the Caddyfile needs its entry there.
+- **The look is design tokens** (restyled on 2026-10-16 in the Power BI
+  report's palette; dark only, `forceColorScheme`).
+  - `frontend/src/styles/tokens.css` is the only file with colour values,
+    and also holds the gradients, glows, radii, type and motion values.
+    `checks/designTokens.test.ts` fails for a hex value or colour function
+    anywhere else in `src/` or the two HTML pages. The favicon is the one
+    exception: an SVG cannot read CSS variables.
+  - `theme.ts` points Mantine at the tokens (`cssVariablesResolver`,
+    `variantColorResolver`, and component classes in
+    `styles/mantine.module.css`). `styles/app.module.css` holds the app's own
+    pieces: the canvas, `components/Panel.tsx` (`tone` error, warning or
+    info; six `accent` variants nothing uses yet), the status dot, the
+    report's frame.
+  - White on the pink is below AA (3.44:1): filled controls carry
+    `--ce-text-on-accent`. Pink is the primary action, the active nav item
+    and focus, never an error (`--ce-error` is a separate red).
+  - The report's frame keeps `color-scheme: normal`. Under the dark page, a
+    frame whose document is light gets an opaque white backdrop from the
+    browser, which would show wherever Power BI leaves the frame unpainted.
+    The report itself is not transparent: it draws its own pages (below,
+    under the dashboard).
+  - Glows and movement turn off under `prefers-reduced-motion`; materials go
+    solid under `prefers-reduced-transparency`; borders strengthen under
+    `prefers-contrast: more`. Motion uses the spring of `--ce-ease-spring`
+    (critically damped, no bounce).
 - **Dash's base path is fixed in compose** (`DASH_URL_BASE_PATHNAME: /dash/`),
   not read from `.env`, because it must equal the Caddyfile's route. The image's
   healthcheck probes the same variable.
@@ -564,7 +589,15 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
   error it becomes a notice with a retry (`dashboard.slow`), and the frame
   stays. Whether Power BI sends an event when it draws a notice of its own in
   the frame (a missing licence, for instance) is not known, so nothing may
-  hide the frame.
+  hide the frame for long. It waits out of sight only until `loaded`, 10
+  seconds at most (`REVEAL_AFTER_MS`), because Power BI's own loading page is
+  white.
+- **The report draws its own background** (`BackgroundType.Default`). Its
+  pages are dark by design. Embedded as transparent, they lost that
+  background and their light text stood on white (the owner's signed-in
+  check, 2026-10-16). Beside a page that does not fill the frame, Power BI
+  draws the report's wallpaper; how that looks in the app is not seen yet. If
+  it is light, the wallpaper is changed in the report, not in the app.
 - **Seen in a real browser on 2026-10-13,** with the built module, made-up
   IDs and a text that is no token: the frame loads from `app.powerbi.com`
   under Caddy's headers, and Power BI answers `LoadReportFailed`, status 403,
@@ -656,6 +689,15 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
   rebuild of 2026-10-12 took 37 minutes with about 2 GB of memory free, and the
   load made the development database stop and recover by itself (nothing was
   lost: its revision, its 42 tables and its run ledger were read back).
+- **Line endings after a branch switch.** Git here has `core.autocrlf=true`,
+  so a checkout writes the frontend's files with CRLF, while Biome writes
+  LF and `biome ci` refuses CRLF. After switching branches, run
+  `make frontend-format` before the gate. Git then lists the reformatted
+  files as modified with an empty `git diff`; `git add` on those files (no
+  content changes, nothing staged) clears the list. Seen on 2026-10-16,
+  after a switch to `main` and back on 2026-10-15. At the same time
+  `frontend/node_modules` was found half empty; `make frontend-install`
+  restored it.
 - **Short of memory, tests fail for no reason of their own.** With under 2 GB
   free, Vitest's workers time out at start and test containers miss their 120
   seconds. Check the free memory before believing such a failure.

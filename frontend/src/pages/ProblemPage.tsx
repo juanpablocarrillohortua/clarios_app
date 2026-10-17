@@ -5,6 +5,7 @@ import { Button } from "@mantine/core";
 import { useTranslation } from "react-i18next";
 
 import { Notice, NoticeLine } from "../components/Notice";
+import type { PanelTone } from "../components/Panel";
 
 export type ProblemKind =
   /** The server was not given its sign-in settings. */
@@ -15,6 +16,14 @@ export type ProblemKind =
   | "cannotStart"
   /** The API refused the token the user signed in with. */
   | "sessionRefused";
+
+// A server not given its settings is a state to put right, not a failure.
+const TONE: Record<ProblemKind, PanelTone> = {
+  notConfigured: "info",
+  unreachable: "error",
+  cannotStart: "error",
+  sessionRefused: "error",
+};
 
 interface ProblemPageProps {
   kind: ProblemKind;
@@ -36,7 +45,7 @@ export function ProblemPage({ kind, onRetry, onSignIn }: ProblemPageProps) {
     ) : undefined;
 
   return (
-    <Notice title={t(`problem.${kind}.title`)} action={action}>
+    <Notice title={t(`problem.${kind}.title`)} tone={TONE[kind]} action={action}>
       <NoticeLine>{t(`problem.${kind}.text`)}</NoticeLine>
     </Notice>
   );

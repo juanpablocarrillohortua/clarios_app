@@ -17,7 +17,7 @@ import { NotFoundPage } from "./pages/NotFoundPage";
 import { paths } from "./paths";
 import type { LoadEmbedReport } from "./powerbi/reportEmbed";
 import { sections } from "./sections";
-import { theme } from "./theme";
+import { cssVariablesResolver, theme } from "./theme";
 
 /** The root address opens the first section the user may open. */
 function Home() {
@@ -38,7 +38,12 @@ export function App({ createAuthClient, loadEmbedReport }: AppProps) {
   const [queryClient] = useState(() => new QueryClient());
 
   return (
-    <MantineProvider theme={theme}>
+    // Dark only: the app follows the report it shows.
+    <MantineProvider
+      theme={theme}
+      forceColorScheme="dark"
+      cssVariablesResolver={cssVariablesResolver}
+    >
       <QueryClientProvider client={queryClient}>
         {/* Nothing below is drawn until the user is signed in and may do something. */}
         <Session createAuthClient={createAuthClient}>

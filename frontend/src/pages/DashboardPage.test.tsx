@@ -28,7 +28,7 @@ import {
   stubApi,
   viewer,
 } from "../test/render";
-import { LOAD_TIMEOUT_MS } from "./DashboardPage";
+import { LOAD_TIMEOUT_MS, REVEAL_AFTER_MS } from "./DashboardPage";
 
 const problems = es.dashboard.problem;
 const REQUEST_ID = "99999999-9999-4999-8999-999999999999";
@@ -97,6 +97,31 @@ describe("a signed-in user who may see the report", () => {
     act(() => report.options.onLoaded());
 
     expect(screen.queryByText(es.dashboard.loading)).toBeNull();
+  });
+
+  it("keeps the report out of sight until it has loaded: Power BI's own loading page is white", async () => {
+    stubApi();
+    const { embed } = renderAppAt(paths.dashboard);
+    const report = await reportOnPage(embed);
+
+    expect(screen.getByTestId("report")).toHaveAttribute("data-waiting");
+
+    act(() => report.options.onLoaded());
+
+    expect(screen.getByTestId("report")).not.toHaveAttribute("data-waiting");
+  });
+
+  it("shows the frame after a while all the same, so a notice Power BI draws there is seen", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubApi();
+    const { embed } = renderAppAt(paths.dashboard);
+    await reportOnPage(embed);
+
+    await act(() => vi.advanceTimersByTimeAsync(REVEAL_AFTER_MS));
+
+    expect(screen.getByTestId("report")).not.toHaveAttribute("data-waiting");
+    // Not yet called slow: that comes later.
+    expect(screen.getByText(es.dashboard.loading)).toBeInTheDocument();
   });
 
   it("can open the report in Power BI, in another tab", async () => {
@@ -368,6 +393,7 @@ describe("a report that cannot be shown to anyone", () => {
     expect(screen.queryByText(es.dashboard.loading)).toBeNull();
     // Whatever Power BI drew in its frame meanwhile is still there to read.
     expect(embed.onPage()).toEqual([report]);
+    expect(screen.getByTestId("report")).not.toHaveAttribute("data-waiting");
     expect(report.options.container).toBe(screen.getByTestId("report"));
     expect(screen.queryByText(problems.unreachable.title)).toBeNull();
   });

@@ -1,0 +1,33 @@
+/*
+ * The page itself: what every screen shares before any component draws. All
+ * values come from tokens.css.
+ */
+
+html {
+  /* Dark scrollbars and form controls from the browser itself. */
+  color-scheme: dark;
+  background-color: var(--ce-outspace);
+  scrollbar-color: var(--ce-border) transparent;
+}
+
+/* "html body", not "body": the build may place this file before Mantine's
+   stylesheet, whose own body rule must not win. */
+html body {
+  background-color: var(--ce-outspace);
+  color: var(--ce-text);
+  font-family: var(--ce-font-sans);
+  line-height: var(--ce-leading-body);
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background-color: var(--ce-selection);
+  color: var(--ce-text);
+}
+
+/* Focus is always visible, on every element that can take it. Mantine's own
+   ring (.mantine-focus-auto) is the same pink, through the theme. */
+:focus-visible {
+  outline: 2px solid var(--ce-focus);
+  outline-offset: 2px;
+}

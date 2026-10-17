@@ -16,6 +16,7 @@ export function NoAccessPage({ account, onSignOut }: NoAccessPageProps) {
   return (
     <Notice
       title={t("noAccess.title")}
+      tone="info"
       action={
         <Button variant="default" onClick={onSignOut}>
           {t("user.signOut")}
