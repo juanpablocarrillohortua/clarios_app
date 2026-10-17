@@ -168,6 +168,19 @@ export function renderAppAt(path: string, options: RenderOptions = {}) {
   return { auth, createAuthClient, embed };
 }
 
+/**
+ * Make the window a desktop's: every `min-width` query matches, so the shell
+ * draws its wide layout. Without this a test sees the narrow one, because
+ * test/setup.ts answers every query with "no".
+ */
+export function onWideScreen() {
+  const answer = window.matchMedia;
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    ...answer(query),
+    matches: query.includes("min-width"),
+  }));
+}
+
 /** A JSON answer such as the API gives. */
 export function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

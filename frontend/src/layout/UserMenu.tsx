@@ -12,8 +12,8 @@ export function UserMenu() {
 
   return (
     <Group gap="sm" wrap="nowrap">
-      {/* On a narrow screen the name gives its room to the title. */}
-      <Text size="sm" visibleFrom="sm" className={classes.secondary} data-testid="signed-in-as">
+      {/* On a narrower screen the name gives its room to the title and the tabs. */}
+      <Text size="sm" visibleFrom="md" className={classes.secondary} data-testid="signed-in-as">
         {name}
       </Text>
       <Button variant="default" size="compact-sm" onClick={() => void auth.signOut()}>

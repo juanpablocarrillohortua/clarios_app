@@ -142,12 +142,47 @@
   color: var(--ce-error);
 }
 
+/* Quiet (the header): the words stay for screen readers and the tooltip, and
+   the dot is what is seen. A failure is never quiet. */
+.status[data-quiet] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* Secondary text: the signed-in name, the lines under a title. */
 .secondary {
   color: var(--ce-text-secondary);
 }
 
 /* The report ------------------------------------------------------------------ */
+
+/* The area the report may take. Once Power BI has said the open page's size
+   (DashboardPage.tsx sets --report-ratio, as "width / height"), the frame is
+   the largest box of the page's shape that fits, centred: the whole page is
+   in view and fills it, and what is left beside it is the app's canvas.
+   Until then the frame fills the area. */
+.reportArea {
+  flex: 1;
+  min-height: 0;
+  container-type: size;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  /* Centred across; at the top when the width is what limits it (a narrow
+     screen), so the page sits under the title. */
+  place-items: start center;
+}
+
+/* Full screen: the page as large as the screen allows, centred, on the
+   canvas. */
+.reportArea:fullscreen {
+  place-items: center;
+  background: var(--ce-gradient-canvas);
+  background-color: var(--ce-canvas-bottom);
+}
 
 /* The report draws its own pages, dark by design (powerBiReportEmbed.ts).
    color-scheme: normal stays all the same: a frame whose element is "dark"
@@ -160,6 +195,19 @@
   border-radius: var(--ce-radius-md);
   background-color: transparent;
   color-scheme: normal;
+  width: 100%;
+  height: 100%;
+}
+
+.reportFrame[data-fitted] {
+  width: min(100cqw, 100cqh * var(--report-ratio));
+  height: auto;
+  aspect-ratio: var(--report-ratio);
+}
+
+.reportArea:fullscreen .reportFrame {
+  border: 0;
+  border-radius: 0;
 }
 
 /* Power BI's own page is white until the report has loaded: the report waits

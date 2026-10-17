@@ -374,12 +374,31 @@ flowchart LR
   were designed in Desktop, page background included. Embedded as
   transparent, the dark pages lost their background and their light text
   stood on white (seen on 2026-10-16).
-  - Beside a page that does not fill the frame, Power BI draws the report's
-    wallpaper (Desktop: the page's **Format** pane, **Wallpaper**). How that
-    looks in the app has not been seen yet.
-  - If it is light, the wallpaper is the place to change it, not the app.
-    Publishing again from Desktop drops the gateway mapping:
+  - Where a page does not fill its frame, Power BI draws the report's
+    wallpaper (Desktop: the page's **Format** pane, **Wallpaper**). Every
+    page sets one, and it shows black (seen on 2026-10-16). The frame now
+    takes the page's shape, so it shows only before Power BI has told the
+    app the page's size.
+  - To change it, edit the report, not the app. Publishing again from
+    Desktop drops the gateway mapping:
     [Setting it up again](#setting-it-up-again).
+- **The whole page is in view, with none of Power BI's panes**
+  ([ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md), decision
+  10). The page is fitted to its frame, and the frame takes the page's shape
+  from the size Power BI gives for the open page. A page of another size
+  therefore keeps working, and nothing in the app has to change with it.
+  "Pantalla completa" shows it on the whole screen. Power BI's page bar and
+  filter pane are hidden, so the report must keep two things:
+  - **a button to every page on every page.** A page without them cannot be
+    left inside the app;
+  - **its filters as slicers on the page.** A filter made visible in the
+    filter pane is not seen in the app.
+
+  On 2026-10-16 the report met both, as read from its definition through the
+  REST API:
+  - all eight pages are 1280 × 720;
+  - every page has a button to each page and three slicers;
+  - each page's one pane filter is hidden from viewers.
 
 ### What a viewer needs
 

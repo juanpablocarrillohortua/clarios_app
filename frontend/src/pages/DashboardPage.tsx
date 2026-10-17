@@ -8,7 +8,18 @@
 // embedding library. While the report is on screen the page keeps its token
 // fresh. Whatever goes wrong has a message of its own, shown inside the
 // section so that the rest of the app stays in reach.
-import { Anchor, Box, Button, Center, Group, Loader, Stack, Text, Title } from "@mantine/core";
+import {
+  Anchor,
+  Box,
+  Button,
+  Center,
+  Group,
+  Loader,
+  Stack,
+  Text,
+  Title,
+  VisuallyHidden,
+} from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -18,7 +29,14 @@ import type { PowerBiConfig } from "../api/config";
 import type { AuthClient, ServiceToken } from "../auth/authClient";
 import { useSession } from "../auth/Session";
 import { Panel, type PanelTone } from "../components/Panel";
-import type { EmbeddedReport, EmbedReport, LoadEmbedReport } from "../powerbi/reportEmbed";
+import { HeaderAction } from "../layout/HeaderAction";
+import { useWideLayout } from "../layout/useWideLayout";
+import type {
+  EmbeddedReport,
+  EmbedReport,
+  LoadEmbedReport,
+  PageSize,
+} from "../powerbi/reportEmbed";
 import { lookUpReport } from "../powerbi/reportLookup";
 import {
   problemFromFrame,
@@ -55,17 +73,31 @@ interface DashboardPageProps {
 export function DashboardPage({ loadEmbedReport }: DashboardPageProps) {
   const { t } = useTranslation();
   const { powerBi } = useSession();
+  const wide = useWideLayout();
+
+  const openInPowerBi = powerBi && (
+    <Anchor href={powerBi.report_web_url} target="_blank" rel="noopener noreferrer" size="sm">
+      {t("dashboard.openInPowerBi")}
+    </Anchor>
+  );
 
   return (
     <Stack gap="sm" h={SECTION_HEIGHT} mih={REPORT_MIN_HEIGHT + 60}>
-      <Group justify="space-between" align="baseline" wrap="nowrap">
-        <Title order={2}>{t("dashboard.title")}</Title>
-        {powerBi && (
-          <Anchor href={powerBi.report_web_url} target="_blank" rel="noopener noreferrer" size="sm">
-            {t("dashboard.openInPowerBi")}
-          </Anchor>
-        )}
-      </Group>
+      {wide ? (
+        // On a wide screen the report takes the room: the header's tab
+        // already names the section, and the link goes into the header.
+        <>
+          <VisuallyHidden>
+            <Title order={2}>{t("dashboard.title")}</Title>
+          </VisuallyHidden>
+          <HeaderAction>{openInPowerBi}</HeaderAction>
+        </>
+      ) : (
+        <Group justify="space-between" align="baseline" wrap="nowrap">
+          <Title order={2}>{t("dashboard.title")}</Title>
+          {openInPowerBi}
+        </Group>
+      )}
       {powerBi ? (
         <Report config={powerBi} loadEmbedReport={loadEmbedReport} />
       ) : (
@@ -176,9 +208,12 @@ interface ReportFrameProps {
 function ReportFrame({ prepared, config, auth, onProblem, onRetry }: ReportFrameProps) {
   const { t, i18n } = useTranslation();
   const container = useRef<HTMLDivElement>(null);
+  const area = useRef<HTMLDivElement>(null);
   const [loaded, setLoaded] = useState(false);
   const [slow, setSlow] = useState(false);
   const [waited, setWaited] = useState(false);
+  const [pageSize, setPageSize] = useState<PageSize | null>(null);
+  const wide = useWideLayout();
   const maxLifetimeMs = useSimulatedTokenLife();
   const title = t("dashboard.reportTitle");
   const language = i18n.language;
@@ -221,6 +256,7 @@ function ReportFrame({ prepared, config, auth, onProblem, onRetry }: ReportFrame
           // Once the report is on screen, Power BI shows the error of a
           // visual inside the frame itself.
         },
+        onPageSize: setPageSize,
       });
     } catch {
       clearTimeout(tooSlow);
@@ -246,15 +282,34 @@ function ReportFrame({ prepared, config, auth, onProblem, onRetry }: ReportFrame
       setLoaded(false);
       setSlow(false);
       setWaited(false);
+      setPageSize(null);
     };
   }, [prepared, config, auth, onProblem, language, title, maxLifetimeMs]);
+
+  // Full screen is asked of the area, not of Power BI's frame, so the page
+  // keeps the app's background and stays centred.
+  const canFullscreen = wide && document.fullscreenEnabled === true;
+  const fullscreen = () => {
+    void area.current?.requestFullscreen().catch(() => {});
+  };
 
   // The line about loading sits above the frame and never over it. The frame
   // itself waits out of sight while Power BI's white loading page is up, and
   // is never hidden for longer than REVEAL_AFTER_MS: a notice Power BI draws
   // in place of the report must stay readable.
+  //
+  // The whole page is always in view. Once Power BI has said the open page's
+  // size, the frame takes that shape, as large as the area allows; until then
+  // it fills the area, so whatever Power BI draws there has the room.
   return (
     <Stack gap="xs" flex={1} mih={REPORT_MIN_HEIGHT}>
+      {canFullscreen && (
+        <HeaderAction>
+          <Button variant="default" size="compact-sm" onClick={fullscreen}>
+            {t("dashboard.fullscreen")}
+          </Button>
+        </HeaderAction>
+      )}
       {!loaded && !slow && <Status text={t("dashboard.loading")} />}
       {!loaded && slow && (
         <Group gap="sm" role="status">
@@ -265,16 +320,26 @@ function ReportFrame({ prepared, config, auth, onProblem, onRetry }: ReportFrame
           </Button>
         </Group>
       )}
-      <Box pos="relative" flex={1} className={classes.reportFrame}>
-        {/* Power BI's library fills this element; React draws nothing in it. */}
+      <Box ref={area} className={classes.reportArea} data-testid="report-area">
         <Box
-          ref={container}
-          pos="absolute"
-          inset={0}
-          className={classes.report}
-          data-waiting={loaded || waited ? undefined : true}
-          data-testid="report"
-        />
+          pos="relative"
+          className={classes.reportFrame}
+          data-fitted={pageSize ? true : undefined}
+          style={
+            pageSize ? { "--report-ratio": `${pageSize.width} / ${pageSize.height}` } : undefined
+          }
+          data-testid="report-frame"
+        >
+          {/* Power BI's library fills this element; React draws nothing in it. */}
+          <Box
+            ref={container}
+            pos="absolute"
+            inset={0}
+            className={classes.report}
+            data-waiting={loaded || waited ? undefined : true}
+            data-testid="report"
+          />
+        </Box>
       </Box>
     </Stack>
   );

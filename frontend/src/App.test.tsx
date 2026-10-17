@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import es from "./i18n/es.json";
 import { paths } from "./paths";
-import { renderAppAt, stubApi } from "./test/render";
+import { onWideScreen, renderAppAt, stubApi } from "./test/render";
 
 function sectionHeading() {
   return screen.findByRole("heading", { level: 2 });
@@ -76,5 +76,69 @@ describe("the app shell", () => {
 
     await user.click(screen.getByRole("link", { name: es.notFound.back }));
     expect(await sectionHeading()).toHaveTextContent(es.dashboard.title);
+  });
+
+  it("on a narrow screen, keeps the sections in a drawer and the API's line in the footer", async () => {
+    renderAppAt(paths.dashboard);
+
+    const header = await screen.findByRole("banner");
+    expect(within(header).getByRole("button", { name: es.nav.toggle })).toBeInTheDocument();
+    expect(within(header).queryByRole("navigation")).toBeNull();
+    expect(within(screen.getByRole("contentinfo")).getByRole("status")).toBeInTheDocument();
+  });
+});
+
+describe("the app shell on a wide screen", () => {
+  beforeEach(() => {
+    onWideScreen();
+    stubApi();
+  });
+
+  it("puts the sections in the header as tabs, with no drawer to open", async () => {
+    renderAppAt(paths.loads);
+
+    const header = await screen.findByRole("banner");
+    const links = within(within(header).getByRole("navigation", { name: es.nav.label }));
+
+    expect(links.getAllByRole("link").map((link) => link.textContent)).toEqual([
+      es.nav.dashboard,
+      es.nav.loads,
+    ]);
+    expect(links.getByRole("link", { name: es.nav.loads })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("button", { name: es.nav.toggle })).toBeNull();
+  });
+
+  it("gives the report the room: no footer, the API's state in the header", async () => {
+    renderAppAt(paths.dashboard);
+
+    const header = await screen.findByRole("banner");
+
+    expect(within(header).getByRole("status")).toBeInTheDocument();
+    expect(screen.queryByRole("contentinfo")).toBeNull();
+  });
+
+  it("moves the dashboard's link to Power BI into the header, and keeps the section's heading", async () => {
+    renderAppAt(paths.dashboard);
+
+    const header = await screen.findByRole("banner");
+
+    expect(
+      await within(header).findByRole("link", { name: es.dashboard.openInPowerBi }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: es.dashboard.openInPowerBi })).toHaveLength(1);
+    // Out of sight, for screen readers: the tab already names the section.
+    expect(await sectionHeading()).toHaveTextContent(es.dashboard.title);
+  });
+
+  it("takes the link away from the header when the dashboard closes", async () => {
+    const user = userEvent.setup();
+    renderAppAt(paths.dashboard);
+    const header = await screen.findByRole("banner");
+    await within(header).findByRole("link", { name: es.dashboard.openInPowerBi });
+
+    await user.click(within(header).getByRole("link", { name: es.nav.loads }));
+
+    expect(await sectionHeading()).toHaveTextContent(es.loads.title);
+    expect(screen.queryByRole("link", { name: es.dashboard.openInPowerBi })).toBeNull();
   });
 });

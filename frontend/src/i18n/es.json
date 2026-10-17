@@ -15,6 +15,7 @@
     "slow": "Power BI aún no ha mostrado el informe. Si el recuadro de abajo sigue vacío, revise su conexión e intente de nuevo.",
     "reportTitle": "Informe de Power BI",
     "openInPowerBi": "Abrir en Power BI",
+    "fullscreen": "Pantalla completa",
     "problem": {
       "code": "Código: {{code}}",
       "requestId": "Solicitud de Power BI: {{id}}",

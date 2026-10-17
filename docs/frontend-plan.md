@@ -921,12 +921,28 @@ Nothing changes in the Caddyfile.
 ### 8. Layout
 
 - **Size.** The report takes the section's full width and the height left
-  under the title, down to the footer, with a minimum of 320 pixels. Power BI
-  fits the report page inside that area and keeps its proportions. The report
-  keeps its own page background, as designed: embedded as transparent, its
-  dark pages lost their background and their light text stood on white
-  (seen signed in, 2026-10-16). Beside a page that does not fill the area,
-  Power BI draws the report's wallpaper.
+  under the header, with a minimum of 320 pixels. *(Changed 2026-10-16, ADR
+  0008 decision 10.)*
+  - **The whole page is in view, never scrolled,** in a frame of the page's
+    own shape. Power BI tells the app the open page's size, and the frame
+    becomes the largest box of that shape the area holds, centred. A desktop
+    window is wider than the 16:9 page, so the app's background shows on both
+    sides (about 175 pixels each on a 1080p screen), not black bands inside
+    the frame.
+  - **"Pantalla completa"** (wide screens, where the browser supports it)
+    puts the report in full screen, where a 16:9 monitor shows the page edge
+    to edge.
+  - Fitting the page to the width was tried the same day and withdrawn: it
+    filled the width, but about 200 pixels of the page had to be scrolled.
+  - **On a wide screen the shell gives the report the room.** The sections
+    are tabs in the header, the API's state is a dot there, and the
+    dashboard's title is kept for screen readers only, its link in the
+    header. There is no sidebar and no footer. A narrow screen keeps the
+    drawer, the footer and the title row.
+  - **The report keeps its own page background, as designed.** Embedded as
+    transparent, its dark pages lost their background and their light text
+    stood on white (seen signed in, 2026-10-16). Below a page shorter than
+    the area, Power BI draws the report's wallpaper, which every page sets.
 - **Narrow screens.** The page shrinks to the width. A phone layout is used
   only by a report that defines one, which this one does not; it is left for
   later.
@@ -937,11 +953,14 @@ Nothing changes in the Caddyfile.
   whatever Power BI draws in it (a notice, say) is seen. After
   60 seconds of silence the line becomes a notice with a retry button.
 - **Empty.** With the report not configured, a message says so.
-- **Page navigation: visible,** at the bottom, as in the Power BI Service. A
-  report with several pages is unusable without it.
-- **Filter pane: available, collapsed.** What it holds is the report author's
-  decision, who can hide a filter or the whole pane in the report. The app
-  does not override that; collapsed, the pane costs a narrow strip.
+- **Page navigation: hidden** *(changed 2026-10-16; it was visible at the
+  bottom)*. Every page of the report has its own buttons to every other page.
+  Power BI's white bar repeated them.
+- **Filter pane: hidden** *(changed 2026-10-16; it was available and
+  collapsed)*. The report's slicers, period buttons and "Limpiar" button are
+  on the page, and the one filter of each page's pane is hidden from viewers.
+  The pane was a white strip with nothing to use in it. The report must keep
+  it so: a filter made visible in the pane is not seen in the app.
 - **Power BI's own texts** (pane titles, tooltips) are asked for in Spanish.
 - **A link opens the report in Power BI,** in a new tab.
 - **The "data as of" line is not drawn by the app.** The time of the last
@@ -1001,7 +1020,7 @@ That check found three things, all changed the same day:
 |---|---|
 | 3. A user without workspace access gets a clear message | Before adding the viewer to the workspace: sign in as the viewer and open the dashboard. The no-access message appears, with the code `GroupNotAccessible` |
 | *(the unknown of point 6)* | Add the viewer to the workspace, as **Viewer**. If the account has no Power BI licence, open the dashboard again and note what appears: the message's title and its code line, or what Power BI draws inside the frame, and whether the line above the frame turns into the notice with a retry button (`dashboard.slow`) after a minute |
-| 1. A signed-in user sees the report | With a licence: the report appears on its own dark pages, with nothing white around them or while it loads, with its pages at the bottom and the filter pane collapsed. The link opens it in Power BI |
+| 1. A signed-in user sees the report | With a licence: the report appears on its own dark pages, with nothing white around them or while it loads. The whole page is in view without scrolling, in a frame of its own shape with no black bands inside, and keeps that shape on every page. "Pantalla completa" fills a 16:9 monitor, and Esc leaves it. Power BI shows no page bar and no filter pane, and the report's own buttons change page. The link in the header opens it in Power BI |
 | 2. It still works after the first token expires | Fast: `make frontend-dev`, open `http://localhost:5173/dashboard?tokenLife=60` with the console open; a renewal is named every 30 seconds while the report keeps answering. If signing in drops `?tokenLife=60` from the address, type it again. Real: on `:8080`, leave the dashboard open for 95 minutes, then change page or use a slicer |
 
 ### 10. Risks and open questions

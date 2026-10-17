@@ -9,7 +9,7 @@
 // callbacks the tests call as Power BI's frame would.
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { InteractionNeeded } from "../auth/authClient";
 import es from "../i18n/es.json";
@@ -22,6 +22,7 @@ import {
   fakeAuth,
   fakeEmbed,
   json,
+  onWideScreen,
   POWER_BI_TOKEN,
   powerBiConfig,
   renderAppAt,
@@ -58,6 +59,56 @@ function codeLine(code: string): string {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+/** A browser that offers full screen, which jsdom does not. Returns the request's stand-in. */
+function offerFullscreen() {
+  const requestFullscreen = vi.fn(async () => {});
+  Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+  Object.defineProperty(HTMLElement.prototype, "requestFullscreen", {
+    configurable: true,
+    value: requestFullscreen,
+  });
+  onTestFinished(() => {
+    Reflect.deleteProperty(document, "fullscreenEnabled");
+    Reflect.deleteProperty(HTMLElement.prototype, "requestFullscreen");
+  });
+  return requestFullscreen;
+}
+
+describe("full screen", () => {
+  it("is offered in the header, and asked of the report's area", async () => {
+    const user = userEvent.setup();
+    onWideScreen();
+    const requestFullscreen = offerFullscreen();
+    stubApi();
+    const { embed } = renderAppAt(paths.dashboard);
+    await reportOnPage(embed);
+
+    const header = screen.getByRole("banner");
+    await user.click(within(header).getByRole("button", { name: es.dashboard.fullscreen }));
+
+    expect(requestFullscreen).toHaveBeenCalledTimes(1);
+    expect(requestFullscreen.mock.contexts[0]).toBe(screen.getByTestId("report-area"));
+  });
+
+  it("is not offered by a browser that cannot do it", async () => {
+    onWideScreen();
+    stubApi();
+    const { embed } = renderAppAt(paths.dashboard);
+    await reportOnPage(embed);
+
+    expect(screen.queryByRole("button", { name: es.dashboard.fullscreen })).toBeNull();
+  });
+
+  it("is not offered on a narrow screen", async () => {
+    offerFullscreen();
+    stubApi();
+    const { embed } = renderAppAt(paths.dashboard);
+    await reportOnPage(embed);
+
+    expect(screen.queryByRole("button", { name: es.dashboard.fullscreen })).toBeNull();
+  });
 });
 
 describe("a signed-in user who may see the report", () => {
@@ -122,6 +173,21 @@ describe("a signed-in user who may see the report", () => {
     expect(screen.getByTestId("report")).not.toHaveAttribute("data-waiting");
     // Not yet called slow: that comes later.
     expect(screen.getByText(es.dashboard.loading)).toBeInTheDocument();
+  });
+
+  it("shows the whole page: the frame takes the page's shape once Power BI says it", async () => {
+    stubApi();
+    const { embed } = renderAppAt(paths.dashboard);
+    const report = await reportOnPage(embed);
+    const frame = screen.getByTestId("report-frame");
+
+    // Until then the frame fills the area, so whatever Power BI draws has the room.
+    expect(frame).not.toHaveAttribute("data-fitted");
+
+    act(() => report.options.onPageSize?.({ width: 1280, height: 720 }));
+
+    expect(frame).toHaveAttribute("data-fitted");
+    expect(frame.style.getPropertyValue("--report-ratio")).toBe("1280 / 720");
   });
 
   it("can open the report in Power BI, in another tab", async () => {

@@ -7,7 +7,7 @@
 // The library is the real one on purpose. It has no ES module build, so this
 // is also the check that the bundler's conversion gives the app what it
 // imports.
-import { models, service } from "powerbi-client";
+import { models, type Page, Report, service } from "powerbi-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { embedPowerBiReport } from "./powerBiReportEmbed";
@@ -68,16 +68,22 @@ describe("embedding the report", () => {
     expect(frame?.getAttribute("title")).toBe("The report's name");
   });
 
-  it("asks Power BI to draw the report's own page background, not a transparent one", () => {
-    // The report's pages are dark by design. Made transparent, they lost that
-    // background and their light text stood on white (seen signed in,
-    // 2026-10-16).
+  it("asks Power BI for the layout the dashboard needs", () => {
     const asked = vi.spyOn(service.Service.prototype, "embed");
 
     embed();
 
     expect(asked.mock.calls[0]?.[1]).toMatchObject({
-      settings: { background: models.BackgroundType.Default },
+      settings: {
+        // The report's pages are dark by design. Made transparent, they lost
+        // that background and their light text stood on white (2026-10-16).
+        background: models.BackgroundType.Default,
+        // The whole page in view; the dashboard shapes the frame like it.
+        layoutType: models.LayoutType.Custom,
+        customLayout: { displayOption: models.DisplayOption.FitToPage },
+        // The report has its own page buttons and slicers.
+        panes: { filters: { visible: false }, pageNavigation: { visible: false } },
+      },
     });
   });
 
@@ -91,6 +97,41 @@ describe("embedding the report", () => {
     frameSays(container, "loaded");
 
     expect(options.onLoaded).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells the app the size of each page that opens", () => {
+    const onPageSize = vi.fn();
+    const { container } = embed({ onPageSize });
+
+    frameSays(container, "pageChanged", {
+      newPage: { name: "ReportSection", defaultSize: { width: 1280, height: 720 } },
+    });
+
+    expect(onPageSize).toHaveBeenCalledExactlyOnceWith({ width: 1280, height: 720 });
+  });
+
+  it("asks the size of the open page once the report has loaded", async () => {
+    // jsdom's frame never answers, so the library's question is answered here.
+    vi.spyOn(Report.prototype, "getActivePage").mockResolvedValue({
+      defaultSize: { width: 1280, height: 720 },
+    } as Page);
+    const onPageSize = vi.fn();
+    const { container } = embed({ onPageSize });
+
+    frameSays(container, "loaded");
+
+    await vi.waitFor(() =>
+      expect(onPageSize).toHaveBeenCalledExactlyOnceWith({ width: 1280, height: 720 }),
+    );
+  });
+
+  it("says nothing of a page whose size Power BI does not give", () => {
+    const onPageSize = vi.fn();
+    const { container } = embed({ onPageSize });
+
+    frameSays(container, "pageChanged", { newPage: { name: "ReportSection" } });
+
+    expect(onPageSize).not.toHaveBeenCalled();
   });
 
   it("passes on what Power BI calls an error, with its status, its sentence and the request to quote", () => {
@@ -157,14 +198,16 @@ describe("embedding the report", () => {
 
 describe("taking the report off the page", () => {
   it("removes the frame and stops listening", () => {
-    const { report, container, options } = embed();
+    const { report, container, options } = embed({ onPageSize: vi.fn() });
 
     report.remove();
     frameSays(container, "loaded");
     frameSays(container, "error", { message: "TokenExpired" });
+    frameSays(container, "pageChanged", { newPage: { defaultSize: { width: 1280, height: 720 } } });
 
     expect(container.querySelector("iframe")).toBeNull();
     expect(options.onLoaded).not.toHaveBeenCalled();
     expect(options.onError).not.toHaveBeenCalled();
+    expect(options.onPageSize).not.toHaveBeenCalled();
   });
 });

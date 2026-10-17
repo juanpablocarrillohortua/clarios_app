@@ -469,6 +469,20 @@ test raising would fail the suite. Keep that distinction.
   starts with three requests, so a test waits for what it looks at (`findBy…`).
   A test that moves the clock uses `vi.useFakeTimers({ shouldAdvanceTime: true
   })`, or `findBy…` never returns.
+- **The shell has two layouts, switched at Mantine's `sm` (768 px) by
+  `layout/useWideLayout.ts`** (2026-10-16).
+  - **Wide:** the sections are tabs in the header, and there is no sidebar
+    and no footer. The API's state is a dot in the header: words only when
+    it is offline, otherwise a tooltip and text for screen readers
+    (`data-quiet`). A page puts an action in the header through
+    `layout/HeaderAction.tsx`, as the dashboard does with its link to Power
+    BI, and keeps its `h2` for screen readers only.
+  - **Narrow:** burger, drawer and footer, as before.
+  - **Only one layout is ever rendered,** never both hidden by CSS: the tests
+    expect one navigation and one of each link.
+  - **Tests see the narrow layout,** because `setup.ts` answers every media
+    query with no. `onWideScreen()` in `test/render.tsx` makes `min-width`
+    queries match.
 
 **Sign-in and roles** (increment 2, built 2026-10-12;
 [docs/sign-in.md](docs/sign-in.md), ADR 0006):
@@ -595,9 +609,33 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
 - **The report draws its own background** (`BackgroundType.Default`). Its
   pages are dark by design. Embedded as transparent, they lost that
   background and their light text stood on white (the owner's signed-in
-  check, 2026-10-16). Beside a page that does not fill the frame, Power BI
-  draws the report's wallpaper; how that looks in the app is not seen yet. If
-  it is light, the wallpaper is changed in the report, not in the app.
+  check, 2026-10-16). Below a page shorter than the frame, Power BI draws
+  the report's wallpaper, which every page sets (black). It is changed in the
+  report, not in the app.
+- **The whole page is in view at once, with none of Power BI's panes**
+  (ADR 0008, decision 10, 2026-10-16).
+  - **Settings:** `LayoutType.Custom` with `DisplayOption.FitToPage`; the page
+    bar and filter pane are hidden.
+  - **The frame takes the open page's shape.** `onPageSize` of the embed
+    interface fires on `loaded` (`getActivePage().defaultSize`) and on
+    `pageChanged`. `ReportFrame` sets `--report-ratio` and `data-fitted`,
+    and CSS makes the frame `min(100cqw, 100cqh * ratio)` in a size
+    container (`.reportArea`). Until Power BI says, the frame fills the
+    area. The shape is never written in the app.
+  - **"Pantalla completa"** is shown on wide screens where
+    `document.fullscreenEnabled`, and calls `requestFullscreen()` on the
+    area, not on Power BI's frame.
+  - **Fit to width was tried and withdrawn the same day:** no bands, but the
+    owner had to scroll about 200 pixels, and they want the whole page at a
+    glance. A desktop window is wider than the 16:9 page (1280 × 720, all
+    eight), so the app's background shows on both sides.
+  - **The report must keep a button to every page on every page and its
+    filters as slicers on the page.** Read from its definition on
+    2026-10-16, it does, and each page's one pane filter is hidden from
+    viewers. A filter made visible in the pane would not be seen in the app.
+  - How that was read: `GET …/reports/{id}/Export?downloadType=LiveConnect`
+    returns the report without its model or data. It was parsed in memory
+    and nothing was written. The pages API carries no size.
 - **Seen in a real browser on 2026-10-13,** with the built module, made-up
   IDs and a text that is no token: the frame loads from `app.powerbi.com`
   under Caddy's headers, and Power BI answers `LoadReportFailed`, status 403,

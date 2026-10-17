@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-13
+- **Amended:** 2026-10-16 (decision 10)
 - **Deciders:** Platform team
 
 ## Context
@@ -76,6 +77,32 @@ from the Power BI REST API before deciding.
 9. **No Content-Security-Policy is added with this increment.** The Caddyfile
    is unchanged. A policy is part of the hardening increment.
 
+10. **The whole page is in view at once, in a frame of the page's shape,
+    and Power BI shows none of its own panes** (2026-10-16).
+    - **The page is fitted to the page,** never scrolled: the owner wants the
+      whole dashboard at a glance.
+    - **The frame takes the open page's shape.** Power BI tells the app the
+      page's size once the report has loaded and on each change of page, and
+      the frame becomes the largest box of that shape the area holds,
+      centred. The page then fills its frame, and what a wide window has left
+      beside it is the app's own background, not black bands inside the
+      frame. Until Power BI has said, the frame fills the area.
+    - **A "Pantalla completa" button** (wide screens, where the browser
+      supports it) puts the area in full screen. On a 16:9 monitor the page
+      then fills the screen.
+    - **Power BI's page bar and filter pane are hidden.** This replaces "page
+      navigation visible, filter pane available and collapsed" of section 10
+      of the plan.
+
+    It follows from the report's own design, read from its definition through
+    the Power BI REST API on 2026-10-16:
+    - all eight pages are 1280 × 720;
+    - every page has a button to each page and its slicers on the page;
+    - the one filter of each page's pane is hidden from viewers.
+
+    On a wide screen the app's chrome also moved into its header, so the
+    report has the rest of the window.
+
 ## Consequences
 
 **Easier:**
@@ -100,6 +127,15 @@ from the Power BI REST API before deciding.
   BI cannot be reached".
 - The embedding library has no ES module build, and adds to what the browser
   downloads on the dashboard.
+- **The report must carry its own navigation and filters** (decision 10).
+  A page without buttons to the other pages cannot be left inside the app,
+  and a filter made visible in the filter pane is not seen there. Both are
+  rules for whoever edits the report; [docs/powerbi.md](../powerbi.md)
+  states them.
+- **A desktop window is wider than the 16:9 page,** once the browser's bars
+  take their height. The page is therefore as tall as the window allows, and
+  the app's background shows on both sides: about 175 pixels each on a 1080p
+  screen. Full screen removes them on a 16:9 monitor.
 
 **Accepted:**
 
@@ -145,6 +181,20 @@ and the IDs are not secrets.
 
 **Add a Content-Security-Policy now.** Rejected: a wrong one breaks sign-in or
 the report, and only a signed-in browser shows it.
+
+**Fit the page to the frame's width** (decision 10). Tried on 2026-10-16 and
+withdrawn the same day: the page filled the width with no bands, but about 200
+pixels of it had to be scrolled inside the frame, and the owner wants the
+whole dashboard at a glance.
+
+**Write the page's shape into the app** (decision 10). Rejected: the frame's
+shape would silently go wrong the day the report's page size changes. Power
+BI tells it.
+
+**Change the report's page size to the app's area** (decision 10). Rejected:
+the area's proportions change with every window, so no one size fits. It
+would also mean laying out eight pages again, and publishing from Desktop
+again drops the gateway's mapping.
 
 ## References
 

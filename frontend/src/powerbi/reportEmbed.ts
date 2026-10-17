@@ -38,6 +38,18 @@ export interface ReportEmbedOptions {
   /** The report is on screen and can be used. */
   onLoaded: () => void;
   onError: (error: EmbedError) => void;
+  /**
+   * The size the open page was designed at, in Power BI's units: once the
+   * report has loaded, and again whenever another page opens. Not called
+   * when Power BI does not say.
+   */
+  onPageSize?: (size: PageSize) => void;
+}
+
+/** A report page's designed size; only its proportions matter to the app. */
+export interface PageSize {
+  width: number;
+  height: number;
 }
 
 export interface EmbeddedReport {

@@ -90,6 +90,13 @@
   }
 }
 
+/* Tooltips: a raised surface (theme.ts sets its colours). */
+.tooltip {
+  border: 1px solid var(--ce-border);
+  letter-spacing: var(--ce-tracking-small);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Links and titles ---------------------------------------------------------- */
 
 .anchor {

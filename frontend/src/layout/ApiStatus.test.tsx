@@ -1,11 +1,12 @@
-// The footer line that reports whether the API answers.
+// The line that reports whether the API answers: the footer on a narrow
+// screen, a dot in the header on a wide one.
 import { screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { fetchHealth } from "../api/health";
 import es from "../i18n/es.json";
 import { paths } from "../paths";
-import { renderAppAt, stubApi } from "../test/render";
+import { onWideScreen, renderAppAt, stubApi } from "../test/render";
 
 /** The API answers everything as usual, except the health check. */
 function stubHealth(answer: () => Response | Promise<Response>) {
@@ -62,6 +63,36 @@ describe("the API status line", () => {
     const [, request] = fetchStub.mock.calls.find(([address]) => address === "/api/health") ?? [];
 
     expect(request?.headers).toEqual({ Accept: "application/json" });
+  });
+});
+
+describe("the API's state in the header", () => {
+  it("is the dot when the API answers; the words stay for screen readers", async () => {
+    onWideScreen();
+    stubApi({ version: "1.2.3" });
+    renderAppAt(paths.dashboard);
+
+    const line = await screen.findByText(es.api.online.replace("{{version}}", "1.2.3"));
+
+    expect(line).toHaveRole("status");
+    expect(line).toHaveAttribute("data-quiet");
+  });
+
+  it("says in words that the service is unreachable", async () => {
+    onWideScreen();
+    stubHealth(() => {
+      throw new TypeError("network down");
+    });
+    renderAppAt(paths.dashboard);
+
+    expect(await screen.findByText(es.api.offline)).not.toHaveAttribute("data-quiet");
+  });
+
+  it("speaks in words in the footer whatever the state", async () => {
+    stubApi({ version: "1.2.3" });
+    renderAppAt(paths.dashboard);
+
+    expect(await screen.findByText(/1\.2\.3/)).not.toHaveAttribute("data-quiet");
   });
 });
 

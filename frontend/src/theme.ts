@@ -11,6 +11,7 @@ import {
   defaultVariantColorsResolver,
   NavLink,
   Title,
+  Tooltip,
   type VariantColorsResolver,
 } from "@mantine/core";
 
@@ -119,5 +120,12 @@ export const theme = createTheme({
     }),
     NavLink: NavLink.extend({ classNames: { root: classes.navLink } }),
     Title: Title.extend({ classNames: { root: classes.title } }),
+    // Mantine's tooltip is light on a dark page; this one is a raised surface.
+    Tooltip: Tooltip.extend({
+      classNames: { tooltip: classes.tooltip },
+      vars: () => ({
+        tooltip: { "--tooltip-bg": token("surface-raised"), "--tooltip-color": token("text") },
+      }),
+    }),
   },
 });
