@@ -197,7 +197,10 @@ def test_me_ignores_a_role_value_the_application_does_not_define(
 # =============================================================================
 # A viewer cannot open data loading; an operator can
 # =============================================================================
-@pytest.mark.parametrize("path", ["/uploads", "/runs", f"/runs/{A_RUN}"])
+@pytest.mark.parametrize(
+    "path",
+    ["/uploads", "/runs", f"/runs/{A_RUN}", "/datasets", "/datasets/qad_facturas/template"],
+)
 def test_a_viewer_is_refused_on_data_loading(
     client: TestClient, auth_headers: Any, path: str
 ) -> None:

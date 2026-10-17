@@ -243,6 +243,21 @@ app.include_router(things.router, dependencies=[Depends(requires(Permission.LOAD
 [docs/api.md](docs/api.md) follows a request through the API and lists every
 endpoint; [docs/sign-in.md](docs/sign-in.md) has the Entra ID side.
 
+### Adding a dataset spec
+
+A kind of data people load through the web app is a file in
+`config/datasets/`, named after its key. [docs/dataset-specs.md](docs/dataset-specs.md)
+has the format and the steps.
+
+- **Copy the headers from the workbook by script,** never by typing them:
+  Bronze keys every column by its exact header text.
+- **Quote every allowed value.** YAML reads an unquoted `No` as false.
+- **Check it with `energy datasets check`** before `make test`. A malformed spec
+  stops the API at start.
+- `tests/unit/test_dataset_specs_committed.py` ties each spec to the Bronze
+  loader's routes, the Silver SQL, the translation file and, when present, the
+  real workbook.
+
 ### Changing the web app
 
 The app in `frontend/` (React, TypeScript, Vite) is what users open at `/`.

@@ -136,6 +136,81 @@ class MeResponse(ResponseModel):
     plant_scope: list[str]
 
 
+class DatasetColumn(ResponseModel):
+    """One column of a dataset, as its spec declares it.
+
+    Attributes:
+        header: the header text, exactly as the workbook and the template write it.
+        key: the key Bronze stores the column under, derived from the headers;
+            a repeated header gets ``#2`` (``Almac #2``). Unique in a dataset.
+        label: the key of a label in the web app's translation file, or ``None``
+            to show the header.
+        type: ``text``, ``integer``, ``decimal`` or ``date``.
+        required: whether an empty cell is an error.
+        pattern: for text, a regular expression the whole value must match.
+        allowed: for text, the only values accepted.
+        min: for numbers, the smallest value accepted.
+        max: for numbers, the largest value accepted.
+        severity: ``error`` or ``warning``: what breaking ``pattern``,
+            ``allowed``, ``min`` or ``max`` does.
+    """
+
+    header: str
+    key: str
+    label: str | None
+    type: Literal["text", "integer", "decimal", "date"]
+    required: bool
+    pattern: str | None
+    allowed: list[str] | None
+    min: int | float | None
+    max: int | float | None
+    severity: Literal["error", "warning"]
+
+
+class DatasetDescription(ResponseModel):
+    """One kind of data people load, as its spec declares it.
+
+    Attributes:
+        key: the dataset's name; its template is at
+            ``/api/datasets/{key}/template``.
+        kind: ``snapshot`` (replaced whole on every load) or ``movement`` (rows
+            add up, each dated by ``period_column``).
+        origin: ``export`` (out of QAD, uploaded only) or ``catalogue`` (kept by
+            hand).
+        label: the key of the dataset's name in the web app's translation file.
+        description: the key of its description there.
+        entry_modes: how rows may be entered: ``upload``, ``grid``, ``form``.
+        sheet: the worksheet a file must hold.
+        header_row: the row of that sheet that holds the headers.
+        natural_key: the column keys that identify a row.
+        period_column: the key of the column that dates each row; ``None`` for
+            a snapshot.
+        columns: every column, in the workbook's order.
+    """
+
+    key: str
+    kind: Literal["snapshot", "movement"]
+    origin: Literal["export", "catalogue"]
+    label: str
+    description: str
+    entry_modes: list[Literal["upload", "grid", "form"]]
+    sheet: str
+    header_row: int
+    natural_key: list[str]
+    period_column: str | None
+    columns: list[DatasetColumn]
+
+
+class DatasetsResponse(ResponseModel):
+    """Every dataset spec the server holds, by key.
+
+    Attributes:
+        datasets: the datasets.
+    """
+
+    datasets: list[DatasetDescription]
+
+
 class HealthResponse(ResponseModel):
     """Liveness probe payload.
 

@@ -114,7 +114,7 @@ to Microsoft with that account is usually not asked for the password again.
 | Role | May |
 |---|---|
 | `viewer` | See the dashboard |
-| `operator` | The above, and load data and see the history of loads |
+| `operator` | The above, and load data, see the history of loads, and read the dataset specs and download their templates |
 | `engineer`, `admin` | The same as `operator` today; more arrives with later features |
 | No role | Sign in, and nothing else. The app shows a page saying so |
 
@@ -201,6 +201,7 @@ flowchart LR
 | **Works** | Signing in, and the answer to "who am I, and what may I do?" |
 | **Works** | The health checks: is the API running, and can it reach the database? |
 | **Works** | The settings the app reads when it starts: where users sign in, and which report the dashboard shows |
+| **Works** | The kinds of data the app knows how to load ("dataset specs"), and an empty template of each to download. Two so far: production lines and invoice lines. Built on 2026-10-17; the web app does not show them yet |
 | **Works, outside the API** | Loading the exports and calculating the figures, by commands on the server |
 | **Works, outside the API** | Power BI reading the equivalent batteries through the reporting views |
 | **Defined, not built** | Loading a file from the web app, and the list of past loads |
@@ -314,6 +315,8 @@ refused, and how the app and Entra ID take part.
 | `GET /api/runs/{run_id}` | `loads:write` | Placeholder, Phase 3 | One run in detail |
 | `GET /api/runs/{run_id}/quarantine` | `loads:write` | Placeholder, Phase 3 | The rows a run rejected, and why |
 | `POST /api/runs/{run_id}/retry` | `loads:write` | Placeholder, Phase 3 | 202 with the ID of the new run |
+| `GET /api/datasets` | `loads:write` | Built | Every dataset spec: its kind, where it comes from, how rows may be entered, its sheet, natural key, period column and columns |
+| `GET /api/datasets/{dataset_key}/template` | `loads:write` | Built | The dataset's empty `.xlsx` template, named `<dataset_key>.xlsx`: its sheet, with exactly the spec's headers. 404 with `code` `unknown_dataset` for a key no spec has |
 | `POST /api/ingest/readings` | Devices. Not enforced yet | Placeholder, Phase 3 | The accepted and rejected counts of a batch |
 | `GET /api/ingest/watermark/{plant_code}/{source_key}` | Devices. Not enforced yet | Placeholder, Phase 3 | The newest timestamp held for a plant and source |
 
@@ -395,6 +398,46 @@ refused, and how the app and Entra ID take part.
 
 A person without a role gets the same shape with `"roles": []` and
 `"permissions": []`.
+
+`GET /api/datasets`, for an operator, with one made-up spec
+
+```json
+{
+  "datasets": [
+    {
+      "key": "example_catalogue",
+      "kind": "snapshot",
+      "origin": "catalogue",
+      "label": "datasets.example_catalogue.name",
+      "description": "datasets.example_catalogue.description",
+      "entry_modes": ["upload", "grid", "form"],
+      "sheet": "Hoja1",
+      "header_row": 1,
+      "natural_key": ["Código"],
+      "period_column": null,
+      "columns": [
+        {"header": "Código", "key": "Código", "label": null, "type": "text", "required": true,
+         "pattern": "^[A-Z]{2}[0-9]{3}$", "allowed": null, "min": null, "max": null, "severity": "error"},
+        {"header": "Activo", "key": "Activo", "label": null, "type": "text", "required": false,
+         "pattern": null, "allowed": ["Sí", "No"], "min": null, "max": null, "severity": "warning"},
+        {"header": "Código", "key": "Código #2", "label": null, "type": "text", "required": false,
+         "pattern": null, "allowed": null, "min": null, "max": null, "severity": "error"}
+      ]
+    }
+  ]
+}
+```
+
+- **The specs are files,** `config/datasets/<key>.yaml`, read once when the API
+  starts. A malformed one stops the API before it serves anything, and the
+  message names the file, the path in it and the problem.
+  [Dataset specs](dataset-specs.md) is the guide to them.
+- **`key` is the key Bronze stores a column under.** It is derived from the
+  headers by the Bronze rules: a repeated header gets `#2`.
+- **`label` and `description` are keys of the web app's translation file,**
+  not texts. The app shows the header of a column without a `label`.
+- **Nothing about Bronze or Silver is in the answer:** the app needs only what
+  a person sees and types.
 
 ### 3. The three parties
 
@@ -854,6 +897,21 @@ header of a call to `/api/me`.
 
 This step is described, not yet tested with a real token.
 
+**The dataset specs and a template**, with a token of an operator or above
+pasted into a shell variable, never into a file:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/datasets
+curl -s -H "Authorization: Bearer $TOKEN" -OJ http://localhost:8080/api/datasets/qad_facturas/template
+```
+
+The second saves `qad_facturas.xlsx` in the current folder. Swagger UI offers
+the same two calls, and a download link for the file.
+
+**A malformed spec stops the API.** Check the specs without starting anything:
+`energy datasets check`, or `energy datasets check --config-dir <folder>` for a
+copy being edited ([Dataset specs](dataset-specs.md#checking-a-spec)).
+
 A token is a password for as long as it lives. Never paste one into a file, a
 ticket, a chat or this repository.
 
@@ -869,6 +927,8 @@ ticket, a chat or this repository.
 | `tests/integration/test_health_endpoint.py` | `/health` and `/ready` against a real database, and the 501 of a placeholder |
 | `frontend/src/auth/Session.test.tsx`, `msalAuthClient.test.ts` | The app's start-up, each failure page, and the calls to MSAL, with stand-ins for both |
 | `tests/unit/test_settings.py` | The settings, among them the two that name the report: empty means not configured, and a value that is not a GUID is refused |
+| `tests/unit/test_api_datasets.py` | The two dataset routes: who may call them, the specs described, the template read back, the 404, and a malformed spec stopping the app from being built |
+| `tests/unit/test_dataset_spec.py`, `test_yaml_dataset_specs.py`, `test_dataset_specs_committed.py`, `test_xlsx_dataset_template.py` | What a spec may hold, one case per kind of mistake; reading them from their folder; the committed specs against the loader's routes, the Silver build's SQL, the translation file and the real workbooks; every template read back by the Bronze reader |
 | `frontend/src/pages/DashboardPage.test.tsx`, `frontend/src/powerbi/*.test.ts` | The dashboard: the report shown, its token replaced, and each message, with stand-ins for sign-in and for Power BI. One file runs Microsoft's embedding library itself, in a test browser that loads nothing |
 
 - **Tests never reach Entra ID.** The fixture `token_verifier` replaces the

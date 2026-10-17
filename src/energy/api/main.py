@@ -16,6 +16,7 @@ policy can be read in one place:
 
 - ``/health``, ``/ready``, ``/config`` and the API's own documentation are
   public (:data:`PUBLIC_PATHS`);
+- ``/datasets`` needs ``loads:write``: dataset specs serve loading data;
 - ``/me`` needs a signed-in person;
 - every other router is mounted with the permission it needs;
 - ``/ingest`` is for devices and keeps its API key (:data:`DEVICE_PATH_PREFIX`).
@@ -29,27 +30,31 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from energy.api.deps import requires
+from energy.api.deps import load_dataset_catalogue, requires
 from energy.api.middleware import RequestContextMiddleware
-from energy.api.routers import client_config, health, ingest, kpis, me, runs, uploads
+from energy.api.routers import client_config, datasets, health, ingest, kpis, me, runs, uploads
 from energy.api.security import Permission
 from energy.core.logging import configure_from_settings, get_logger
 from energy.core.settings import Settings, get_settings
 from energy.db.session import dispose_engine
 from energy.domain.exceptions import (
     AuthenticationError,
+    DatasetSpecError,
     EnergyError,
     EntityNotFoundError,
     IdentityProviderUnavailableError,
     PermissionDeniedError,
     SignInNotConfiguredError,
 )
+
+if TYPE_CHECKING:
+    from energy.domain.dataset_spec import DatasetCatalogue
 
 logger = get_logger(__name__)
 
@@ -75,6 +80,7 @@ TAGS_METADATA = [
     {"name": "uploads", "description": "Excel and CSV file ingestion into Bronze."},
     {"name": "ingest", "description": "Sensor and historian push endpoint into Bronze."},
     {"name": "runs", "description": "Pipeline run status and history."},
+    {"name": "datasets", "description": "The dataset specs, and the empty template of each."},
 ]
 
 
@@ -168,6 +174,20 @@ def _register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content=exc.as_dict())
 
 
+def _dataset_catalogue(settings: Settings) -> DatasetCatalogue:
+    """Read the dataset specs, logging every problem before refusing to go on.
+
+    Raises:
+        DatasetSpecError: if a spec is malformed. ``energy.api.main`` builds the
+            app when it is imported, so the server stops before it serves.
+    """
+    try:
+        return load_dataset_catalogue(settings)
+    except DatasetSpecError as exc:
+        logger.error("dataset specs rejected", problems=list(exc.problems))
+        raise
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build and configure the FastAPI application.
 
@@ -178,9 +198,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     Returns:
         A fully wired :class:`~fastapi.FastAPI` instance with logging configured,
         middleware installed, routers mounted, and exception handlers registered.
+
+    Raises:
+        DatasetSpecError: if a dataset spec of ``<CONFIG_DIR>/datasets`` is
+            malformed. The message lists every problem, with its file and path.
     """
     settings = settings or get_settings()
     configure_from_settings()
+    catalogue = _dataset_catalogue(settings)
 
     app = FastAPI(
         title="Clarios Energy API",
@@ -194,6 +219,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+    app.state.dataset_catalogue = catalogue
 
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
@@ -215,6 +241,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(kpis.router, dependencies=may_view)
     app.include_router(uploads.router, dependencies=may_load)
     app.include_router(runs.router, dependencies=may_load)
+    app.include_router(datasets.router, dependencies=may_load)
     # Devices, by API key (Phase 3).
     app.include_router(ingest.router)
 

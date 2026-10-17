@@ -51,7 +51,9 @@ serves at `/`; Dash moved to `/dash/`. It is built in the increments of
 increment 1 (the shell, with two empty sections) and increment 2 (sign-in with
 Microsoft Entra ID, and roles) are done. Increment 3 (the dashboard, with the
 embedded Power BI report) is built, and waits for the owner's checks in a
-signed-in browser. The decisions are in
+signed-in browser. Increment 4 (the dataset specs, `GET /api/datasets` and the
+template of each) is built; [docs/dataset-specs.md](docs/dataset-specs.md) is
+its guide. The decisions are in
 [ADR 0004](docs/adr/0004-react-spa-entra-and-embedded-power-bi.md) (stack, Entra
 ID sign-in, embedded Power BI),
 [ADR 0005](docs/adr/0005-api-composition-root.md) (`api/deps.py` may import
@@ -87,11 +89,11 @@ Definition-of-Done item is verified against a running stack.
 | `/api/ready` payload | `degraded` (connectivity+extensions healthy, Silver empty) - correct, returns 200 not 503 |
 | Placeholder endpoint | `/api/kpis/summary` -> **501** with `code=not_implemented` for a signed-in caller (in the tests); 401 without a token |
 | `X-Request-Id` | Present and propagated |
-| `make check` | **Exit 0**, the whole chain as one command, on the code of increment 3 (2026-10-13): format, lint, mypy strict (111 files), bandit, pip-audit, `frontend-check`, tests (22 minutes). Three changes to the frontend alone came after that run (the frame left in view, the dev server's routes, Power BI's error kept from the window): `make frontend-check` passed again, and the Python steps were not run again |
-| `make frontend-check` | **Exit 0** (2026-10-13) - Biome on 55 files, `tsc`, 163 Vitest tests in 9 files, production build of two pages, with the Power BI library in a file of its own (229 kB). About 10 seconds on an idle machine |
+| `make check` | **Exit 0**, the whole chain as one command, on the code of increment 4 (2026-10-17): format, lint, mypy strict (117 files), bandit, pip-audit, `frontend-check`, tests (26 minutes) |
+| `make frontend-check` | **Exit 0** (2026-10-17, inside `make check`) - Biome on 63 files, `tsc`, 236 Vitest tests in 10 files, production build of two pages, with the Power BI library in a file of its own (229 kB) |
 | Dashboard (2026-10-13) | With the two IDs empty, `GET /api/config` answers `"powerbi": null` and sign-in asks for the API's scope only. With them set, it carries the `powerbi` object, and a signed-out headless browser reaches Microsoft's sign-in page with both scopes and no error, from `:8080` and from the dev server. The built embedding module, run in headless Edge with made-up IDs and a text that is no token, loads Power BI's frame and receives its refusal. Caddy's headers are unchanged. **Not done by a session:** seeing the report as a signed-in user |
-| `make test` | **861 passed, 39 skipped** (22 minutes with the workbooks present, 2026-10-13, inside `make check`) |
-| Coverage | **95.91%** (threshold 70%) |
+| `make test` | **969 passed, 39 skipped** (26 minutes with the workbooks present, 2026-10-17, inside `make check`) |
+| Coverage | **96.16%** (threshold 70%) |
 | `make test-integration` | **118 passed** against real TimescaleDB and MinIO, with the workbooks present (2026-10-07; not re-run on its own since) |
 | `make powerbi` | **Exit 0** in the stack: the bridge healthy on 127.0.0.1:5433; the login reads the reporting views from Windows through it, is refused on gold/silver and with a wrong password; `make powerbi-down` closes the port without touching the db container |
 | No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer. Two deliberate exceptions: `docs/equs_calculation_explained.es.md`, the Spanish translation of the non-technical explanation (asked for on 2026-10-08), and `frontend/src/i18n/es.json`, the texts of the web app's interface (decided on 2026-10-12, ADR 0004) |
@@ -104,11 +106,13 @@ dates from 2026-10-07 and the other rows from 2026-09-19. On 2026-10-12, with
 the web app added, `make up`, the routes and `make frontend-check` were verified
 again. Later that day, with sign-in added (increment 2), `make up`, the routes,
 `make test` and every other step of the gate were run again. On 2026-10-13,
-with the dashboard added (increment 3), `make check` ran whole and passed: the
-`make check`, `make test` and coverage rows are from that run, and the
-`make frontend-check` row from the run after the last change to the frontend.
+with the dashboard added (increment 3), `make check` ran whole and passed.
 `make up` was run that day too (13 minutes, the README having changed), and
-the routes were checked again with the report configured and not.
+the routes were checked again with the report configured and not. On
+2026-10-17, with the dataset specs added (increment 4), `make check` ran whole
+and passed again: the `make check`, `make frontend-check`, `make test` and
+coverage rows are from that run. The api image was rebuilt that day and its
+two new routes answer 401 without a token through Caddy.
 
 **Integration tests can be skipped silently.** They start a TimescaleDB container
 and wait 120 s for it. On 2026-10-06, with the machine busy, the container needed
@@ -668,6 +672,49 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
 - **Not done by a session:** seeing the report as a signed-in user, and seeing
   it outlive its first token. Both are the owner's checks, listed in the plan.
 
+**Dataset specs** (increment 4, built 2026-10-17;
+[docs/dataset-specs.md](docs/dataset-specs.md)):
+
+- **One YAML file per dataset in `config/datasets/<key>.yaml`, format version
+  1.** Two pilots: `lineas_produccion` (a hand-kept catalogue, 10 columns) and
+  `qad_facturas` (a QAD export, 49 columns). Nothing applies their rules to a
+  file yet: that is increment 5.
+- **The API reads them in `create_app()`,** through `deps.load_dataset_catalogue`
+  (the adapter `adapters/yaml_dataset_specs.py`). `energy.api.main` builds the
+  app at import, so a malformed spec stops uvicorn before it serves, with a
+  `DatasetSpecError` listing every problem as `<file>: <path>: <problem>`. Any
+  test that builds the app reads `config/datasets` relative to the working
+  directory (the repository root); set `CONFIG_DIR` to point elsewhere.
+- **`domain/dataset_spec.py` holds the meaning,** standard library only: the
+  format, every check, the catalogue. The adapter only reads files, refusing a
+  key repeated in one YAML mapping, which `yaml.safe_load` would keep silently.
+- **A spec writes headers, never payload keys.** Keys are derived with
+  `landing.header_keys`, as Bronze derives them (the second `Almac` of the
+  invoices is `Almac #2`). Natural keys and the period column name keys.
+- **Copy headers from the workbook by script** (print them with `ascii()`):
+  `Tiempo de configuración  (D H:M:S)` has two spaces, and accents are
+  invisible on screen. Quote allowed values: YAML reads an unquoted `No` as
+  false.
+- **`tests/unit/test_dataset_specs_committed.py` ties each spec** to the
+  loader's `ROUTES`, to the Silver SQL (every `payload ->> '…'` key Silver reads
+  from the dataset must be a spec key; the SQL stays fixed text, so this is a
+  test, not a generation), to `es.json` (the label keys), and to the real
+  workbook's header row when `data/raw_excels` holds it.
+- **`GET /api/datasets` and `GET /api/datasets/{dataset_key}/template` need
+  `loads:write`.** The answer carries no Bronze or Silver names. The template
+  (`adapters/xlsx_dataset_template.py`, openpyxl) is one sheet with the headers
+  and no data; formats and drop-down lists sit on the columns, never in cells,
+  and a test reads every template back with the Bronze reader. No instructions
+  sheet: its Spanish would have to live in Python.
+- **openpyxl ships no types.** Its imports carry `# type: ignore[import-untyped]`
+  in the adapter, rather than an override in `pyproject.toml`, which would
+  force the slow image rebuild.
+- **`energy datasets check [--config-dir]`** reads the specs as the API does
+  (`pipelines/flows/dataset_specs.py`) and exits 1 with every problem.
+- **The rules were measured on FY26 (2026-10-17):** every row satisfies each
+  pattern and range. Codes that may one day hold a letter (items, customers)
+  have no pattern, so a new code cannot block a monthly load.
+
 **EQUS Bronze loader** (built 2026-10-07):
 
 - Layout follows the hexagon: payload rules in `domain/landing.py` and
@@ -735,7 +782,9 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
   content changes, nothing staged) clears the list. Seen on 2026-10-16,
   after a switch to `main` and back on 2026-10-15. At the same time
   `frontend/node_modules` was found half empty; `make frontend-install`
-  restored it.
+  restored it. The Python files are affected too: on 2026-10-17 `ruff format`
+  rewrote 15 untouched modules of `src/energy` from CRLF to LF, cleared the
+  same way.
 - **Short of memory, tests fail for no reason of their own.** With under 2 GB
   free, Vitest's workers time out at start and test containers miss their 120
   seconds. Check the free memory before believing such a failure.
@@ -824,9 +873,9 @@ All deliberate; each is explained where it lives.
 
 The web app has its own roadmap, in section 8 of
 [docs/frontend-plan.md](docs/frontend-plan.md): fourteen increments, of which 0
-to 2 are done and 3 (the dashboard page, with the embedded Power BI report) is
-built and waits for the owner's browser checks. Increment 4 is the dataset
-specifications.
+to 2 are done, 3 (the dashboard page, with the embedded Power BI report) is
+built and waits for the owner's browser checks, and 4 (the dataset specs) is
+built. Increment 5 is staging, upload and the schema checks.
 
 When implementing a placeholder: read its docstring first (it is the spec), keep
 and update the docstring, remove the `Implemented in: Phase N` line, and un-skip

@@ -349,15 +349,18 @@ Notes on this list:
 
 ### How rules are configured
 
-One YAML file per dataset type, in `config/datasets/`, loaded and checked at
-startup as `config/sources.yaml` is. It declares:
+One YAML file per dataset type, in `config/datasets/`, loaded and checked when
+the API starts: a malformed one stops it, naming the file, the path and the
+problem. Built in increment 4; [docs/dataset-specs.md](dataset-specs.md) is the
+guide to the format (version 1). It declares:
 
-- the Bronze target (`source_key`, sheets or `dataset_key`, header row);
+- the Bronze target (`source_key`, one sheet, `dataset_key`, header row);
 - the kind (snapshot or movement), the natural key and the date column;
 - the input modes allowed;
 - each column: header text exactly as in the template, type, required or not,
-  format, allowed values (a list or a named lookup), range;
-- the checks that apply, each with its severity and parameters.
+  a pattern, allowed values (a list; a named lookup is increment 8), a range;
+- for each column, whether breaking its pattern, list or range is an error or
+  a warning.
 
 The API serves the same file to the frontend (`GET /api/datasets`), so the form,
 the grid columns and the downloadable template are generated from it. Changing a
@@ -641,7 +644,7 @@ Each increment is small enough to review and has one test of "done".
 | 1 | **App skeleton.** `frontend/` with Vite, React and TypeScript; Caddy serves it at `/`; Dash moves to `/dash/`; a CI job lints, type-checks, tests and builds it. **Done 2026-10-12:** verified against the running stack, and green in CI | `make up` shows the shell with two empty sections at `:8080`, and CI is green |
 | 2 | **Sign-in and roles.** MSAL in the app; token check and role mapping in the API; `GET /api/me`. Also `GET /api/config`, the permission table, and the rule that a route is protected unless listed as public ([ADR 0006](adr/0006-api-tokens-and-app-roles.md)). **Built 2026-10-12** and checked against the running stack: every guarded route answers 401 without a token and to forged ones, and a signed-out browser is sent to Microsoft with the registered redirect page and the API's scope. That a viewer is kept out of data loading and an operator let in is proved by tests of the API and of the app, with stand-ins for Entra ID; the same check by the two test users in a browser is the owner's | Without a token the API answers 401; a `viewer` cannot open data loading and an `operator` can |
 | 3 | **Dashboard page.** The embedded report with token refresh. Section 10 plans it in detail. **Built 2026-10-13:** the page, the second token, the token's renewal and one message per cause of failure are proved by tests of the app, with stand-ins for Entra ID and Power BI, and the embedding library is run itself in a test browser. The three checks at the right need a signed-in browser and are the owner's | A signed-in user sees the report; it still works after the first token expires; a user without workspace access gets a clear message |
-| 4 | **Dataset specs.** YAML for two pilots, one catalogue (`lineas_produccion`) and one export (`qad_facturas`); `GET /api/datasets`; template download | Specs load at startup and fail loudly when malformed; the downloaded template has exactly the headers of the spec |
+| 4 | **Dataset specs.** YAML for two pilots, one catalogue (`lineas_produccion`) and one export (`qad_facturas`); `GET /api/datasets`; template download. **Built 2026-10-17:** the two specs carry every header of their workbooks (10 and 49), checked against the workbooks themselves; a malformed spec stops the API at start, every mistake named with its file and path, and `energy datasets check` reads them the same way; every template is read back by the Bronze reader in a test. No page shows them yet: that is the first step of the wizard, with increment 5 | Specs load at startup and fail loudly when malformed; the downloaded template has exactly the headers of the spec |
 | 5 | **Staging, upload and schema checks.** Migration for `staging`; a streaming upload endpoint with the 300 MB limit enforced by the browser, Caddy and the API; streaming variants of the storage and reader ports; file and schema rules; the issues list. A file over 5 MB is archived but answers "not built yet" to validation until increment 12 | A deliberately broken file shows every failure with row, column and rule; the original is archived; Bronze is unchanged; a 300 MB file uploads through Caddy with progress while the API's memory stays flat, and a larger one is refused with a clear message |
 | 6 | **Reasons, grid and revalidation.** Reason detectors; the grid spike and choice; cell editing | Each defect of the table in section 5 yields its reason and fix; fixing a cell and revalidating clears it without a new upload |
 | 7 | **Commit and history.** The write path of section 6; the confirmation summary; the history and detail pages | A validated draft lands with all the metadata of section 6; a double submit creates one run; the row counts match |

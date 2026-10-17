@@ -681,3 +681,33 @@ def test_a_malformed_command_line_exits_1_not_2(
     with pytest.raises(SystemExit) as finished:
         getattr(cli, entry)()
     assert finished.value.code == code
+
+
+# =============================================================================
+# energy datasets check
+# =============================================================================
+def test_datasets_check_lists_every_sound_spec(repo_root: Path) -> None:
+    """The committed specs pass, one line each, read as the API reads them."""
+    result = runner.invoke(
+        cli.build_app(), ["datasets", "check", "--config-dir", str(repo_root / "config")]
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[0].split()[:4] == ["lineas_produccion", "snapshot", "catalogue", "10"]
+    assert lines[1].split()[:4] == ["qad_facturas", "movement", "export", "49"]
+    assert lines[-1] == "2 dataset specs, all sound."
+
+
+def test_datasets_check_names_each_problem_and_exits_1(tmp_path: Path) -> None:
+    """A malformed spec is named with its file and path, and the exit code says so."""
+    folder = tmp_path / "datasets"
+    folder.mkdir()
+    spec = folder / "broken.yaml"
+    spec.write_text("version: 2\n", encoding="utf-8")
+
+    result = runner.invoke(cli.build_app(), ["datasets", "check", "--config-dir", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "error: dataset specs are invalid" in result.output
+    assert f"{spec.as_posix()}: version: 2 is not a version this build reads" in result.output

@@ -60,6 +60,16 @@
     "title": "Carga de datos",
     "empty": "Aquí podrá agregar datos: subir un archivo, llenar un formulario o editar una tabla."
   },
+  "datasets": {
+    "lineas_produccion": {
+      "name": "Líneas de producción",
+      "description": "Catálogo de las líneas de producción: hoja «Lineas Produccion» del libro EQUS BATT."
+    },
+    "qad_facturas": {
+      "name": "Unidades facturadas",
+      "description": "Exportación de QAD con las líneas de factura: hoja «Datos»."
+    }
+  },
   "notFound": {
     "title": "Página no encontrada",
     "text": "La dirección no corresponde a ninguna sección.",

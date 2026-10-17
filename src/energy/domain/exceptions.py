@@ -13,7 +13,10 @@ it is safe to import from any layer including ``domain`` itself.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 class EnergyError(Exception):
@@ -69,6 +72,33 @@ class UnknownKPIError(ConfigurationError):
     """Raised when ``kpis.yaml`` does not define the requested KPI key."""
 
     code = "unknown_kpi"
+
+
+class DatasetSpecError(ConfigurationError):
+    """Raised when one or more dataset specs are malformed.
+
+    Every problem found is listed, not only the first, so one run shows them
+    all. Each names the file, the path inside it and what is wrong, for example
+    ``config/datasets/qad_facturas.yaml: columns[24].type: 'decimel' is not
+    one of text, integer, decimal, date``.
+
+    Args:
+        problems: one line per problem.
+    """
+
+    code = "invalid_dataset_spec"
+
+    def __init__(self, problems: Sequence[str]) -> None:
+        count = len(problems)
+        super().__init__(
+            f"dataset specs are invalid ({count} problem{'' if count == 1 else 's'})",
+            problems=list(problems),
+        )
+        self.problems: tuple[str, ...] = tuple(problems)
+
+    def __str__(self) -> str:
+        """Return the heading and every problem, one per line."""
+        return "\n  ".join((f"{self.message}:", *self.problems))
 
 
 # -----------------------------------------------------------------------------
@@ -204,6 +234,12 @@ class EntityNotFoundError(RepositoryError):
     """Raised when a lookup by identifier finds nothing."""
 
     code = "entity_not_found"
+
+
+class UnknownDatasetError(EntityNotFoundError):
+    """Raised when no dataset spec has the requested key. The API answers 404."""
+
+    code = "unknown_dataset"
 
 
 class DatabaseUnavailableError(RepositoryError):

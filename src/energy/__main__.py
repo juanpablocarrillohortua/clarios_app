@@ -13,9 +13,11 @@ Responsibility:
     differently.
 
     The ``equs`` commands are implemented, and so are ``equs-report``, a command
-    of its own, and ``reporting create-reader``, which gives a BI tool such as
-    Power BI its read-only login. The other commands are placeholders for the
-    phase named in each, and are not registered until they are built.
+    of its own, ``reporting create-reader``, which gives a BI tool such as
+    Power BI its read-only login, and ``datasets check``, which checks the
+    dataset specs as the API does when it starts. The other commands are
+    placeholders for the phase named in each, and are not registered until they
+    are built.
 
     Every command logs to standard error, so that standard output carries only
     its result: a table, CSV or JSON that can be piped.
@@ -63,6 +65,7 @@ from energy.domain.exceptions import (
 )
 from energy.domain.landing import DEFAULT_PLANT_CODE, LANDING_SOURCES, parse_sheet_spec
 from energy.domain.reporting import describe_reader
+from energy.pipelines.flows.dataset_specs import read_dataset_specs
 from energy.pipelines.flows.equs_bronze_load import (
     DEFAULT_DIRECTORY,
     RouteOutcome,
@@ -744,6 +747,36 @@ def reporting_create_reader() -> None:
         typer.echo(line)
 
 
+def datasets_check(
+    config_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--config-dir",
+            help="The configuration directory whose datasets folder holds the specs. "
+            "Default: CONFIG_DIR.",
+            file_okay=False,
+        ),
+    ] = None,
+) -> None:
+    """Check every dataset spec with the loader the API uses at start.
+
+    Prints one line per spec, or every problem found, each with its file and
+    path, and then exits 1. A spec this accepts is one the API accepts.
+    """
+    try:
+        catalogue = read_dataset_specs(config_dir)
+    except EnergyError as error:
+        raise _fail(error) from error
+    for spec in catalogue:
+        modes = ", ".join(mode.value for mode in spec.entry_modes)
+        typer.echo(
+            f"  {spec.key:<24} {spec.kind.value:<9} {spec.origin.value:<10} "
+            f"{len(spec.columns):>3} columns  sheet {spec.bronze.sheet!r}  {modes}"
+        )
+    count = len(catalogue)
+    typer.echo(f"{count} dataset spec{'' if count == 1 else 's'}, all sound.")
+
+
 def build_app() -> typer.Typer:
     """Build the Typer application with every implemented command.
 
@@ -753,8 +786,9 @@ def build_app() -> typer.Typer:
         ``energy equs build-silver`` builds Silver from what was landed,
         ``energy equs refresh-gold`` brings Gold up to date,
         ``energy equs resumen-equ`` prints column H of a month,
-        ``energy equs close-month`` freezes a month and
-        ``energy reporting create-reader`` gives Power BI its read-only login.
+        ``energy equs close-month`` freezes a month,
+        ``energy reporting create-reader`` gives Power BI its read-only login and
+        ``energy datasets check`` checks the dataset specs.
     """
     app = typer.Typer(
         name="energy",
@@ -785,6 +819,13 @@ def build_app() -> typer.Typer:
     )
     reporting.command("create-reader")(reporting_create_reader)
     app.add_typer(reporting, name="reporting")
+    datasets = typer.Typer(
+        help="The dataset specs of config/datasets: what the app expects of each "
+        "kind of data people load.",
+        no_args_is_help=True,
+    )
+    datasets.command("check")(datasets_check)
+    app.add_typer(datasets, name="datasets")
     return app
 
 

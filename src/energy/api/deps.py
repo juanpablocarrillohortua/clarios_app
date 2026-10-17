@@ -12,9 +12,10 @@ may import ``energy.adapters`` (ADR 0005, enforced by
 ``tests/unit/test_architecture.py``). It builds and hands over, and holds no
 rule of its own: what a role may do is decided in :mod:`energy.api.security`.
 
-Wired today: settings, database sessions, the request id, and the signed-in
-caller. Repository and service providers arrive with the endpoints that need
-them.
+Wired today: settings, database sessions, the request id, the signed-in
+caller, the dataset specs (read once, when the app is built) and the writer of
+their templates. Repository and service providers arrive with the endpoints
+that need them.
 """
 
 from __future__ import annotations
@@ -27,12 +28,16 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from energy.adapters.entra_token_verifier import EntraTokenVerifier
+from energy.adapters.xlsx_dataset_template import XlsxDatasetTemplateWriter
+from energy.adapters.yaml_dataset_specs import load_dataset_specs
 from energy.api import security
 from energy.api.security import Permission, Principal
 from energy.core.constants import ENTRA_API_SCOPE_NAME
 from energy.core.settings import Settings, get_settings
 from energy.db.session import get_sessionmaker
+from energy.domain.dataset_spec import DatasetCatalogue
 from energy.domain.exceptions import AuthenticationError, SignInNotConfiguredError
+from energy.ports.dataset_template import DatasetTemplateWriter
 from energy.ports.token_verifier import TokenVerifier
 
 if TYPE_CHECKING:
@@ -198,6 +203,46 @@ def get_principal(
     return principal
 
 
+def load_dataset_catalogue(settings: Settings) -> DatasetCatalogue:
+    """Read and check every dataset spec of ``<CONFIG_DIR>/datasets``.
+
+    Called once, by :func:`energy.api.main.create_app`, so a malformed spec
+    stops the API before it serves anything.
+
+    Args:
+        settings: the configuration, which names ``CONFIG_DIR``.
+
+    Returns:
+        The :class:`~energy.domain.dataset_spec.DatasetCatalogue`.
+
+    Raises:
+        DatasetSpecError: listing every problem of every spec.
+    """
+    return load_dataset_specs(settings.data.config_dir)
+
+
+def get_dataset_catalogue(request: Request) -> DatasetCatalogue:
+    """Return the dataset specs the app was built with.
+
+    Args:
+        request: the current request, whose app holds them.
+
+    Returns:
+        The :class:`~energy.domain.dataset_spec.DatasetCatalogue`.
+    """
+    catalogue: DatasetCatalogue = request.app.state.dataset_catalogue
+    return catalogue
+
+
+def get_template_writer() -> DatasetTemplateWriter:
+    """Return the writer of dataset templates.
+
+    Returns:
+        The ``.xlsx`` writer, as the port the routers depend on.
+    """
+    return XlsxDatasetTemplateWriter()
+
+
 # -----------------------------------------------------------------------------
 # Annotated aliases - route handlers depend on these, never on the functions.
 # -----------------------------------------------------------------------------
@@ -206,6 +251,8 @@ SessionDep = Annotated["Session", Depends(get_db_session)]
 RequestIdDep = Annotated[str, Depends(get_request_id)]
 APIKeyDep = Annotated[str, Depends(require_api_key)]
 PrincipalDep = Annotated[Principal, Depends(get_principal)]
+DatasetCatalogueDep = Annotated[DatasetCatalogue, Depends(get_dataset_catalogue)]
+TemplateWriterDep = Annotated[DatasetTemplateWriter, Depends(get_template_writer)]
 
 
 def requires(permission: Permission) -> Callable[[Principal], Principal]:
@@ -234,15 +281,20 @@ def requires(permission: Permission) -> Callable[[Principal], Principal]:
 
 __all__ = [
     "APIKeyDep",
+    "DatasetCatalogueDep",
     "PrincipalDep",
     "RequestIdDep",
     "SessionDep",
     "SettingsDep",
+    "TemplateWriterDep",
     "get_app_settings",
+    "get_dataset_catalogue",
     "get_db_session",
     "get_principal",
     "get_request_id",
+    "get_template_writer",
     "get_token_verifier",
+    "load_dataset_catalogue",
     "require_api_key",
     "requires",
 ]
