@@ -69,6 +69,11 @@ SCADA_SHEET: Final = "Dataset 1"
 SCADA_TIMESTAMP: Final = "t_stamp"
 FA_METERS: Final = ("RECTIFICADOR 1", "RECTIFICADOR 2", "RECTIFICADOR 3")
 
+# Drivers that describe an area without adding to its EQ. The EQ data files them
+# under no area: the formed batteries, by type, are F&A's (HFM calls their sum
+# 15BATPRD). LEADPROD is RC's lead and stays out of the cross.
+INFORMATIVE_DRIVERS: Final = {FA_AREA: ("FORM_PRD_SLI", "FORM_PRD_TRUCK")}
+
 # The monthly workbook: each area's total row, named as the EQ data names the area.
 ENERGY_BOOK: Final = "Base_de_datos.xlsx"
 BOOK_SHEETS: Final = (
@@ -168,7 +173,7 @@ def build_cross(*, data_dir: Path | None = None, engine: Engine | None = None) -
     reader = PostgresGoldReader(
         engine or get_engine(), variation_threshold=get_settings().equs.variation_threshold
     )
-    return EnergyCross(energy_sources(data_dir), BatterySeries(reader, reader))
+    return EnergyCross(energy_sources(data_dir), BatterySeries(reader, reader), INFORMATIVE_DRIVERS)
 
 
 def energy_cross(
@@ -203,6 +208,7 @@ def energy_cross(
 
 __all__ = [
     "DEFAULT_DATA_DIRECTORY",
+    "INFORMATIVE_DRIVERS",
     "SCADA_ZONE",
     "build_cross",
     "energy_cross",

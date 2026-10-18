@@ -54,7 +54,7 @@ from energy.domain.equs_gold import (
     month_end,
     month_label,
 )
-from energy.domain.equs_series import FREQUENCIES, BatteryEquivalents, battery_rows
+from energy.domain.equs_series import FREQUENCIES, BatteryEquivalents, SeriesRow, battery_rows
 from energy.domain.exceptions import CloseRefusedError, ConfigurationError, InvalidPeriodError
 
 if TYPE_CHECKING:
@@ -476,6 +476,55 @@ class BatterySeries:
             rows=battery_rows(amounts, drivers, shown),
             reconciliation=reconciliation,
         )
+
+    def drivers_by_day(self, period: DateRange, cuentas: Sequence[str]) -> tuple[SeriesRow, ...]:
+        """Return what some drivers summed on each day, informative ones included.
+
+        :meth:`series` keeps the drivers that add to EQUS BATT; this reads the
+        same daily rows for any driver named, such as the formed batteries
+        (``FORM_PRD_SLI``), which count units but carry no EQ. A driver with
+        nothing on a day has no row that day.
+
+        Args:
+            period: the days, both ends included.
+            cuentas: the drivers, by code.
+
+        Returns:
+            One row per driver and day that has an amount, by day then code.
+
+        Raises:
+            InvalidPeriodError: if a month of the range has no version, or a
+                code is not a driver of the versions in force.
+            ConfigurationError: if two versions are in force in one month.
+            RepositoryError: if the database fails.
+        """
+        versions = _versions_in_force(self._reader, period)
+        known = {
+            (driver.version, driver.cuenta_stats): driver
+            for driver in self._reader.drivers(
+                sorted({item.version for item in versions if item.version is not None})
+            )
+        }
+        wanted = set(cuentas)
+        unknown = sorted(wanted - {cuenta for _, cuenta in known})
+        if unknown:
+            raise InvalidPeriodError("not a driver of the versions in force", cuentas=unknown)
+        rows = [
+            SeriesRow(
+                item.day,
+                item.version,
+                driver.proceso,
+                driver.area_planta,
+                item.cuenta_stats,
+                item.cantidad,
+                driver.factor,
+                item.equs,
+            )
+            for item in self._daily.daily_amounts(period)
+            if item.cuenta_stats in wanted
+            and (driver := known.get((item.version, item.cuenta_stats))) is not None
+        ]
+        return tuple(sorted(rows, key=lambda row: (row.start, row.cuenta_stats)))
 
     @staticmethod
     def _shown(

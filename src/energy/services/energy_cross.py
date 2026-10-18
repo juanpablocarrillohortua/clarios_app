@@ -24,7 +24,10 @@ Responsibility:
 
     The EQ is always read by day and added up over the days of each row, so a
     month cut by the range gets the EQ of the days in the range, and the daily
-    EQ is checked against its months on the way.
+    EQ is checked against its months on the way. Each row also carries what
+    every driver of the area summed: those that add to its EQ, and the
+    informative drivers named for the area (formed batteries for F&A), which
+    count units but carry no EQ.
 
 Depends on:
     ``energy.ports``, ``energy.domain``.
@@ -34,12 +37,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from energy.domain.energy_cross import AreaCross, EnergyCrossSeries, cross_rows
+from energy.domain.energy_cross import AreaCross, DriverDay, EnergyCrossSeries, cross_rows
 from energy.domain.equs_series import FREQUENCIES, totals
 from energy.domain.exceptions import InvalidPeriodError
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from energy.domain.equs_gold import DateRange
     from energy.domain.equs_series import Frequency
@@ -53,15 +56,26 @@ class EnergyCross:
         sources: where the energy of each area comes from, in priority order;
             several sources may answer for one area.
         equivalents: where the EQ comes from.
+        informative_drivers: for each area, the drivers that describe it without
+            adding to its EQ (``F&A``: ``FORM_PRD_SLI``, ``FORM_PRD_TRUCK``).
+            The EQ data files them under no area, so the caller says which.
     """
 
-    def __init__(self, sources: Sequence[AreaEnergySource], equivalents: EquivalentsReader) -> None:
+    def __init__(
+        self,
+        sources: Sequence[AreaEnergySource],
+        equivalents: EquivalentsReader,
+        informative_drivers: Mapping[str, Sequence[str]] | None = None,
+    ) -> None:
         by_area: dict[str, list[AreaEnergySource]] = {}
         for source in sources:
             for area in source.areas:
                 by_area.setdefault(area, []).append(source)
         self._sources = by_area
         self._equivalents = equivalents
+        self._informative = {
+            area: tuple(names) for area, names in (informative_drivers or {}).items()
+        }
 
     @property
     def areas(self) -> tuple[str, ...]:
@@ -114,11 +128,38 @@ class EnergyCross:
                     monthly_only.append(area)
                     continue
             series = self._equivalents.series(period, frequency="day", areas=(area,))
+            drivers = [
+                DriverDay(
+                    row.start,
+                    row.proceso,
+                    row.cuenta_stats,
+                    True,
+                    row.cantidad,
+                    row.factor,
+                    row.equs,
+                )
+                for row in series.rows
+            ]
+            informative = self._informative.get(area, ())
+            if informative:
+                drivers += [
+                    DriverDay(
+                        row.start,
+                        row.proceso,
+                        row.cuenta_stats,
+                        False,
+                        row.cantidad,
+                        row.factor,
+                        row.equs,
+                    )
+                    for row in self._equivalents.drivers_by_day(period, informative)
+                ]
             rows, total, eq_without_energy = cross_rows(
                 energies,
                 {item.start: item for item in totals(series)},
                 series.procesos,
                 frequency,
+                drivers,
             )
             crosses.append(
                 AreaCross(

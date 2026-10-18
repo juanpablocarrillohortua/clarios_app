@@ -342,6 +342,23 @@ class TestCrossAgainstTheDatabase:
         assert series.monthly_only == ("OREC", "Ensamble")
         assert _cents(series.areas[0].total.kwh_per_eq) == Decimal("20.90")
 
+    def test_fa_days_carry_their_drivers_and_flag_the_frozen_ones(self, built: Built) -> None:
+        """The four F&A drivers on every day; those that add make the day's EQ."""
+        series = build_cross(data_dir=DATA_DIR, engine=built.engine).cross(RANGE, areas=[FA_AREA])
+
+        (area,) = series.areas
+        assert {item.cuenta_stats for item in area.rows[0].drivers} == {
+            "POS_ACT_MTL",
+            "COMP_DEC",
+            "FORM_PRD_SLI",
+            "FORM_PRD_TRUCK",
+        }
+        for row in (*area.rows, area.total):
+            assert sum(item.equs for item in row.drivers if item.suma_eq) == row.eq
+        assert tuple(row.start for row in area.rows if row.frozen) == FROZEN_DAYS
+        assert {row.energy_state for row in area.rows if not row.frozen} == {"ok"}
+        assert area.total.driver("FORM_PRD_SLI").cantidad > 0
+
     def test_a_frozen_day_keeps_its_eq_but_has_no_ratio(self, built: Built) -> None:
         series = build_cross(data_dir=DATA_DIR, engine=built.engine).cross(
             DateRange(FROZEN_DAYS[0], FROZEN_DAYS[-1])

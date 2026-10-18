@@ -326,3 +326,26 @@ def test_the_table_rounds_half_up_as_the_workbook_does() -> None:
     )
 
     assert describe_series(series)[3].split() == ["2026-07", "9,015.29", "9,015.29"]
+
+
+# -- Drivers by day ------------------------------------------------------------------
+def test_drivers_by_day_includes_the_informative_drivers() -> None:
+    """The formed batteries count units but carry no EQ; series() leaves them out."""
+    reader = FakeReader()
+
+    rows = BatterySeries(reader, reader).drivers_by_day(
+        DateRange.of_month(SEPTEMBER), ["INFO", "DE"]
+    )
+
+    assert [(row.start.day, row.cuenta_stats, row.proceso, row.cantidad) for row in rows] == [
+        (3, "DE", "DECORADO", D(6)),
+        (3, "INFO", "INFO", D(999)),
+    ]
+    assert rows[1].equs == 0
+
+
+def test_drivers_by_day_refuses_a_code_that_is_not_a_driver() -> None:
+    reader = FakeReader()
+
+    with pytest.raises(InvalidPeriodError, match="not a driver"):
+        BatterySeries(reader, reader).drivers_by_day(DateRange.of_month(SEPTEMBER), ["NOPE"])

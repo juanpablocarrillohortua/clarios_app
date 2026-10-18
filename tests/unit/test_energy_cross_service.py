@@ -154,6 +154,16 @@ class FakeEquivalents:
             ),
         )
 
+    def drivers_by_day(self, period: DateRange, cuentas: Sequence[str]) -> tuple[SeriesRow, ...]:
+        """Formed batteries: 3 truck and 7 SLI a day."""
+        self.calls.append({"period": period, "drivers": tuple(cuentas)})
+        units = {"FORM_PRD_SLI": 7, "FORM_PRD_TRUCK": 3}
+        return tuple(
+            SeriesRow(day, 1, "INFO", None, cuenta, Decimal(units[cuenta]), Decimal(0), Decimal(0))
+            for day in DAYS
+            for cuenta in cuentas
+        )
+
 
 # =============================================================================
 # The service
@@ -375,3 +385,33 @@ def test_two_exports_cannot_claim_one_area(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigurationError):
         ScadaCounterSource([workbook, replace(workbook, path=tmp_path / "b.xlsx")])
+
+
+def test_each_row_carries_its_drivers_and_the_informative_ones_named_for_the_area() -> None:
+    equivalents = FakeEquivalents()
+    cross = EnergyCross([FakeSource()], equivalents, {"F&A": ["FORM_PRD_SLI", "FORM_PRD_TRUCK"]})
+
+    (area,) = cross.cross(SEPTEMBER).areas
+
+    assert equivalents.calls[1] == {
+        "period": SEPTEMBER,
+        "drivers": ("FORM_PRD_SLI", "FORM_PRD_TRUCK"),
+    }
+    first = area.rows[0]
+    assert [item.cuenta_stats for item in first.drivers] == [
+        "POS_ACT_MTL",
+        "COMP_DEC",
+        "FORM_PRD_SLI",
+        "FORM_PRD_TRUCK",
+    ]
+    for row in (*area.rows, area.total):
+        assert sum(item.equs for item in row.drivers if item.suma_eq) == row.eq
+    assert area.total.driver("FORM_PRD_TRUCK").cantidad == Decimal(9)
+
+
+def test_an_area_without_informative_drivers_asks_for_none() -> None:
+    equivalents = FakeEquivalents()
+
+    EnergyCross([FakeSource("OREC")], equivalents, {"F&A": ["FORM_PRD_SLI"]}).cross(SEPTEMBER)
+
+    assert all("drivers" not in call for call in equivalents.calls)

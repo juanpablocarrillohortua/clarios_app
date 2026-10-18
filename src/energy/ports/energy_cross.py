@@ -16,8 +16,10 @@ Responsibility:
         the service does not change.
 
     :class:`EquivalentsReader`
-        Answers the equivalent batteries of the battery processes over a range.
-        :class:`energy.services.equs_gold.BatterySeries` satisfies it as it is.
+        Answers the equivalent batteries of the battery processes over a range,
+        and the daily amounts of any driver, the informative ones (formed
+        batteries, which carry no EQ) included.
+        :class:`energy.services.equs_gold.BatterySeries` satisfies it.
 
 Depends on:
     ``energy.domain``, standard library typing only.
@@ -32,7 +34,7 @@ if TYPE_CHECKING:
 
     from energy.domain.energy_cross import AreaEnergy
     from energy.domain.equs_gold import DateRange
-    from energy.domain.equs_series import BatteryEquivalents, Frequency
+    from energy.domain.equs_series import BatteryEquivalents, Frequency, SeriesRow
 
 
 @runtime_checkable
@@ -88,6 +90,22 @@ class EquivalentsReader(Protocol):
 
         Raises:
             InvalidPeriodError: if the range or a filter cannot be answered.
+            RepositoryError: if the store fails.
+        """
+        ...
+
+    def drivers_by_day(self, period: DateRange, cuentas: Sequence[str]) -> tuple[SeriesRow, ...]:
+        """Return what some drivers summed on each day, informative ones included.
+
+        Args:
+            period: the days, both ends included.
+            cuentas: the drivers, by code.
+
+        Returns:
+            One row per driver and day that has an amount.
+
+        Raises:
+            InvalidPeriodError: if a code is not a driver of the versions in force.
             RepositoryError: if the store fails.
         """
         ...

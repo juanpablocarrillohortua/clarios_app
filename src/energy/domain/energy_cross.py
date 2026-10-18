@@ -786,6 +786,53 @@ def meter_months(counters: CounterEnergy, period: DateRange) -> dict[str, tuple[
 # The cross
 # =============================================================================
 @dataclass(frozen=True, slots=True)
+class DriverDay:
+    """What one driver of an area summed on one day, as the EQ data answers it.
+
+    Attributes:
+        day: the accounting date.
+        proceso: the process of the driver (``INFO`` for an informative one).
+        cuenta_stats: the driver.
+        suma_eq: whether it adds to the area's EQ; informative drivers (formed
+            batteries) count units and carry no EQ.
+        cantidad: the quantity.
+        factor: the EQ of one unit.
+        equs: the equivalent batteries.
+    """
+
+    day: date
+    proceso: str
+    cuenta_stats: str
+    suma_eq: bool
+    cantidad: Decimal
+    factor: Decimal
+    equs: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class DriverTotal:
+    """What one driver summed over the days of a row.
+
+    Attributes:
+        proceso: the process of the driver.
+        cuenta_stats: the driver.
+        suma_eq: whether it adds to the area's EQ.
+        cantidad: the quantity; 0 when nothing was posted, which for a driver
+            posted by accounting date is a real 0.
+        equs: the equivalent batteries.
+        factor: the EQ of one unit; ``None`` when the row spans two versions
+            with different factors, or nothing was posted.
+    """
+
+    proceso: str
+    cuenta_stats: str
+    suma_eq: bool
+    cantidad: Decimal
+    equs: Decimal
+    factor: Decimal | None
+
+
+@dataclass(frozen=True, slots=True)
 class CrossRow:
     """The energy of an area against its EQ over one day, month or range.
 
@@ -803,6 +850,12 @@ class CrossRow:
         energy_source: the source the kWh comes from; several, joined with
             ``+``, for a total added up from rows of different sources;
             ``None`` without kWh.
+        drivers: what each driver of the area summed over the row's days, the
+            informative ones included, every driver on every row.
+        energy_state: the worst state of the daily source's meters over the
+            row's days (``ok``, ``frozen``, ``dip``, ``reset``, ``unread``,
+            ``outside``); ``None`` when the row's kWh come from a source
+            without days.
     """
 
     area: str
@@ -814,6 +867,24 @@ class CrossRow:
     eq: Decimal
     eq_by_process: dict[str, Decimal]
     energy_source: str | None = None
+    drivers: tuple[DriverTotal, ...] = ()
+    energy_state: DayState | None = None
+
+    @property
+    def frozen(self) -> bool:
+        """Whether a frozen counter touches the row's days."""
+        return self.energy_state == "frozen"
+
+    def driver(self, cuenta_stats: str) -> DriverTotal:
+        """Return one driver of the row.
+
+        Raises:
+            KeyError: if the area has no such driver.
+        """
+        for item in self.drivers:
+            if item.cuenta_stats == cuenta_stats:
+                return item
+        raise KeyError(cuenta_stats)
 
     @property
     def days(self) -> int:
@@ -905,11 +976,85 @@ class EnergyCrossSeries:
         return sum(area.eq_mismatches for area in self.areas)
 
 
+# The worst first: what decides a span's energy state when its days differ.
+_SPAN_SEVERITY: Final[tuple[DayState, ...]] = ("reset", "unread", "dip", "frozen", "outside")
+
+
+def _span_state(states: Iterable[DayState]) -> DayState:
+    seen = set(states)
+    return next((state for state in _SPAN_SEVERITY if state in seen), "ok")
+
+
+_DriverKey = tuple[str, str, bool]
+
+
+class _DriverBook:
+    """The daily amounts of an area's drivers, added up over any span of days."""
+
+    def __init__(self, drivers: Sequence[DriverDay], procesos: Sequence[str]) -> None:
+        # Those that add first, in report order, then the informative ones.
+        order = {name: position for position, name in enumerate(procesos)}
+        self._catalogue: list[_DriverKey] = sorted(
+            {(item.proceso, item.cuenta_stats, item.suma_eq) for item in drivers},
+            key=lambda key: (not key[2], order.get(key[0], len(order)), key[1]),
+        )
+        self._days: dict[date, list[DriverDay]] = {}
+        for item in drivers:
+            self._days.setdefault(item.day, []).append(item)
+
+    def totals(self, start: date, end: date) -> tuple[DriverTotal, ...]:
+        """Every driver over ``start .. end``, at 0 where nothing was posted."""
+        quantity = dict.fromkeys(self._catalogue, _ZERO)
+        equs = dict.fromkeys(self._catalogue, _ZERO)
+        factors: dict[_DriverKey, set[Decimal]] = {key: set() for key in self._catalogue}
+        day = start
+        while day <= end:
+            for item in self._days.get(day, ()):
+                key = (item.proceso, item.cuenta_stats, item.suma_eq)
+                quantity[key] += item.cantidad
+                equs[key] += item.equs
+                factors[key].add(item.factor)
+            day += timedelta(days=1)
+        return tuple(
+            DriverTotal(
+                key[0],
+                key[1],
+                key[2],
+                quantity[key],
+                equs[key],
+                next(iter(factors[key])) if len(factors[key]) == 1 else None,
+            )
+            for key in self._catalogue
+        )
+
+
+class _MeterStates:
+    """The state of the daily source's meters, over any span of days."""
+
+    def __init__(self, daily: AreaEnergy | None) -> None:
+        self._daily = daily
+        self._days: dict[date, list[DayState]] = {}
+        for meter_day in daily.meter_days if daily is not None else ():
+            self._days.setdefault(meter_day.day, []).append(meter_day.state)
+
+    def state(self, start: date, end: date, source: str | None) -> DayState | None:
+        """The worst state over ``start .. end``; ``None`` for kWh from another source."""
+        if self._daily is None or (source is not None and source != self._daily.source):
+            return None
+        states: list[DayState] = []
+        day = start
+        while day <= end:
+            states += self._days.get(day, ["outside"])
+            day += timedelta(days=1)
+        return _span_state(states)
+
+
 def cross_rows(
     sources: Sequence[AreaEnergy],
     eq_days: Mapping[date, PeriodTotal],
     procesos: Sequence[str],
     frequency: Frequency,
+    drivers: Sequence[DriverDay] = (),
 ) -> tuple[tuple[CrossRow, ...], CrossRow, Decimal]:
     """Pair the energy of an area with the EQ of the same days, source by priority.
 
@@ -927,6 +1072,9 @@ def cross_rows(
         eq_days: the EQ of the area's processes on each day of the range.
         procesos: those processes, in report order.
         frequency: ``day`` or ``month``.
+        drivers: what each driver of the area summed on each day, informative
+            ones included; every driver seen appears on every row, at 0 where
+            nothing was posted.
 
     Returns:
         The rows, the total of the range, and the EQ of the range that no row
@@ -942,6 +1090,9 @@ def cross_rows(
         raise DomainRuleError("a daily cross takes only sources with days")
     area = sources[0].area
 
+    book = _DriverBook(drivers, procesos)
+    meters = _MeterStates(next((source for source in sources if source.resolution == "day"), None))
+
     def eq_of(start: date, end: date) -> dict[str, Decimal]:
         by_process = dict.fromkeys(procesos, _ZERO)
         day = start
@@ -954,6 +1105,7 @@ def cross_rows(
         return by_process
 
     def row(span: EnergySpan, source: str | None, by_process: dict[str, Decimal]) -> CrossRow:
+        energy_source = source if span.kwh is not None else None
         return CrossRow(
             area=area,
             start=span.start,
@@ -963,7 +1115,9 @@ def cross_rows(
             measured_days=span.measured_days,
             eq=sum(by_process.values(), start=_ZERO),
             eq_by_process=by_process,
-            energy_source=source if span.kwh is not None else None,
+            energy_source=energy_source,
+            drivers=book.totals(span.start, span.end),
+            energy_state=meters.state(span.start, span.end, energy_source),
         )
 
     def chosen(spans: Sequence[EnergySpan | None]) -> tuple[EnergySpan, str | None]:
@@ -1013,6 +1167,12 @@ def cross_rows(
         eq=sum(by_process.values(), start=_ZERO),
         eq_by_process=by_process,
         energy_source=" + ".join(names) or None,
+        drivers=book.totals(period.start, period.end),
+        energy_state=_span_state(
+            item.energy_state for item in rows if item.energy_state is not None
+        )
+        if any(item.energy_state is not None for item in rows)
+        else None,
     )
     return tuple(rows), total, whole_eq - total.eq
 
@@ -1165,6 +1325,8 @@ __all__ = [
     "CounterEnergy",
     "CounterReading",
     "CrossRow",
+    "DriverDay",
+    "DriverTotal",
     "EnergyCrossSeries",
     "EnergySpan",
     "FrozenRun",

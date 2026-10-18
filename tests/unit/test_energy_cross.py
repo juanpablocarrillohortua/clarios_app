@@ -21,6 +21,7 @@ from energy.domain.energy_cross import (
     AreaCross,
     AreaEnergy,
     CounterReading,
+    DriverDay,
     EnergyCrossSeries,
     classify_counters,
     counter_area_energy,
@@ -527,3 +528,84 @@ def test_a_total_never_mixes_one_source_s_months_with_another_s_total() -> None:
 
     assert total.kwh == sum((row.kwh for row in rows if row.kwh is not None), start=Decimal(0))
     assert total.energy_source == "book.xlsx + scada.xlsx"
+
+
+# =============================================================================
+# Drivers and energy states
+# =============================================================================
+def _driver_day(day: date, cuenta: str, cantidad: int, *, factor: str = "0.5") -> DriverDay:
+    suma_eq = not cuenta.startswith("FORM_PRD")
+    rate = Decimal(factor) if suma_eq else Decimal(0)
+    proceso = {"POS": "FORMACION", "DEC": "DECORADO"}.get(cuenta[:3], "INFO")
+    return DriverDay(
+        day, proceso, cuenta, suma_eq, Decimal(cantidad), rate, Decimal(cantidad) * rate
+    )
+
+
+def test_every_row_carries_every_driver_at_zero_when_nothing_was_posted() -> None:
+    """Days with nothing posted keep every driver, those that add first."""
+    drivers = [
+        _driver_day(DAY2, "FORM_PRD_TRUCK", 5),
+        _driver_day(DAY2, "POS_ACT_MTL", 100),
+        _driver_day(DAY3, "COMP_DEC", 40),
+    ]
+    counters = classify_counters(METERS, _readings(*[_steady(72)] * 3), ZONE)
+    energy = counter_area_energy("F&A", "scada.xlsx", counters, DateRange(DAY2, DAY3))
+
+    rows, total, _ = cross_rows([energy], {}, ("FORMACION", "DECORADO"), "day", drivers)
+
+    assert [item.cuenta_stats for item in rows[0].drivers] == [
+        "POS_ACT_MTL",
+        "COMP_DEC",
+        "FORM_PRD_TRUCK",
+    ]
+    assert rows[0].driver("COMP_DEC").cantidad == 0
+    assert rows[0].driver("COMP_DEC").factor is None
+    assert rows[1].driver("POS_ACT_MTL").cantidad == 0
+    assert rows[0].driver("FORM_PRD_TRUCK").suma_eq is False
+    assert total.driver("POS_ACT_MTL").equs == Decimal(50)
+    assert total.driver("COMP_DEC").cantidad == Decimal(40)
+
+
+def test_a_row_spanning_two_factors_has_no_single_factor() -> None:
+    drivers = [
+        _driver_day(JULY, "POS_ACT_MTL", 10, factor="0.5"),
+        _driver_day(AUGUST, "POS_ACT_MTL", 10, factor="0.6"),
+    ]
+    book = _book({JULY: Decimal(1), AUGUST: Decimal(1), SEPTEMBER: Decimal(1)})
+
+    rows, total, _ = cross_rows([book], {}, ("FORMACION",), "month", drivers)
+
+    assert rows[0].driver("POS_ACT_MTL").factor == Decimal("0.5")
+    assert total.driver("POS_ACT_MTL").factor is None
+    assert total.driver("POS_ACT_MTL").equs == Decimal(11)
+
+
+def test_a_frozen_day_is_flagged_and_its_month_says_it_touches_one() -> None:
+    counters = classify_counters(METERS, _frozen_series(), ZONE)
+    energy = counter_area_energy("F&A", "scada.xlsx", counters, DateRange(DAY2, DAY3))
+
+    days, _, _ = cross_rows([energy], {}, ("FORMACION",), "day")
+    months, total, _ = cross_rows([energy], {}, ("FORMACION",), "month")
+
+    assert [(row.start, row.energy_state, row.frozen) for row in days] == [
+        (DAY2, "frozen", True),
+        (DAY3, "ok", False),
+    ]
+    assert months[0].frozen
+    assert months[0].kwh is not None
+    assert total.energy_state == "frozen"
+
+
+def test_a_row_from_a_source_without_days_has_no_energy_state() -> None:
+    """July is the book's: the SCADA meters' state says nothing about its kWh."""
+    scada = _counters_from(JULY)
+    book = _book({JULY: Decimal(1000), AUGUST: Decimal(2000)})
+
+    rows, _, _ = cross_rows([scada, book], _eq_days(), ("FORMACION",), "month")
+
+    assert [(row.energy_source, row.energy_state) for row in rows] == [
+        ("book.xlsx", None),
+        ("scada.xlsx", "ok"),
+        ("scada.xlsx", "ok"),
+    ]
