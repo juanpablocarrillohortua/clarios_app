@@ -5,14 +5,16 @@ Layer: pipelines
 Responsibility:
     The composition root of EQUS Gold. It wires the services of
     :mod:`energy.services.equs_gold` to the PostgreSQL adapter and the
-    settings, for the three things a person does with Gold:
+    settings, for the four things a person does with Gold:
 
     * :func:`refresh_gold` brings what the Gold views read up to date, after new
       workbooks were landed: optionally Silver first, then the two conversion
       tables and the statistics;
     * :func:`resumen_equ` reads column H of RESUMEN EQU for one month, live or
       as it was closed;
-    * :func:`close_month` freezes a month as its official close.
+    * :func:`close_month` freezes a month as its official close;
+    * :func:`battery_equivalents` reads the EQ of the battery processes day by
+      day or month by month.
 
     Like the Bronze load and the Silver build, these are plain functions rather
     than Prefect flows, so they run from a shell; a scheduled flow can wrap them
@@ -33,7 +35,7 @@ from energy.core.settings import get_settings
 from energy.db.session import get_engine
 from energy.domain.equs_gold import DateRange, column_h
 from energy.pipelines.flows.equs_report import build_report
-from energy.services.equs_gold import GoldRefresher, MonthCloser
+from energy.services.equs_gold import BatterySeries, GoldRefresher, MonthCloser
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -42,6 +44,7 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
 
     from energy.domain.equs_gold import CloseSummary, ColumnHRow, QualityCount, ReportSource
+    from energy.domain.equs_series import BatteryEquivalents, Frequency
     from energy.services.equs_gold import RefreshOutcome
 
 
@@ -164,4 +167,42 @@ def close_month(
     )
 
 
-__all__ = ["close_month", "latest_production_month", "refresh_gold", "resumen_equ"]
+def battery_equivalents(
+    period: DateRange,
+    *,
+    frequency: Frequency = "day",
+    procesos: Sequence[str] = (),
+    areas: Sequence[str] = (),
+    engine: Engine | None = None,
+) -> BatteryEquivalents:
+    """Read the EQ of the battery processes over a range, by day or by month.
+
+    Args:
+        period: the days, both ends included.
+        frequency: ``day`` or ``month``.
+        procesos: keep only these battery processes; all when empty.
+        areas: keep only the processes of these plant areas; all when empty.
+        engine: the database engine; the process-wide one when ``None``.
+
+    Returns:
+        The series; a daily one carries the check of its whole months against
+        ``gold.v_resumen_equ``.
+
+    Raises:
+        InvalidPeriodError: if the range or a filter cannot be answered.
+        ConfigurationError: if two versions are in force in one month.
+        RepositoryError: if the database fails.
+    """
+    reader = _reader(engine or get_engine())
+    return BatterySeries(reader, reader).series(
+        period, frequency=frequency, procesos=procesos, areas=areas
+    )
+
+
+__all__ = [
+    "battery_equivalents",
+    "close_month",
+    "latest_production_month",
+    "refresh_gold",
+    "resumen_equ",
+]

@@ -293,6 +293,11 @@ rule.
 
 - **`gold.v_equs_batt_mes`** adds up column H by process and gives **EQUS BATT**:
   rows 36 to 45 of RESUMEN EQU. Only the drivers that add to the total count.
+- **Day by day.** `gold.v_resumen_equ_diario` is column H for each day instead of
+  each month. A receipt or an invoice counts on its accounting date, and every
+  day uses the rules that apply to its month. The days of a month add up exactly
+  to the month: in September 2026 they give the same 215,590.33. `make daily
+  MONTH=2026-09` prints one line per day with the EQ of each process.
 - **EQUS POLY** (plastic injection, warehouse 1010) is a separate indicator, in
   `gold.inyeccion`. It is never added to EQUS BATT.
 - **The official close.** `make close MONTH=2026-09` copies a month of

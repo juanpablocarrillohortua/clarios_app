@@ -471,6 +471,7 @@ and does not block anyone reading meanwhile.
 | `make refresh` | `energy equs refresh-gold` | Bring `gold.v_resumen_equ` (column H) up to date |
 | `make refresh-all` | `energy equs load-all`, then `refresh-gold --with-silver` | The whole chain from the workbooks |
 | `make resumen MONTH=2026-09` | `energy equs resumen-equ --month 2026-09` | Column H of a month: each driver's quantity (D), factor (G) and EQ (H), then the totals and EQUS POLY. `FORMAT=json` or `csv`; `SOURCE=closed` reads the close |
+| `make daily MONTH=2026-09` | `energy equs daily --month 2026-09` | EQUS BATT day by day: the EQ of each battery process on each day, and a check that the days add up to the month. `START=`/`END=` for a range, `FREQUENCY=month`, `PROCESS="OREC ENSAMBLE"`, `AREA=F&A`, `FORMAT=json` or `csv` |
 | `make close MONTH=2026-09` | `energy equs close-month 2026-09` | Freeze the month as the official close, after the data-quality checks. `ACCEPT_WARNINGS=1` closes despite a blocking check and records it; `RECLOSE=1` replaces an earlier close, keeping it in the history |
 | `make report START=2026-09-01 END=2026-09-30` | `equs-report --start … --end …` | EQ of any range of days as JSON laid out like RESUMEN EQU. `OUTPUT=file.json` writes it to a file |
 | `make help` | — | Every target with its description |

@@ -650,6 +650,7 @@ flowchart TD
         PR["v_reporte_qad_regla, v_unit_ship_regla<br/>each row paired with the rules it matches"]
         CC["v_cantidad_cuenta<br/>column D"]
         RE["v_resumen_equ<br/>column H"]
+        RD["v_resumen_equ_diario<br/>column H, day by day"]
         BM["v_equs_batt_mes<br/>rows 36 to 45"]
         IN["inyeccion<br/>EQUS POLY"]
         DQ["dq_* views<br/>six checks"]
@@ -663,6 +664,7 @@ flowchart TD
     US --> PR
     RU --> PR
     PR --> CC --> RE --> BM
+    PR --> RD
     VR --> IN
     PR --> FN
     VR --> DQ
@@ -673,6 +675,7 @@ flowchart TD
 |---|---|---|
 | `v_reporte_qad` | Each production receipt with its kg of paste, decoration pieces and plastic EQ | Sheet REPORTE QAD and its columns AY, AZ, BE, BF, BG |
 | `v_resumen_equ` | Quantity, factor and EQ of each driver and month | **Column H of RESUMEN EQU** |
+| `v_resumen_equ_diario` | The same, for each day (the accounting date), with the version in force in the day's month. The days of a month add up to `v_resumen_equ` exactly | New |
 | `v_equs_batt_mes` | EQ of each process and EQUS BATT, by month | Rows 36 to 45 |
 | `inyeccion` | EQUS POLY by month and category | Pivot INYECCION |
 | `lineas_de_pdcto` | Production by product line and Campo Equs | Pivot LINEAS DE PDCTO |
@@ -680,10 +683,14 @@ flowchart TD
 | `dq_*` | Six data-quality checks; three of them block a close | New |
 | `resumen_equ` | The official close of each month | "ESTA SE COPIA" |
 
-**Three ways to read it.**
+**Four ways to read it.**
 
 - **Column H of one month, now:** `make resumen MONTH=2026-09`. The same as
   `SELECT * FROM gold.v_resumen_equ WHERE mes = '2026-09-01'`.
+- **EQUS BATT day by day:** `make daily MONTH=2026-09` prints one line per day with
+  the EQ of OREC, ENSAMBLE, FORMACION, DECORADO and SHIPPING, and checks that the
+  days of each whole month add up to `v_resumen_equ`. `FREQUENCY=month` gives the
+  months instead; `PROCESS=` and `AREA=` (OREC, Ensamble, F&A) narrow it.
 - **Any range of days:** `make report START=2026-03-15 END=2026-04-10` writes JSON
   laid out like RESUMEN EQU, with warnings when the range cuts a month or spans two
   versions of the equation.
@@ -731,8 +738,12 @@ flowchart LR
     m3["0003<br/>reference + silver<br/>4 + 21 tables, 2 views,<br/>version 1 of the equation"]
     m4["0004<br/>gold<br/>3 + 6 tables, 15 views,<br/>8 functions"]
     m5["0005<br/>hypertables,<br/>compression, retention"]
-    m1 --> m2 --> m3 --> m4 --> m5
+    m6["0006<br/>gold<br/>v_resumen_equ_diario"]
+    m1 --> m2 --> m3 --> m4 --> m5 --> m6
 ```
+
+Revision 0006 adds the daily view only. Going down from it drops that view and
+nothing else; closed months stay.
 
 Revisions 0002, 0003 and 0004 were rewritten in place while the EQUS layers were
 built. A database migrated before a rewrite is brought up to date by going down to

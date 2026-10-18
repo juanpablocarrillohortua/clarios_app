@@ -40,11 +40,15 @@ from sqlalchemy import text
 from energy.adapters.calamine_workbook import CalamineWorkbookReader
 from energy.adapters.local_storage import LocalObjectStorage
 from energy.adapters.postgres_bronze_repo import PostgresBronzeLandingRepository
+from energy.adapters.postgres_equs_gold import PostgresGoldReader
+from energy.domain.equs_gold import DateRange
+from energy.domain.equs_series import totals
 from energy.domain.exceptions import CloseRefusedError, InvalidPeriodError
 from energy.pipelines.flows.equs_bronze_load import ROUTES, find_workbook, load_all
 from energy.pipelines.flows.equs_gold import close_month, refresh_gold
 from energy.pipelines.flows.equs_report import build_report, load_schema
 from energy.services.bronze_loader import BronzeLoader
+from energy.services.equs_gold import BatterySeries
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -581,6 +585,33 @@ class TestGoldOnTheWorkbooks:
         }
         assert computed == EQ_BY_MONTH
         assert round(sum(row.equs_batt for row in rows)) == 2_310_724
+
+    def test_the_days_of_the_fiscal_year_add_up_to_its_months(self, connection: Connection) -> None:
+        """Revision 0006: every driver of every FY26 month, digit for digit."""
+        reconciled = PostgresGoldReader(connection).daily_reconciliation(
+            DateRange(date(2025, 10, 1), date(2026, 9, 30))
+        )
+        assert len({item.month for item in reconciled}) == 12
+        assert [(item.month, item.cuenta_stats) for item in reconciled if not item.equal] == []
+
+    def test_september_2026_day_by_day(self, connection: Connection) -> None:
+        """The days of September add up to section 9.1 by process, to the cent."""
+        reader = PostgresGoldReader(connection)
+        series = BatterySeries(reader, reader).series(DateRange.of_month(SEPTEMBER))
+        days = totals(series)
+
+        assert len(days) == 30
+        by_process = {
+            name: _cents(sum((day.by_process[name] for day in days), start=Decimal(0)))
+            for name in series.procesos
+        }
+        assert by_process == {name: SEPTEMBER_EQ[name] for name in series.procesos}
+        assert (
+            _cents(sum((day.total for day in days), start=Decimal(0)))
+            == (SEPTEMBER_EQ["EQUS BATT"])
+        )
+        assert series.mismatches == ()
+        assert len(series.reconciliation) == 13
 
     # -- Test 4: column H of the workbook ---------------------------------------
 

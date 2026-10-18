@@ -3,7 +3,7 @@
 Layer: services
 
 Responsibility:
-    Owns the three use cases of EQUS Gold. The calculation itself is done by
+    Owns the four use cases of EQUS Gold. The calculation itself is done by
     the store behind :class:`~energy.ports.equs_gold.GoldReader`; what belongs
     here is the order of the steps and the decisions between them.
 
@@ -22,6 +22,12 @@ Responsibility:
         frozen close, and refuses the questions that have no honest answer: a
         month no version of the equation covers, or the frozen close of a month
         that was not closed whole.
+
+    :class:`BatterySeries`
+        Gathers the EQ of the battery processes (the drivers that add to EQUS
+        BATT) day by day or month by month, optionally for some processes or
+        plant areas, and checks that the days of each whole month add up to the
+        month. It refuses the same ranges the report does.
 
 Depends on:
     ``energy.ports``, ``energy.domain``, ``energy.core``.
@@ -45,22 +51,54 @@ from energy.domain.equs_gold import (
     RefreshStep,
     ReportData,
     VersionMonth,
+    month_end,
     month_label,
 )
+from energy.domain.equs_series import FREQUENCIES, BatteryEquivalents, SeriesRow, battery_rows
 from energy.domain.exceptions import CloseRefusedError, ConfigurationError, InvalidPeriodError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from datetime import date, datetime
 
-    from energy.domain.equs_gold import DriverAmount, QualityCount, ReportSource
+    from energy.domain.equs_gold import Driver, DriverAmount, QualityCount, ReportSource
+    from energy.domain.equs_series import Frequency, ReconciledAmount
     from energy.domain.equs_silver import SilverBuildReport
-    from energy.ports.equs_gold import GoldMaintenance, GoldReader
+    from energy.ports.equs_gold import DailyGoldReader, GoldMaintenance, GoldReader
     from energy.ports.equs_silver import SilverBuildRepository
 
 logger = get_logger(__name__)
 
 _ZERO = Decimal(0)
+
+
+def _versions_in_force(reader: GoldReader, period: DateRange) -> tuple[VersionMonth, ...]:
+    """Return the version in force in each month of a range, refusing a gap or an overlap.
+
+    Raises:
+        InvalidPeriodError: if no version covers a month of the range.
+        ConfigurationError: if two versions are in force in one month.
+    """
+    versions = reader.versions(period)
+    uncovered = [month_label(item.month) for item in versions if item.version is None]
+    if uncovered:
+        raise InvalidPeriodError(
+            "no version of the equation covers part of the range; the first version "
+            "starts later, or a gap was left between versions",
+            months=uncovered,
+        )
+    overlapping = sorted(
+        month_label(month)
+        for month, count in Counter(item.month for item in versions).items()
+        if count > 1
+    )
+    if overlapping:
+        raise ConfigurationError(
+            "two versions of the equation are in force in the same month; fix their "
+            "validity in silver.equs_version",
+            months=overlapping,
+        )
+    return versions
 
 
 @dataclass(frozen=True, slots=True)
@@ -305,26 +343,7 @@ class RangeReporter:
         )
 
     def _live_versions(self, period: DateRange) -> tuple[VersionMonth, ...]:
-        versions = self._reader.versions(period)
-        uncovered = [month_label(item.month) for item in versions if item.version is None]
-        if uncovered:
-            raise InvalidPeriodError(
-                "no version of the equation covers part of the range; the first version "
-                "starts later, or a gap was left between versions",
-                months=uncovered,
-            )
-        overlapping = sorted(
-            month_label(month)
-            for month, count in Counter(item.month for item in versions).items()
-            if count > 1
-        )
-        if overlapping:
-            raise ConfigurationError(
-                "two versions of the equation are in force in the same month; fix their "
-                "validity in silver.equs_version",
-                months=overlapping,
-            )
-        return versions
+        return _versions_in_force(self._reader, period)
 
     def _closed_amounts(self, period: DateRange) -> tuple[DriverAmount, ...]:
         closed = set(self._reader.closed_months(period))
@@ -366,4 +385,185 @@ class RangeReporter:
         return tuple(differences)
 
 
-__all__ = ["GoldRefresher", "MonthCloser", "RangeReporter", "RefreshOutcome"]
+class BatterySeries:
+    """The equivalent batteries of the battery processes, by day or by month.
+
+    Args:
+        reader: the store's read-only questions, by month.
+        daily: the same questions, by day.
+    """
+
+    def __init__(self, reader: GoldReader, daily: DailyGoldReader) -> None:
+        self._reader = reader
+        self._daily = daily
+
+    def series(
+        self,
+        period: DateRange,
+        *,
+        frequency: Frequency = "day",
+        procesos: Sequence[str] = (),
+        areas: Sequence[str] = (),
+    ) -> BatteryEquivalents:
+        """Gather the EQ of the drivers that add to EQUS BATT over a range.
+
+        A daily series also checks every whole month of the range: the days of
+        each driver must add up to ``gold.v_resumen_equ`` exactly. A difference
+        is reported with the series, not raised: it means a view changed.
+
+        Args:
+            period: the days, both ends included.
+            frequency: ``day`` or ``month``.
+            procesos: keep only these battery processes; all when empty. Case
+                does not matter.
+            areas: keep only the processes of these plant areas (OREC,
+                Ensamble, F&A); all when empty. SHIPPING has no area, so any
+                area leaves it out.
+
+        Returns:
+            The series, with its reconciliation when it is daily.
+
+        Raises:
+            InvalidPeriodError: if the frequency is unknown, a month of the
+                range has no version, a process or area is not one of the
+                battery processes, or the two filters leave nothing.
+            ConfigurationError: if two versions are in force in one month.
+            RepositoryError: if the database fails.
+        """
+        if frequency not in FREQUENCIES:
+            raise InvalidPeriodError("the frequency is day or month", frequency=frequency)
+        versions = _versions_in_force(self._reader, period)
+        battery = [
+            driver
+            for driver in self._reader.drivers(
+                sorted({item.version for item in versions if item.version is not None})
+            )
+            if driver.suma_eq
+        ]
+        shown = self._shown(battery, procesos, areas)
+        drivers = {
+            (driver.version, driver.cuenta_stats): (
+                driver.proceso,
+                driver.area_planta,
+                driver.factor,
+            )
+            for driver in battery
+        }
+
+        reconciliation: tuple[ReconciledAmount, ...] = ()
+        if frequency == "day":
+            amounts = [
+                (item.day, item.version, item.cuenta_stats, item.cantidad, item.equs)
+                for item in self._daily.daily_amounts(period)
+            ]
+            whole = [month for month in period.months if month not in period.partial_months]
+            if whole:
+                reconciliation = self._daily.daily_reconciliation(
+                    DateRange(whole[0], month_end(whole[-1]))
+                )
+        else:
+            amounts = [
+                (item.month, item.version, item.cuenta_stats, item.cantidad, item.equs)
+                for item in self._reader.amounts(period, closed=False)
+            ]
+
+        return BatteryEquivalents(
+            period=period,
+            frequency=frequency,
+            procesos=shown,
+            filtered=len(shown) < len({driver.proceso for driver in battery}),
+            versions=versions,
+            rows=battery_rows(amounts, drivers, shown),
+            reconciliation=reconciliation,
+        )
+
+    def drivers_by_day(self, period: DateRange, cuentas: Sequence[str]) -> tuple[SeriesRow, ...]:
+        """Return what some drivers summed on each day, informative ones included.
+
+        :meth:`series` keeps the drivers that add to EQUS BATT; this reads the
+        same daily rows for any driver named, such as the formed batteries
+        (``FORM_PRD_SLI``), which count units but carry no EQ. A driver with
+        nothing on a day has no row that day.
+
+        Args:
+            period: the days, both ends included.
+            cuentas: the drivers, by code.
+
+        Returns:
+            One row per driver and day that has an amount, by day then code.
+
+        Raises:
+            InvalidPeriodError: if a month of the range has no version, or a
+                code is not a driver of the versions in force.
+            ConfigurationError: if two versions are in force in one month.
+            RepositoryError: if the database fails.
+        """
+        versions = _versions_in_force(self._reader, period)
+        known = {
+            (driver.version, driver.cuenta_stats): driver
+            for driver in self._reader.drivers(
+                sorted({item.version for item in versions if item.version is not None})
+            )
+        }
+        wanted = set(cuentas)
+        unknown = sorted(wanted - {cuenta for _, cuenta in known})
+        if unknown:
+            raise InvalidPeriodError("not a driver of the versions in force", cuentas=unknown)
+        rows = [
+            SeriesRow(
+                item.day,
+                item.version,
+                driver.proceso,
+                driver.area_planta,
+                item.cuenta_stats,
+                item.cantidad,
+                driver.factor,
+                item.equs,
+            )
+            for item in self._daily.daily_amounts(period)
+            if item.cuenta_stats in wanted
+            and (driver := known.get((item.version, item.cuenta_stats))) is not None
+        ]
+        return tuple(sorted(rows, key=lambda row: (row.start, row.cuenta_stats)))
+
+    @staticmethod
+    def _shown(
+        battery: Sequence[Driver], procesos: Sequence[str], areas: Sequence[str]
+    ) -> tuple[str, ...]:
+        """Return the battery processes the filters keep, in the order of the report."""
+        ordered = sorted({(driver.orden, driver.proceso) for driver in battery})
+        known = {name.upper(): name for _, name in ordered}
+        area_of = {driver.proceso: driver.area_planta for driver in battery}
+        known_areas = {area.upper(): area for area in area_of.values() if area is not None}
+
+        unknown = [name for name in procesos if name.upper() not in known]
+        if unknown:
+            raise InvalidPeriodError(
+                "not a battery process", procesos=unknown, battery_processes=list(known.values())
+            )
+        unknown = [name for name in areas if name.upper() not in known_areas]
+        if unknown:
+            raise InvalidPeriodError(
+                "not the plant area of a battery process",
+                areas=unknown,
+                battery_areas=sorted(known_areas.values()),
+            )
+
+        wanted = {known[name.upper()] for name in procesos}
+        wanted_areas = {known_areas[name.upper()] for name in areas}
+        shown = tuple(
+            name
+            for _, name in ordered
+            if (not wanted or name in wanted)
+            and (not wanted_areas or area_of[name] in wanted_areas)
+        )
+        if not shown:
+            raise InvalidPeriodError(
+                "no battery process is both in the processes and in the areas asked for",
+                procesos=list(procesos),
+                areas=list(areas),
+            )
+        return shown
+
+
+__all__ = ["BatterySeries", "GoldRefresher", "MonthCloser", "RangeReporter", "RefreshOutcome"]
