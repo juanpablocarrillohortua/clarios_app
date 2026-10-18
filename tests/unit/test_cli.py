@@ -968,6 +968,9 @@ def test_cruce_exit_code_says_what_went_wrong(cruce: dict[str, Any], error: str,
     )
 
     assert result.exit_code == code, result.output
+    # Only an unreadable export says where the workbooks were looked for.
+    assert ("hint: the workbooks are read from --data-dir" in result.output) == (error == "export")
+    assert ("make cruce" in result.output) == (error == "export")
 
 
 def test_cruce_fails_when_the_daily_eq_does_not_add_up(cruce: dict[str, Any]) -> None:

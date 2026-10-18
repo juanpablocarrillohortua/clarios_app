@@ -69,6 +69,7 @@ from energy.domain.exceptions import (
     InvalidPeriodError,
     LockTimeoutError,
     RepositoryError,
+    SourceUnavailableError,
 )
 from energy.domain.landing import DEFAULT_PLANT_CODE, LANDING_SOURCES, parse_sheet_spec
 from energy.pipelines.flows.energy_cross import DEFAULT_DATA_DIRECTORY, energy_cross
@@ -868,6 +869,17 @@ def equs_cruce(
             areas=area or (),
             data_dir=data_dir,
         )
+    except SourceUnavailableError as error:
+        # Usually the folder is not where the command runs: the api container has
+        # no data/ of its own, only what a command mounts.
+        stop = _stop(error)
+        typer.secho(
+            f"hint: the workbooks are read from --data-dir, here {data_dir.resolve()}. "
+            "Inside Docker run `make cruce`, which mounts data/ read-only; with "
+            "`docker compose run`, mount the folder with -v and pass its path as --data-dir.",
+            err=True,
+        )
+        raise stop from error
     except EnergyError as error:
         raise _stop(error) from error
 
