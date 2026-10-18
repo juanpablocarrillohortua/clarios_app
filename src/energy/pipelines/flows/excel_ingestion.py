@@ -3,7 +3,9 @@
 Layer: pipelines
 
 Responsibility:
-    Triggered by :mod:`energy.api.routers.uploads` after a file has been archived.
+    Triggered once an energy workbook has been archived. The route that would
+    receive it is not built: the web app's ``/api/drafts`` takes EQUS data
+    only, and the ``/api/uploads`` placeholder was removed in increment 7.
     Parses the workbook, lands its rows in Bronze, validates them into Silver,
     and recomputes the Gold periods the file touched. Its distinguishing concern
     is *scope discovery*: the flow does not know in advance which periods the

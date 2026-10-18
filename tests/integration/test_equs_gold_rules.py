@@ -11,9 +11,9 @@ invoices. Every expected number below follows from those rows and the seeded
 version 1 of the equation. They need no file from the business, so they run
 everywhere.
 
-Three classes, each on a database of its own: the views and the report, which
-change nothing they keep; the monthly close, which commits; and the refresh
-with its lock.
+Four classes, each on a database of its own: the views and the report, which
+change nothing they keep; the monthly close, which commits; the refresh with
+its lock; and the reporting schema Power BI reads, with its read-only login.
 """
 
 from __future__ import annotations
@@ -30,9 +30,10 @@ from typing import TYPE_CHECKING, Any
 
 import jsonschema
 import pytest
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 
+from energy.core.settings import get_settings
 from energy.domain.exceptions import (
     CloseRefusedError,
     ConfigurationError,
@@ -41,6 +42,7 @@ from energy.domain.exceptions import (
 )
 from energy.pipelines.flows.equs_gold import close_month, refresh_gold, resumen_equ
 from energy.pipelines.flows.equs_report import build_report, load_schema
+from energy.pipelines.flows.reporting_access import create_reader
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -1027,6 +1029,264 @@ class TestRefreshAndLock:
         assert outcome.steps[0].seconds >= 0.5
 
 
+# -- The reporting schema Power BI reads ---------------------------------------------
+READER = "reporting_test_reader"
+READER_PASSWORD = "reporting-test-password-1"
+
+REPORTING_VIEWS: tuple[str, ...] = (
+    "aporte_cuenta",
+    "articulos",
+    "calidad_datos_mensual",
+    "cierres",
+    "cierres_calidad",
+    "cuentas",
+    "equs_batt_mensual",
+    "equs_cerrado",
+    "equs_cerrado_historial",
+    "equs_mensual",
+    "equs_poly_mensual",
+    "recibos_produccion",
+)
+
+
+def _reader_settings(monkeypatch: pytest.MonkeyPatch, user: str, password: str) -> None:
+    monkeypatch.setenv("REPORTING_DB_USER", user)
+    monkeypatch.setenv("REPORTING_DB_PASSWORD", password)
+    get_settings.cache_clear()
+
+
+def _drop_role(engine: Engine, role: str) -> None:
+    with engine.begin() as connection:
+        # The name is this module's own constant.
+        connection.execute(text(f"DROP ROLE IF EXISTS {role}"))
+
+
+@pytest.fixture
+def reader(seeded: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
+    """The reporting login, created through the flow, and an engine connected as it."""
+    _reader_settings(monkeypatch, READER, READER_PASSWORD)
+    create_reader(engine=seeded)
+    engine = create_engine(seeded.url.set(username=READER, password=READER_PASSWORD))
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        get_settings.cache_clear()
+        _drop_role(seeded, READER)
+
+
+class TestReportingSchema:
+    """The views Power BI reads restate Gold, and its login reads nothing else."""
+
+    def test_column_h_by_month_is_gold_with_zeros(self, connection: Connection) -> None:
+        """Every driver of the version in force, each with what v_resumen_equ gives or 0."""
+        rows = connection.execute(
+            text(
+                "SELECT cuenta_id, cuenta_stats, cantidad, equs, anio_fiscal "
+                "FROM reporting.equs_mensual WHERE mes = :m"
+            ),
+            {"m": SEPTEMBER},
+        ).all()
+        live = _month(connection, SEPTEMBER)
+        assert len(rows) == len(_factors(connection))
+        for row in rows:
+            assert row.cuenta_id == f"1:{row.cuenta_stats}"
+            assert (row.cantidad, row.equs) == live.get(row.cuenta_stats, (0, 0))
+            assert row.anio_fiscal == "FY26"
+        totals = connection.execute(
+            text(
+                "SELECT mensual.mes, mensual.equs_batt, gold.equs_batt "
+                "FROM reporting.equs_batt_mensual AS mensual "
+                "JOIN gold.v_equs_batt_mes AS gold USING (mes)"
+            )
+        ).all()
+        assert totals
+        assert all(row[1] == row[2] for row in totals)
+
+    def test_the_detail_adds_up_to_the_month(self, connection: Connection) -> None:
+        """Receipt and invoice contributions sum to equs_mensual, quantity and EQ."""
+        differences = connection.execute(
+            text(
+                "SELECT count(*) FROM reporting.equs_mensual AS mensual "
+                "LEFT JOIN (SELECT mes, cuenta_id, sum(valor) AS valor, sum(equs) AS equs "
+                "           FROM reporting.aporte_cuenta GROUP BY mes, cuenta_id) AS aporte "
+                "       USING (mes, cuenta_id) "
+                "WHERE coalesce(aporte.valor, 0) <> mensual.cantidad "
+                "   OR coalesce(aporte.equs, 0) <> mensual.equs"
+            )
+        ).scalar_one()
+        assert differences == 0
+        shipped = connection.execute(
+            text(
+                "SELECT documento, valor FROM reporting.aporte_cuenta "
+                "WHERE origen = 'factura' ORDER BY documento"
+            )
+        ).all()
+        # Only sales count, and the credit note subtracts.
+        assert [tuple(row) for row in shipped] == [
+            ("F1/O1/1", 30),
+            ("F2/O1/1", 5),
+            ("F3/O1/1", -2),
+        ]
+        receipts = connection.execute(
+            text("SELECT count(*) FROM reporting.recibos_produccion")
+        ).scalar_one()
+        assert receipts == len(RECEIPTS)
+
+    def test_poly_and_quality_by_month_match_the_range_functions(
+        self, connection: Connection
+    ) -> None:
+        """A whole month by view equals the month by Gold's range functions."""
+        poly = connection.execute(
+            text(
+                "SELECT cuenta, categoria, piezas, piezas_con_equ, factor_equ, equs "
+                "FROM reporting.equs_poly_mensual WHERE mes = :m ORDER BY cuenta, categoria"
+            ),
+            {"m": SEPTEMBER},
+        ).all()
+        expected_poly = connection.execute(
+            text(
+                "SELECT cuenta, categoria, piezas, piezas_con_equ, factor_equ, equs "
+                "FROM gold.inyeccion_rango_mes('2026-09-01', '2026-09-30') "
+                "ORDER BY cuenta, categoria"
+            )
+        ).all()
+        assert poly == expected_poly
+        quality = connection.execute(
+            text(
+                "SELECT vista, filas FROM reporting.calidad_datos_mensual "
+                "WHERE mes = :m ORDER BY vista"
+            ),
+            {"m": SEPTEMBER},
+        ).all()
+        expected_quality = connection.execute(
+            text(
+                "SELECT vista, filas FROM gold.calidad_datos_rango('2026-09-01', '2026-09-30') "
+                "ORDER BY vista"
+            )
+        ).all()
+        assert quality == expected_quality
+
+    def test_the_fiscal_year_closes_in_september(self, connection: Connection) -> None:
+        """October 2025 to September 2026 is FY26."""
+        labels = connection.execute(
+            text(
+                "SELECT reporting.anio_fiscal('2025-09-30'), reporting.anio_fiscal('2025-10-01'), "
+                "reporting.anio_fiscal('2026-09-30'), reporting.anio_fiscal('2026-10-01')"
+            )
+        ).one()
+        assert tuple(labels) == ("FY25", "FY26", "FY26", "FY27")
+
+    def test_the_reader_reads_the_reporting_views_and_nothing_else(self, reader: Engine) -> None:
+        """Every view answers; Bronze, Silver and Gold refuse; sessions are read-only."""
+        with reader.connect() as connection:
+            for view in REPORTING_VIEWS:
+                # The names are this module's own constants.
+                connection.execute(text(f"SELECT count(*) FROM {view}"))  # noqa: S608
+            settings = {
+                name: connection.execute(text(f"SHOW {name}")).scalar_one()
+                for name in (
+                    "default_transaction_read_only",
+                    "search_path",
+                    "equs.umbral_variacion",
+                )
+            }
+        assert settings == {
+            "default_transaction_read_only": "on",
+            "search_path": "reporting",
+            "equs.umbral_variacion": str(get_settings().equs.variation_threshold),
+        }
+        for statement in (
+            "SELECT count(*) FROM silver.reporte_qad",
+            "SELECT count(*) FROM gold.v_resumen_equ",
+            "SELECT count(*) FROM bronze.ingestion_runs",
+            "SELECT count(*) FROM staging.drafts",
+            "SELECT count(*) FROM gold.resumen_equ_rango('2026-09-01', '2026-09-30')",
+        ):
+            with reader.connect() as connection, pytest.raises(DBAPIError, match="permission"):
+                connection.execute(text(statement))
+        with reader.connect() as connection, pytest.raises(DBAPIError, match="read-only"):
+            connection.execute(text("CREATE TEMPORARY TABLE escrito (x integer)"))
+
+    @pytest.mark.usefixtures("reader")
+    def test_a_second_run_renews_the_password(
+        self, seeded: Engine, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same login, a new password; the views it reads stay the same."""
+        query = text("SELECT rolpassword FROM pg_authid WHERE rolname = :r")
+        with seeded.connect() as connection:
+            before = connection.execute(query, {"r": READER}).scalar_one()
+        _reader_settings(monkeypatch, READER, "another-password-2")
+        access = create_reader(engine=seeded)
+        with seeded.connect() as connection:
+            after = connection.execute(query, {"r": READER}).scalar_one()
+        assert not access.created
+        assert access.views == REPORTING_VIEWS
+        assert before != after
+        assert after.startswith("SCRAM-SHA-256$")
+
+    def test_a_role_that_may_do_more_than_read_is_refused(
+        self, seeded: Engine, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The application's own role is never turned into the reporting login."""
+        owner = seeded.url.username
+        assert owner is not None
+        _reader_settings(monkeypatch, owner, "irrelevant")
+        try:
+            with pytest.raises(ConfigurationError, match="more than read"):
+                create_reader(engine=seeded)
+        finally:
+            get_settings.cache_clear()
+
+    def test_a_missing_password_is_refused(
+        self, seeded: Engine, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without REPORTING_DB_PASSWORD nothing is created."""
+        _reader_settings(monkeypatch, READER, "")
+        try:
+            with pytest.raises(ConfigurationError, match="REPORTING_DB_PASSWORD"):
+                create_reader(engine=seeded)
+            with seeded.connect() as connection:
+                exists = connection.execute(
+                    text("SELECT count(*) FROM pg_roles WHERE rolname = :r"), {"r": READER}
+                ).scalar_one()
+            assert exists == 0
+        finally:
+            get_settings.cache_clear()
+
+    def test_the_closes_as_the_report_sees_them(self, seeded: Engine) -> None:
+        """A close and a reclose: the frozen rows, the counts each saw, the history.
+
+        Runs last in this class: the close commits.
+        """
+        close_month(SEPTEMBER, closed_by="first", lock_timeout=30, engine=seeded)
+        close_month(SEPTEMBER, closed_by="second", reclose=True, lock_timeout=30, engine=seeded)
+        with seeded.connect() as connection:
+            closes = connection.execute(
+                text(
+                    "SELECT closed_by, recierre, vigente FROM reporting.cierres ORDER BY cierre_id"
+                )
+            ).all()
+            counts = connection.execute(
+                text("SELECT count(*), count(DISTINCT vista) FROM reporting.cierres_calidad")
+            ).one()
+            frozen = connection.execute(
+                text("SELECT count(*), sum(equs) FROM reporting.equs_cerrado WHERE mes = :m"),
+                {"m": SEPTEMBER},
+            ).one()
+            gold_frozen = connection.execute(
+                text("SELECT count(*), sum(equs) FROM gold.resumen_equ WHERE mes = :m"),
+                {"m": SEPTEMBER},
+            ).one()
+            replaced = connection.execute(
+                text("SELECT count(*) FROM reporting.equs_cerrado_historial")
+            ).scalar_one()
+        assert [tuple(row) for row in closes] == [("first", False, False), ("second", True, True)]
+        assert tuple(counts) == (12, 6)
+        assert tuple(frozen) == tuple(gold_frozen)
+        assert replaced == frozen[0]
+
+
 # -- The make targets ---------------------------------------------------------------
 MAKE = shutil.which("make")
 needs_make = pytest.mark.skipif(MAKE is None, reason="make is not installed")
@@ -1049,7 +1309,16 @@ def test_make_help_lists_the_targets() -> None:
     """Each target with its one-line description."""
     listed = _make("help")
     assert listed.returncode == 0
-    for target in ("refresh", "refresh-all", "resumen", "close", "report", "equs-load"):
+    for target in (
+        "refresh",
+        "refresh-all",
+        "resumen",
+        "close",
+        "report",
+        "equs-load",
+        "powerbi",
+        "powerbi-down",
+    ):
         assert f"{target} " in listed.stdout
 
 

@@ -839,6 +839,40 @@ class TestGoldOnTheWorkbooks:
         rows = json.loads(finished.stdout)["filas"]
         _assert_reconciled(reconcile(workbook, _from_column_h(rows)))
 
+    # -- The reporting schema Power BI reads ------------------------------------
+
+    def test_the_reporting_views_give_the_documented_figures(self, connection: Connection) -> None:
+        """Every FY26 month of section 9.2, September's POLY, and every receipt."""
+        months = connection.execute(
+            text(
+                "SELECT mes, anio_fiscal, sum(equs) FILTER (WHERE suma_eq) AS equs_batt "
+                "FROM reporting.equs_mensual GROUP BY mes, anio_fiscal ORDER BY mes"
+            )
+        ).all()
+        assert {row.mes.strftime("%Y-%m"): str(_cents(row.equs_batt)) for row in months} == {
+            month: figures[-1] for month, figures in EQ_BY_MONTH.items()
+        }
+        assert {row.anio_fiscal for row in months} == {"FY26"}
+        poly = connection.execute(
+            text("SELECT sum(equs) FROM reporting.equs_poly_mensual WHERE mes = :m"),
+            {"m": SEPTEMBER},
+        ).scalar_one()
+        assert _cents(poly) == SEPTEMBER_EQ["EQUS POLY"]
+        receipts = connection.execute(
+            text("SELECT count(*) FROM reporting.recibos_produccion")
+        ).scalar_one()
+        assert receipts == 138_773
+        differences = connection.execute(
+            text(
+                "SELECT count(*) FROM reporting.equs_mensual AS mensual "
+                "LEFT JOIN (SELECT mes, cuenta_id, sum(equs) AS equs "
+                "           FROM reporting.aporte_cuenta GROUP BY mes, cuenta_id) AS aporte "
+                "       USING (mes, cuenta_id) "
+                "WHERE coalesce(aporte.equs, 0) <> mensual.equs"
+            )
+        ).scalar_one()
+        assert differences == 0
+
 
 @dataclass(frozen=True)
 class _Link:

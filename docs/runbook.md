@@ -55,6 +55,31 @@ id:
 docker compose logs api | grep '<request-id>'
 ```
 
+### Nobody can sign in, or the API answers 401 or 503
+
+A request the API refuses with 401 never says why in its answer. The reason is
+in the log:
+
+```bash
+docker compose logs api | grep "caller not authenticated"
+```
+
+A 503 with the code `auth_not_configured` means `ENTRA_TENANT_ID` or
+`ENTRA_CLIENT_ID` is empty in `.env`. One with `identity_provider_unavailable`
+means the API container cannot reach `login.microsoftonline.com`. The
+troubleshooting table of [Sign-in and roles](sign-in.md#troubleshooting) lists
+each reason with its fix.
+
+### The dashboard shows a message in place of the report
+
+The report is loaded by the browser from the Power BI Service, not by this
+stack, so the API's log says nothing about it. The message itself names the
+cause, and ends with Power BI's code and the ID of its request.
+[What the messages mean](powerbi.md#what-the-messages-mean) lists each one with
+its fix. The one this stack can cause is "report not configured":
+`POWERBI_WORKSPACE_ID` or `POWERBI_REPORT_ID` is empty in `.env`, or the API was
+not restarted after they changed.
+
 ---
 
 ## 2. Database down
@@ -156,11 +181,11 @@ GROUP BY quality;
 ### Diagnosis path
 
 ```bash
-# 1. Did the pipeline run?
-curl -fsS "localhost:${CADDY_HTTP_PORT:-8080}/api/runs?limit=10" | jq
+# 1. Did the pipeline run? (a token of an operator or above, in a shell variable)
+curl -fsS -H "Authorization: Bearer $TOKEN" "localhost:${CADDY_HTTP_PORT:-8080}/api/loads?limit=10" | jq
 
 # 2. If a run failed, what happened?
-curl -fsS "localhost:${CADDY_HTTP_PORT:-8080}/api/runs/<run_id>" | jq '.error, .tasks'
+curl -fsS -H "Authorization: Bearer $TOKEN" "localhost:${CADDY_HTTP_PORT:-8080}/api/loads/<run_id>" | jq '.state, .error'
 
 # 3. If it succeeded but wrote nothing, is the source delivering?
 curl -fsS "localhost:${CADDY_HTTP_PORT:-8080}/api/ingest/watermark/MTY-01/mty01_historian_main" | jq
@@ -205,14 +230,14 @@ Open the Prefect UI at `http://localhost:${CADDY_HTTP_PORT:-8080}/prefect/`.
 
 ### Retrying a failed run
 
-```bash
-curl -fsS -X POST "localhost:${CADDY_HTTP_PORT:-8080}/api/runs/<run_id>/retry" \
-  -H "X-API-Key: ${API_KEY}"
-```
+There is no retry endpoint: its placeholder was removed with increment 7 of the
+web app ([ADR 0010](adr/0010-a-draft-is-committed-once-in-one-transaction.md)).
 
-Only *failed* runs can be retried. Re-running a successful one is refused
-deliberately: the Gold replacement it performs is indistinguishable from a
-correction and would obscure the audit trail.
+- A failed load of the command line is run again with the same command. It
+  skips the sheets a completed run already landed from that file.
+- A failed commit of the web app leaves no run at all, and the person confirms
+  the draft again from its page.
+- A flow run is run again for its window, as in "Re-running a period" above.
 
 ---
 
@@ -333,8 +358,12 @@ SELECT drop_chunks('bronze.raw_readings', older_than => INTERVAL '1 year');
 A rising quarantine rate means a source changed format. The rows are kept
 deliberately — they are the evidence needed to fix the source.
 
-```bash
-curl -fsS "localhost:${CADDY_HTTP_PORT:-8080}/api/runs/<run_id>/quarantine" | jq
+```sql
+-- What did one run reject?
+SELECT rule, reason, raw_payload, quarantined_at
+FROM silver.quarantine
+WHERE run_id = '<run_id>'
+ORDER BY quarantined_at;
 ```
 
 ```sql
@@ -407,4 +436,5 @@ Include in any escalation:
 
 - [Architecture](architecture.md) — how the layers fit together
 - [Data dictionary](data_dictionary.md) — table and column reference
+- [Sign-in and roles](sign-in.md) — giving someone access, and sign-in problems
 - [README](../README.md) — setup and troubleshooting for developers

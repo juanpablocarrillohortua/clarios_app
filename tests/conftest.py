@@ -34,6 +34,9 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 TIMESCALE_IMAGE = "timescale/timescaledb-ha:pg16"
+# The release docker-compose.yml pins, pulled from MinIO's own registry: the
+# Docker Hub mirror refuses anonymous pulls.
+MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
 CONNECT_TIMEOUT_SECONDS = 5
 
 
@@ -185,9 +188,13 @@ def migrated_database(database_url: str) -> Iterator[str]:
     from alembic.config import Config  # noqa: PLC0415
 
     from energy.core.constants import ALL_SCHEMAS  # noqa: PLC0415
+    from energy.core.settings import get_settings  # noqa: PLC0415
 
     previous = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = database_url
+    # The migrations read the address from the cached settings. Something
+    # imported earlier may have filled that cache with the address of `.env`.
+    get_settings.cache_clear()
 
     from pathlib import Path  # noqa: PLC0415
 
@@ -213,6 +220,7 @@ def migrated_database(database_url: str) -> Iterator[str]:
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = previous
+        get_settings.cache_clear()
 
 
 BRONZE_REVISION = "0002"
@@ -235,9 +243,12 @@ def _engine_at(database_url: str, revision: str) -> Iterator[Engine]:
     from alembic.config import Config  # noqa: PLC0415
 
     from energy.core.constants import ALL_SCHEMAS  # noqa: PLC0415
+    from energy.core.settings import get_settings  # noqa: PLC0415
 
     previous = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = database_url
+    # As in `migrated_database`: the migrations read the cached settings.
+    get_settings.cache_clear()
 
     root = Path(__file__).resolve().parent.parent
     config = Config(toml_file=str(root / "pyproject.toml"))
@@ -257,6 +268,7 @@ def _engine_at(database_url: str, revision: str) -> Iterator[Engine]:
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = previous
+        get_settings.cache_clear()
 
 
 @pytest.fixture(scope="class")
@@ -301,6 +313,46 @@ def gold_engine(database_url: str) -> Iterator[Engine]:
 
 
 # =============================================================================
+# Object storage
+# =============================================================================
+@pytest.fixture(scope="session")
+def minio_settings() -> Iterator[Any]:
+    """Return the settings of a MinIO container started once per session, or skip.
+
+    Yields:
+        :class:`~energy.core.settings.MinioSettings` pointing at the container.
+    """
+    try:
+        from testcontainers.minio import MinioContainer  # noqa: PLC0415
+    except ImportError:  # pragma: no cover - testcontainers is a dev dependency
+        pytest.skip("testcontainers is not installed")
+    from energy.core.settings import MinioSettings  # noqa: PLC0415
+
+    container = None
+    try:
+        container = MinioContainer(image=MINIO_IMAGE)
+        container.start()
+    except Exception as exc:  # any Docker failure means "skip"
+        # A container that started but did not answer in time is still running.
+        if container is not None:
+            with contextlib.suppress(Exception):
+                container.stop()
+        pytest.skip(f"cannot start a MinIO test container: {exc}")
+
+    try:
+        config = container.get_config()
+        yield MinioSettings(
+            _env_file=None,
+            MINIO_ENDPOINT=config["endpoint"],
+            MINIO_ROOT_USER=config["access_key"],
+            MINIO_ROOT_PASSWORD=config["secret_key"],
+            MINIO_SECURE=False,
+        )
+    finally:
+        container.stop()
+
+
+# =============================================================================
 # API
 # =============================================================================
 @pytest.fixture
@@ -324,3 +376,79 @@ def client(app: FastAPI) -> Iterator[TestClient]:
 
     with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def token_verifier(app: FastAPI) -> Iterator[Any]:
+    """Replace the API's token verifier with one that knows only the tokens it is given.
+
+    No test may reach the identity provider, so the bound adapter is swapped for
+    a stand-in through the dependency the API reads it from. The stand-in has
+    two methods beside the port's ``verify``: ``issue(*roles)`` registers a
+    token for a caller with those role values and returns it, and
+    ``refuse_all()`` makes it answer as if the provider could not be reached.
+    """
+    from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+    from energy.api.deps import get_token_verifier  # noqa: PLC0415
+    from energy.domain.exceptions import (  # noqa: PLC0415
+        AuthenticationError,
+        IdentityProviderUnavailableError,
+    )
+    from energy.ports.token_verifier import VerifiedToken  # noqa: PLC0415
+
+    class FakeTokenVerifier:
+        """A token verifier that accepts exactly the tokens it issued."""
+
+        subject = "00000000-0000-4000-8000-00000000abcd"
+        tenant_id = "00000000-0000-4000-8000-0000000000aa"
+
+        def __init__(self) -> None:
+            self._issued: dict[str, VerifiedToken] = {}
+            self._unreachable = False
+
+        def issue(self, *roles: str, name: str | None = "Ada Lovelace") -> str:
+            token = f"test-token-{len(self._issued)}"
+            self._issued[token] = VerifiedToken(
+                subject=self.subject,
+                tenant_id=self.tenant_id,
+                name=name,
+                username="ada@example.test" if name else None,
+                roles=tuple(roles),
+                expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
+            )
+            return token
+
+        def refuse_all(self) -> None:
+            self._unreachable = True
+
+        def verify(self, token: str) -> VerifiedToken:
+            if self._unreachable:
+                raise IdentityProviderUnavailableError("the signing keys could not be read")
+            try:
+                return self._issued[token]
+            except KeyError:
+                raise AuthenticationError(
+                    "the access token was refused", reason="bad_signature"
+                ) from None
+
+    fake = FakeTokenVerifier()
+    app.dependency_overrides[get_token_verifier] = lambda: fake
+    try:
+        yield fake
+    finally:
+        app.dependency_overrides.pop(get_token_verifier, None)
+
+
+@pytest.fixture
+def auth_headers(token_verifier: Any) -> Any:
+    """Return a function that gives the request headers of a signed-in caller.
+
+    ``auth_headers("viewer")`` is a caller with that role; ``auth_headers()`` is
+    a caller who is signed in and has no role.
+    """
+
+    def _headers(*roles: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {token_verifier.issue(*roles)}"}
+
+    return _headers

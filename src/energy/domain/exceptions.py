@@ -13,7 +13,10 @@ it is safe to import from any layer including ``domain`` itself.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 class EnergyError(Exception):
@@ -69,6 +72,33 @@ class UnknownKPIError(ConfigurationError):
     """Raised when ``kpis.yaml`` does not define the requested KPI key."""
 
     code = "unknown_kpi"
+
+
+class DatasetSpecError(ConfigurationError):
+    """Raised when one or more dataset specs are malformed.
+
+    Every problem found is listed, not only the first, so one run shows them
+    all. Each names the file, the path inside it and what is wrong, for example
+    ``config/datasets/qad_facturas.yaml: columns[24].type: 'decimel' is not
+    one of text, integer, decimal, date``.
+
+    Args:
+        problems: one line per problem.
+    """
+
+    code = "invalid_dataset_spec"
+
+    def __init__(self, problems: Sequence[str]) -> None:
+        count = len(problems)
+        super().__init__(
+            f"dataset specs are invalid ({count} problem{'' if count == 1 else 's'})",
+            problems=list(problems),
+        )
+        self.problems: tuple[str, ...] = tuple(problems)
+
+    def __str__(self) -> str:
+        """Return the heading and every problem, one per line."""
+        return "\n  ".join((f"{self.message}:", *self.problems))
 
 
 # -----------------------------------------------------------------------------
@@ -191,6 +221,42 @@ class ContentHashMismatchError(IngestionError):
     code = "content_hash_mismatch"
 
 
+class EmptyFileError(UnsupportedFileFormatError):
+    """Raised when an uploaded file has no bytes at all."""
+
+    code = "empty_file"
+
+
+class FileTooLargeError(IngestionError):
+    """Raised when an upload is larger than the limit. The API answers 413."""
+
+    code = "file_too_large"
+
+
+class LengthRequiredError(IngestionError):
+    """Raised when an upload does not say its size first. The API answers 411."""
+
+    code = "length_required"
+
+
+class InvalidFilenameError(IngestionError):
+    """Raised when an upload names no usable file name."""
+
+    code = "invalid_filename"
+
+
+class IncompleteUploadError(IngestionError):
+    """Raised when an upload ends with fewer or more bytes than it announced."""
+
+    code = "incomplete_upload"
+
+
+class UploadAbortedError(IngestionError):
+    """Raised when the caller goes away before an upload has arrived whole."""
+
+    code = "client_disconnected"
+
+
 # -----------------------------------------------------------------------------
 # Persistence and repositories
 # -----------------------------------------------------------------------------
@@ -206,10 +272,172 @@ class EntityNotFoundError(RepositoryError):
     code = "entity_not_found"
 
 
+class UnknownDatasetError(EntityNotFoundError):
+    """Raised when no dataset spec has the requested key. The API answers 404."""
+
+    code = "unknown_dataset"
+
+
+class UnknownDraftError(EntityNotFoundError):
+    """Raised when the caller has no live draft of that ID.
+
+    A draft of someone else is answered the same way, so the answer does not
+    tell that it exists. The API answers 404.
+    """
+
+    code = "unknown_draft"
+
+
+class DraftBusyError(RepositoryError):
+    """Raised when a draft cannot be worked on now.
+
+    It is still arriving, it failed, or another validation of it is running.
+    The API answers 409.
+    """
+
+    code = "draft_busy"
+
+
+class UnknownLoadError(EntityNotFoundError):
+    """Raised when no load of the caller's plants has that run ID. The API answers 404."""
+
+    code = "unknown_load"
+
+
+class CommitCountMismatchError(RepositoryError):
+    """Raised when a commit lands a different number of rows than were staged.
+
+    The commit is rolled back. It means a bug, not a user's mistake: the API
+    answers 500.
+    """
+
+    code = "commit_count_mismatch"
+
+
 class DatabaseUnavailableError(RepositoryError):
     """Raised when the database cannot be reached or a required extension is missing."""
 
     code = "database_unavailable"
+
+
+# -----------------------------------------------------------------------------
+# Committing a draft (increment 7)
+# -----------------------------------------------------------------------------
+class CommitRefusedError(EnergyError):
+    """Base class for the reasons a draft is not committed.
+
+    Each subclass has an HTTP status of its own in the API. Nothing was
+    written when one is raised.
+    """
+
+    code = "commit_refused"
+
+
+class NotValidatedError(CommitRefusedError):
+    """Raised when a draft has not been validated, so it cannot be committed. 409."""
+
+    code = "not_validated"
+
+
+class DraftBlockedError(CommitRefusedError):
+    """Raised when a draft has errors, which block the load. 422."""
+
+    code = "draft_blocked"
+
+
+class WarningsNotAcceptedError(CommitRefusedError):
+    """Raised when a draft has warnings its owner did not accept. 422."""
+
+    code = "warnings_not_accepted"
+
+
+class NothingToLoadError(CommitRefusedError):
+    """Raised when a draft has no row to load. 422.
+
+    An empty snapshot would leave the previous version current, which is not
+    what anyone confirming it means.
+    """
+
+    code = "nothing_to_load"
+
+
+class ValidationChangedError(CommitRefusedError):
+    """Raised when a draft's validation is not the one its owner confirmed. 409."""
+
+    code = "validation_changed"
+
+
+class CurrentVersionChangedError(CommitRefusedError):
+    """Raised when another load became a catalogue's current version meanwhile. 409."""
+
+    code = "current_version_changed"
+
+
+class AlreadyLoadedError(CommitRefusedError):
+    """Raised when a completed run already landed the same file for the same dataset. 409.
+
+    ``details`` names that run (``run_id``).
+    """
+
+    code = "already_loaded"
+
+
+class DatasetBusyError(CommitRefusedError):
+    """Raised when another commit of the same dataset held its lock too long. 409."""
+
+    code = "dataset_busy"
+
+
+class OriginalMissingError(CommitRefusedError):
+    """Raised when a draft's archived original is gone, so Bronze would point at nothing. 409."""
+
+    code = "original_missing"
+
+
+# -----------------------------------------------------------------------------
+# Access
+# -----------------------------------------------------------------------------
+class AccessError(EnergyError):
+    """Base class for refusals to serve a caller."""
+
+    code = "access_error"
+
+
+class AuthenticationError(AccessError):
+    """Raised when a caller presents no credential, or one that cannot be trusted.
+
+    ``details`` carries a ``reason`` for the log (``expired``, ``wrong_audience``
+    and so on). It is never sent to the caller, who learns only that the
+    credential was refused.
+    """
+
+    code = "unauthenticated"
+
+
+class PermissionDeniedError(AccessError):
+    """Raised when a caller is known but may not do what was asked."""
+
+    code = "forbidden"
+
+
+class IdentityProviderUnavailableError(AccessError):
+    """Raised when a credential cannot be checked because the identity provider did not answer.
+
+    The caller's credential may well be valid: the failure is on this side, so
+    it is not an :class:`AuthenticationError`.
+    """
+
+    code = "identity_provider_unavailable"
+
+
+class SignInNotConfiguredError(AccessError):
+    """Raised when a credential arrives but this process was not told how to check one.
+
+    The identifiers of the identity provider's tenant and application are
+    missing from the configuration. As above, the failure is on this side.
+    """
+
+    code = "auth_not_configured"
 
 
 # -----------------------------------------------------------------------------
@@ -238,29 +466,56 @@ class LockTimeoutError(PipelineError):
 
 
 __all__ = [
+    "AccessError",
+    "AlreadyLoadedError",
+    "AuthenticationError",
     "CloseRefusedError",
+    "CommitCountMismatchError",
+    "CommitRefusedError",
     "ConfigurationError",
     "ContentHashMismatchError",
+    "CurrentVersionChangedError",
     "DataQualityError",
     "DatabaseUnavailableError",
+    "DatasetBusyError",
+    "DatasetSpecError",
     "DomainRuleError",
+    "DraftBlockedError",
+    "DraftBusyError",
     "DuplicateReadingError",
+    "EmptyFileError",
     "EnergyError",
     "EntityNotFoundError",
+    "FileTooLargeError",
+    "IdentityProviderUnavailableError",
+    "IncompleteUploadError",
     "IngestionError",
+    "InvalidFilenameError",
     "InvalidPeriodError",
     "InvalidTimeWindowError",
+    "LengthRequiredError",
     "LockTimeoutError",
     "NaiveDatetimeError",
     "NegativeEnergyError",
+    "NotValidatedError",
+    "NothingToLoadError",
+    "OriginalMissingError",
+    "PermissionDeniedError",
     "PipelineError",
     "QuarantinedRowsError",
     "RepositoryError",
     "SchemaValidationError",
+    "SignInNotConfiguredError",
     "SourceUnavailableError",
     "UnitMismatchError",
+    "UnknownDatasetError",
+    "UnknownDraftError",
     "UnknownKPIError",
+    "UnknownLoadError",
     "UnknownSourceError",
     "UnsupportedFileFormatError",
+    "UploadAbortedError",
+    "ValidationChangedError",
+    "WarningsNotAcceptedError",
     "WatermarkError",
 ]

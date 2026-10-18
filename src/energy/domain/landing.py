@@ -441,6 +441,63 @@ def _watched_column(keys: Sequence[str], span: DateSpan | None) -> int:
     return keys.index(span.key)
 
 
+class SheetRow(NamedTuple):
+    """One kept row of a sheet, before it is fingerprinted.
+
+    Attributes:
+        source_row: the Excel row number, 1-based.
+        keys: the sheet's keys, in column order. Every row of a sheet carries
+            the same tuple.
+        cells: the row's cells as the workbook reader returned them.
+        payload: key to cell text for every non-empty cell.
+    """
+
+    source_row: int
+    keys: tuple[str, ...]
+    cells: Sequence[CellValue]
+    payload: dict[str, str]
+
+
+def sheet_payloads(
+    rows: Iterable[Sequence[CellValue]],
+    first_row: int = 1,
+    first_column: int = 0,
+    header_row: int = 1,
+) -> Iterator[SheetRow]:
+    """Turn the rows of a sheet into payloads, keeping the cells beside them.
+
+    This is where the keeping rules live: rows above the header row are not
+    data and are skipped, as are rows that are completely empty. Everything
+    else is kept, including rows that repeat an earlier one and a header row
+    pasted again further down: deciding what those mean belongs to Silver.
+    :func:`landing_rows` fingerprints what this yields, and the checks of an
+    uploaded file read the same rows, so both see exactly what Bronze stores.
+
+    Args:
+        rows: the rows of the sheet's used range, top to bottom.
+        first_row: Excel row number of the first row in ``rows``.
+        first_column: 0-based index of the first column of every row.
+        header_row: 1-based header row; ``0`` when the sheet has none.
+
+    Yields:
+        One :class:`SheetRow` per kept row, carrying its real Excel row number.
+    """
+    keys: tuple[str, ...] | None = None
+    for source_row, row in enumerate(rows, start=first_row):
+        if source_row < header_row:
+            continue
+        if source_row == header_row:
+            keys = header_keys(row, first_column)
+            continue
+        if keys is None:
+            # No header row, or the header row lies above the used range.
+            keys = column_keys(len(row), first_column)
+        payload = row_payload(keys, row, first_column)
+        if not payload:
+            continue
+        yield SheetRow(source_row, keys, row, payload)
+
+
 def landing_rows(
     rows: Iterable[Sequence[CellValue]],
     first_row: int = 1,
@@ -450,10 +507,8 @@ def landing_rows(
 ) -> Iterator[LandingRow]:
     """Turn the rows of a sheet into landing rows.
 
-    Rows above the header row are not data and are skipped, as are rows that are
-    completely empty. Everything else is kept, including rows that repeat an
-    earlier one and a header row pasted again further down: deciding what those
-    mean belongs to Silver.
+    The rows kept are those of :func:`sheet_payloads`; each is fingerprinted
+    by the SHA-256 of its canonical JSON.
 
     Args:
         rows: the rows of the sheet's used range, top to bottom.
@@ -466,26 +521,35 @@ def landing_rows(
     Yields:
         One :class:`LandingRow` per kept row, carrying its real Excel row number.
     """
+    for kept in spanned(sheet_payloads(rows, first_row, first_column, header_row), span):
+        payload_json = canonical_json(kept.payload)
+        yield LandingRow(kept.source_row, sha256_hex(payload_json.encode("utf-8")), payload_json)
+
+
+def spanned(rows: Iterable[SheetRow], span: DateSpan | None) -> Iterator[SheetRow]:
+    """Pass kept rows on, showing a span the cell of its column in each.
+
+    The command-line loader and the web app's validation both read the period
+    of a load this way, so a file gives the same period whichever path it
+    takes.
+
+    Args:
+        rows: kept rows, as :func:`sheet_payloads` yields them.
+        span: the span to show the dated column to; ``None`` passes the rows on.
+
+    Yields:
+        The same rows, unchanged.
+    """
     keys: tuple[str, ...] | None = None
     watched = -1
-    for source_row, row in enumerate(rows, start=first_row):
-        if source_row < header_row:
-            continue
-        if source_row == header_row:
-            keys = header_keys(row, first_column)
-            watched = _watched_column(keys, span)
-            continue
-        if keys is None:
-            # No header row, or the header row lies above the used range.
-            keys = column_keys(len(row), first_column)
-            watched = _watched_column(keys, span)
-        payload = row_payload(keys, row, first_column)
-        if not payload:
-            continue
-        if span is not None and 0 <= watched < len(row):
-            span.observe(row[watched])
-        payload_json = canonical_json(payload)
-        yield LandingRow(source_row, sha256_hex(payload_json.encode("utf-8")), payload_json)
+    for kept in rows:
+        if span is not None:
+            if kept.keys is not keys:
+                keys = kept.keys
+                watched = _watched_column(keys, span)
+            if 0 <= watched < len(kept.cells):
+                span.observe(kept.cells[watched])
+        yield kept
 
 
 # -----------------------------------------------------------------------------
@@ -529,6 +593,7 @@ __all__ = [
     "DateSpan",
     "LandingRow",
     "LandingSource",
+    "SheetRow",
     "SheetSpec",
     "archive_object_key",
     "canonical_json",
@@ -542,4 +607,6 @@ __all__ = [
     "parse_sheet_spec",
     "row_payload",
     "sha256_hex",
+    "sheet_payloads",
+    "spanned",
 ]

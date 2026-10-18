@@ -19,7 +19,7 @@ what these tests pin down:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -177,13 +177,15 @@ def test_health_still_answers_when_the_database_is_unreachable(
 # Placeholder endpoints
 # =============================================================================
 @pytest.mark.unit
-def test_unimplemented_endpoints_return_501(client: TestClient) -> None:
+def test_unimplemented_endpoints_return_501(client: TestClient, auth_headers: Any) -> None:
     """A Phase 1 placeholder endpoint reports 501, not 500.
 
     A call to an unbuilt endpoint must read as "not built yet" rather than
-    "server bug", and the message names the phase that will build it.
+    "server bug", and the message names the phase that will build it. The
+    caller is signed in: without that the answer is 401, before the endpoint is
+    reached (``tests/unit/test_api_auth.py``).
     """
-    response = client.get("/kpis/summary")
+    response = client.get("/kpis/summary", headers=auth_headers("viewer"))
 
     assert response.status_code == 501
     payload = response.json()

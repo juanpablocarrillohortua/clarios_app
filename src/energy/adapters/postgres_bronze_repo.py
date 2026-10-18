@@ -54,11 +54,11 @@ LANDING_TABLES: Final[Mapping[str, str]] = {
 }
 
 # The one landing table that names its catalogue.
-_TABLE_WITH_DATASET_KEY: Final = "raw_manual_sheets"
+TABLE_WITH_DATASET_KEY: Final = "raw_manual_sheets"
 
 DEFAULT_BATCH_SIZE: Final = 5_000
 
-_LANDING_COLUMNS: Final = (
+LANDING_COLUMNS: Final = (
     "ingestion_run_id",
     "raw_file_id",
     "source_system",
@@ -73,7 +73,11 @@ _LANDING_COLUMNS: Final = (
 # Every f-string query in this module interpolates module constants only - the
 # schema and the landing table names - never a value that came from outside. All
 # values travel as bound parameters. Hence the S608 / B608 suppressions.
-_SELECT_FILE: Final = text(
+#
+# The web app's commit (postgres_load_committer.py) runs these same statements
+# inside its one transaction, so a file catalogued and a run opened and
+# completed are recorded the same way whichever path lands them.
+SELECT_FILE: Final = text(
     f"""
     SELECT raw_file_id, content_hash, bucket, object_key
     FROM {BRONZE_SCHEMA}.raw_files
@@ -81,7 +85,7 @@ _SELECT_FILE: Final = text(
     """  # noqa: S608  # nosec B608
 )
 
-_INSERT_FILE: Final = text(
+INSERT_FILE: Final = text(
     f"""
     INSERT INTO {BRONZE_SCHEMA}.raw_files
         (content_hash, bucket, object_key, filename, content_type, size_bytes,
@@ -94,7 +98,7 @@ _INSERT_FILE: Final = text(
     """  # noqa: S608  # nosec B608
 )
 
-_INSERT_RUN: Final = text(
+INSERT_RUN: Final = text(
     f"""
     INSERT INTO {BRONZE_SCHEMA}.ingestion_runs
         (flow_name, source_key, source_system, plant_code, state,
@@ -110,7 +114,7 @@ _INSERT_RUN: Final = text(
 
 # A bound of the period that the rows did not give keeps what the run was opened
 # with, which is the caller's own date or nothing.
-_COMPLETE_RUN: Final = text(
+COMPLETE_RUN: Final = text(
     f"""
     UPDATE {BRONZE_SCHEMA}.ingestion_runs
     SET state = 'completed', finished_at = now(), row_count = :row_count, error = '',
@@ -182,7 +186,7 @@ class PostgresBronzeLandingRepository:
             The catalogue entry, or ``None`` when the file was never registered.
         """
         with self._engine.connect() as connection:
-            row = connection.execute(_SELECT_FILE, {"content_hash": content_hash}).one_or_none()
+            row = connection.execute(SELECT_FILE, {"content_hash": content_hash}).one_or_none()
         return _as_raw_file(row) if row is not None else None
 
     def register_file(self, file: NewRawFile) -> RawFile:
@@ -211,12 +215,10 @@ class PostgresBronzeLandingRepository:
         }
         try:
             with self._engine.begin() as connection:
-                row = connection.execute(_INSERT_FILE, parameters).one_or_none()
+                row = connection.execute(INSERT_FILE, parameters).one_or_none()
                 if row is None:
                     # Lost a race, or the file was registered before: keep theirs.
-                    row = connection.execute(
-                        _SELECT_FILE, {"content_hash": file.content_hash}
-                    ).one()
+                    row = connection.execute(SELECT_FILE, {"content_hash": file.content_hash}).one()
         except SQLAlchemyError as exc:
             raise RepositoryError(
                 "could not register the file", filename=file.filename, reason=str(exc)
@@ -237,7 +239,7 @@ class PostgresBronzeLandingRepository:
             every table but the hand-maintained catalogues.
         """
         table = landing_table(source_key)
-        dataset_key = "landed.dataset_key" if table == _TABLE_WITH_DATASET_KEY else "NULL"
+        dataset_key = "landed.dataset_key" if table == TABLE_WITH_DATASET_KEY else "NULL"
         statement = text(
             f"""
             SELECT DISTINCT landed.sheet_name, {dataset_key} AS dataset_key
@@ -280,7 +282,7 @@ class PostgresBronzeLandingRepository:
         }
         try:
             with self._engine.begin() as connection:
-                run_id: UUID = connection.execute(_INSERT_RUN, parameters).scalar_one()
+                run_id: UUID = connection.execute(INSERT_RUN, parameters).scalar_one()
         except SQLAlchemyError as exc:
             raise RepositoryError(
                 "could not open the run", flow_name=run.flow_name, reason=str(exc)
@@ -322,7 +324,7 @@ class PostgresBronzeLandingRepository:
                         counts[sheet.sheet_name] = counts.get(sheet.sheet_name, 0) + landed
                 window_start, window_end = period() if period is not None else (None, None)
                 connection.execute(
-                    _COMPLETE_RUN,
+                    COMPLETE_RUN,
                     {
                         "run_id": target.run_id,
                         "row_count": sum(counts.values()),
@@ -351,7 +353,7 @@ class PostgresBronzeLandingRepository:
         sheet: SheetBatch,
     ) -> int:
         """Stream one sheet into its landing table and return the row count."""
-        columns: tuple[str, ...] = _LANDING_COLUMNS
+        columns: tuple[str, ...] = LANDING_COLUMNS
         shared: tuple[object, ...] = (
             target.run_id,
             target.raw_file_id,
@@ -360,7 +362,7 @@ class PostgresBronzeLandingRepository:
             sheet.sheet_name,
         )
         tail: tuple[object, ...] = ()
-        if table == _TABLE_WITH_DATASET_KEY:
+        if table == TABLE_WITH_DATASET_KEY:
             columns = (*columns, "dataset_key")
             tail = (sheet.dataset_key,)
 
@@ -403,8 +405,14 @@ class PostgresBronzeLandingRepository:
 
 
 __all__ = [
+    "COMPLETE_RUN",
     "DEFAULT_BATCH_SIZE",
+    "INSERT_FILE",
+    "INSERT_RUN",
+    "LANDING_COLUMNS",
     "LANDING_TABLES",
+    "SELECT_FILE",
+    "TABLE_WITH_DATASET_KEY",
     "PostgresBronzeLandingRepository",
     "landing_table",
 ]

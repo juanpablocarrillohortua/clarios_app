@@ -10,25 +10,85 @@ instance with overridden settings.
 This module may import ``domain``, ``services``, ``db`` and ``core``. It must
 never import ``pipelines`` or ``dashboards``: those are sibling entry points,
 not dependencies.
+
+Who may call what is decided here, where the routers are mounted, so the whole
+policy can be read in one place:
+
+- ``/health``, ``/ready``, ``/config`` and the API's own documentation are
+  public (:data:`PUBLIC_PATHS`);
+- ``/datasets`` needs ``loads:write``: dataset specs serve loading data;
+- ``/drafts`` needs ``loads:write`` too: files uploaded to be loaded;
+- ``/me`` needs a signed-in person;
+- every other router is mounted with the permission it needs;
+- ``/ingest`` is for devices and keeps its API key (:data:`DEVICE_PATH_PREFIX`).
+
+A router mounted without one of these fails
+``tests/unit/test_api_auth.py``, so a new endpoint cannot be left open by
+oversight.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, Final, cast
 
-from fastapi import FastAPI, Request, status
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from energy.api.deps import load_dataset_catalogue, requires
 from energy.api.middleware import RequestContextMiddleware
-from energy.api.routers import health, ingest, kpis, runs, uploads
+from energy.api.routers import (
+    client_config,
+    datasets,
+    drafts,
+    health,
+    ingest,
+    kpis,
+    loads,
+    me,
+)
+from energy.api.security import Permission
 from energy.core.logging import configure_from_settings, get_logger
 from energy.core.settings import Settings, get_settings
 from energy.db.session import dispose_engine
-from energy.domain.exceptions import EnergyError, EntityNotFoundError
+from energy.domain.exceptions import (
+    AlreadyLoadedError,
+    AuthenticationError,
+    CommitCountMismatchError,
+    CurrentVersionChangedError,
+    DatasetBusyError,
+    DatasetSpecError,
+    DraftBlockedError,
+    DraftBusyError,
+    EnergyError,
+    EntityNotFoundError,
+    FileTooLargeError,
+    IdentityProviderUnavailableError,
+    LengthRequiredError,
+    NothingToLoadError,
+    NotValidatedError,
+    OriginalMissingError,
+    PermissionDeniedError,
+    SignInNotConfiguredError,
+    SourceUnavailableError,
+    UnsupportedFileFormatError,
+    ValidationChangedError,
+    WarningsNotAcceptedError,
+)
+
+if TYPE_CHECKING:
+    from energy.domain.dataset_spec import DatasetCatalogue
 
 logger = get_logger(__name__)
+
+#: Paths anyone may call, signed in or not.
+PUBLIC_PATHS: Final = frozenset(
+    {"/health", "/ready", "/config", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"}
+)
+#: Paths for devices, which present an API key and not a person's token.
+DEVICE_PATH_PREFIX: Final = "/ingest"
 
 DESCRIPTION = """
 Industrial energy and gas consumption monitoring across multiple plants.
@@ -40,11 +100,36 @@ ingest endpoints. It never exposes raw Bronze rows directly.
 
 TAGS_METADATA = [
     {"name": "health", "description": "Liveness and readiness probes."},
+    {"name": "session", "description": "Sign-in settings, and who is signed in."},
     {"name": "kpis", "description": "Gold-layer KPI queries for dashboards and reports."},
-    {"name": "uploads", "description": "Excel and CSV file ingestion into Bronze."},
     {"name": "ingest", "description": "Sensor and historian push endpoint into Bronze."},
-    {"name": "runs", "description": "Pipeline run status and history."},
+    {"name": "datasets", "description": "The dataset specs, and the empty template of each."},
+    {"name": "drafts", "description": "Files uploaded to be loaded, and the issues found in them."},
+    {
+        "name": "loads",
+        "description": "What landed in Bronze: the history, and each load in detail.",
+    },
 ]
+
+#: Domain errors that have an HTTP status of their own. Anything else the
+#: domain raises on purpose is a 400.
+_STATUS_OF: Final[dict[type[EnergyError], int]] = {
+    DraftBusyError: status.HTTP_409_CONFLICT,
+    NotValidatedError: status.HTTP_409_CONFLICT,
+    ValidationChangedError: status.HTTP_409_CONFLICT,
+    CurrentVersionChangedError: status.HTTP_409_CONFLICT,
+    AlreadyLoadedError: status.HTTP_409_CONFLICT,
+    DatasetBusyError: status.HTTP_409_CONFLICT,
+    OriginalMissingError: status.HTTP_409_CONFLICT,
+    DraftBlockedError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    WarningsNotAcceptedError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    NothingToLoadError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    CommitCountMismatchError: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    LengthRequiredError: status.HTTP_411_LENGTH_REQUIRED,
+    FileTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
+    UnsupportedFileFormatError: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+    SourceUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+}
 
 
 @asynccontextmanager
@@ -76,6 +161,17 @@ def _register_exception_handlers(app: FastAPI) -> None:
     Phase 1 ships placeholder routers whose handlers raise it deliberately, so a
     call to an unbuilt endpoint must read as "not built yet", not "server bug".
 
+    A caller who cannot be let in gets 401 (no valid token), 403 (no
+    permission) or 503 (the token could not be checked, which is this side's
+    fault). The 401 says nothing about why: the reason is logged.
+
+    An upload refused gets 411 (no size), 413 (too large) or 415 (not an
+    ``.xlsx``); a draft busy elsewhere 409; object storage out of reach 503
+    (:data:`_STATUS_OF`). A commit refused gets 409 when the draft or the
+    data changed under it, 422 when the draft itself cannot land, and 500 when
+    the rows landed are not the rows staged, which is a bug. Every other
+    deliberate domain error is a 400.
+
     Args:
         app: the application to attach handlers to.
     """
@@ -95,10 +191,67 @@ def _register_exception_handlers(app: FastAPI) -> None:
     async def _not_found(_request: Request, exc: EntityNotFoundError) -> JSONResponse:
         return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content=exc.as_dict())
 
+    @app.exception_handler(AuthenticationError)
+    async def _unauthenticated(_request: Request, exc: AuthenticationError) -> JSONResponse:
+        # The caller learns only that it was refused. Why goes to the log: a
+        # detailed answer would tell an attacker which check to work on.
+        reason = str(exc.details.get("reason", "unknown"))
+        presented = reason != "missing"
+        # A request without a token is routine. A token that was refused is
+        # worth a warning, so it survives a quieter log level.
+        log = logger.warning if presented else logger.info
+        log("caller not authenticated", reason=reason)
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={
+                "code": exc.code,
+                "message": (
+                    "The access token was refused" if presented else "Sign in to call this endpoint"
+                ),
+                "details": {},
+            },
+            headers={"WWW-Authenticate": 'Bearer error="invalid_token"' if presented else "Bearer"},
+        )
+
+    @app.exception_handler(PermissionDeniedError)
+    async def _forbidden(_request: Request, exc: PermissionDeniedError) -> JSONResponse:
+        return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content=exc.as_dict())
+
+    @app.exception_handler(SignInNotConfiguredError)
+    @app.exception_handler(IdentityProviderUnavailableError)
+    async def _cannot_check_tokens(_request: Request, exc: EnergyError) -> JSONResponse:
+        logger.error("a token could not be checked", code=exc.code, detail=str(exc))
+        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=exc.as_dict())
+
+    async def _with_status(_request: Request, exc: Exception) -> JSONResponse:
+        # Registered for the classes of _STATUS_OF only, all domain errors.
+        error = cast("EnergyError", exc)
+        code = next(code for kind, code in _STATUS_OF.items() if isinstance(error, kind))
+        log = logger.error if code >= status.HTTP_500_INTERNAL_SERVER_ERROR else logger.warning
+        log("domain error surfaced to the API", code=error.code, detail=str(error))
+        return JSONResponse(status_code=code, content=error.as_dict())
+
+    for kind in _STATUS_OF:
+        app.add_exception_handler(kind, _with_status)
+
     @app.exception_handler(EnergyError)
     async def _domain_error(_request: Request, exc: EnergyError) -> JSONResponse:
         logger.warning("domain error surfaced to the API", code=exc.code, detail=str(exc))
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content=exc.as_dict())
+
+
+def _dataset_catalogue(settings: Settings) -> DatasetCatalogue:
+    """Read the dataset specs, logging every problem before refusing to go on.
+
+    Raises:
+        DatasetSpecError: if a spec is malformed. ``energy.api.main`` builds the
+            app when it is imported, so the server stops before it serves.
+    """
+    try:
+        return load_dataset_catalogue(settings)
+    except DatasetSpecError as exc:
+        logger.error("dataset specs rejected", problems=list(exc.problems))
+        raise
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -111,9 +264,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     Returns:
         A fully wired :class:`~fastapi.FastAPI` instance with logging configured,
         middleware installed, routers mounted, and exception handlers registered.
+
+    Raises:
+        DatasetSpecError: if a dataset spec of ``<CONFIG_DIR>/datasets`` is
+            malformed. The message lists every problem, with its file and path.
     """
     settings = settings or get_settings()
     configure_from_settings()
+    catalogue = _dataset_catalogue(settings)
 
     app = FastAPI(
         title="Clarios Energy API",
@@ -127,6 +285,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+    app.state.dataset_catalogue = catalogue
 
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
@@ -137,11 +296,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Public.
     app.include_router(health.router)
-    app.include_router(kpis.router)
-    app.include_router(uploads.router)
+    app.include_router(client_config.router)
+    # Any signed-in person: the handler itself asks for the caller.
+    app.include_router(me.router)
+    # People, by permission.
+    may_view = [Depends(requires(Permission.DASHBOARD_VIEW))]
+    may_load = [Depends(requires(Permission.LOADS_WRITE))]
+    app.include_router(kpis.router, dependencies=may_view)
+    app.include_router(datasets.router, dependencies=may_load)
+    app.include_router(drafts.router, dependencies=may_load)
+    app.include_router(loads.router, dependencies=may_load)
+    # Devices, by API key (Phase 3).
     app.include_router(ingest.router)
-    app.include_router(runs.router)
 
     _register_exception_handlers(app)
 
@@ -150,4 +318,4 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 app = create_app()
 
-__all__ = ["app", "create_app", "lifespan"]
+__all__ = ["DEVICE_PATH_PREFIX", "PUBLIC_PATHS", "app", "create_app", "lifespan"]

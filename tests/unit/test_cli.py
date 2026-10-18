@@ -681,3 +681,76 @@ def test_a_malformed_command_line_exits_1_not_2(
     with pytest.raises(SystemExit) as finished:
         getattr(cli, entry)()
     assert finished.value.code == code
+
+
+# =============================================================================
+# energy datasets check
+# =============================================================================
+def test_datasets_check_lists_every_sound_spec(repo_root: Path) -> None:
+    """The committed specs pass, one line each, read as the API reads them."""
+    result = runner.invoke(
+        cli.build_app(), ["datasets", "check", "--config-dir", str(repo_root / "config")]
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[0].split()[:4] == ["lineas_produccion", "snapshot", "catalogue", "10"]
+    assert lines[1].split()[:4] == ["qad_facturas", "movement", "export", "49"]
+    assert lines[-1] == "2 dataset specs, all sound."
+
+
+def test_datasets_check_names_each_problem_and_exits_1(tmp_path: Path) -> None:
+    """A malformed spec is named with its file and path, and the exit code says so."""
+    folder = tmp_path / "datasets"
+    folder.mkdir()
+    spec = folder / "broken.yaml"
+    spec.write_text("version: 2\n", encoding="utf-8")
+
+    result = runner.invoke(cli.build_app(), ["datasets", "check", "--config-dir", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "error: dataset specs are invalid" in result.output
+    assert f"{spec.as_posix()}: version: 2 is not a version this build reads" in result.output
+
+
+# =============================================================================
+# energy drafts purge
+# =============================================================================
+def test_drafts_purge_says_what_it_removed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The purge passes its options on and prints one line."""
+    from uuid import UUID  # noqa: PLC0415
+
+    from energy.services.draft_service import PurgeOutcome  # noqa: PLC0415
+
+    seen: dict[str, Any] = {}
+
+    def fake_purge(dry_run: bool = False, only: UUID | None = None) -> PurgeOutcome:
+        seen.update(dry_run=dry_run, only=only)
+        return PurgeOutcome(drafts=2, objects=1, incoming=0)
+
+    monkeypatch.setattr(cli, "purge_drafts", fake_purge)
+    draft_id = "0b7a2d0e-6f0f-4c59-9a3e-2f1d4c5b6a70"
+
+    result = runner.invoke(
+        cli.build_app(), ["drafts", "purge", "--dry-run", "--draft-id", draft_id]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == {"dry_run": True, "only": UUID(draft_id)}
+    assert result.output.strip() == (
+        "would remove 2 draft(s), 1 archived original(s) and 0 unfinished upload(s)"
+    )
+
+
+def test_drafts_purge_exits_1_on_a_domain_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failure is reported, not raised."""
+
+    def failing(dry_run: bool = False, only: object = None) -> None:
+        raise RepositoryError("could not remove drafts")
+
+    monkeypatch.setattr(cli, "purge_drafts", failing)
+
+    result = runner.invoke(cli.build_app(), ["drafts", "purge"])
+
+    assert result.exit_code == 1
+    assert "could not remove drafts" in result.output

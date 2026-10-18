@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Final
@@ -37,9 +38,13 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
     from datetime import timedelta
     from io import BufferedReader
+    from typing import BinaryIO
+
+    from energy.ports.object_storage import ByteSource
 
 _SIDECAR_SUFFIX: Final = ".metadata.json"
 _PARTIAL_SUFFIX: Final = ".part"
+_CHUNK_BYTES: Final = 1024 * 1024
 
 
 class LocalObjectStorage:
@@ -121,6 +126,12 @@ class LocalObjectStorage:
 
         partial = path.with_name(path.name + _PARTIAL_SUFFIX)
         partial.write_bytes(data)
+        self._write_sidecar(path, stored)
+        partial.replace(path)
+        return stored
+
+    def _write_sidecar(self, path: Path, stored: StoredObject) -> None:
+        """Write the metadata file of an object."""
         self._sidecar(path).write_text(
             json.dumps(
                 {
@@ -135,8 +146,151 @@ class LocalObjectStorage:
             ),
             encoding="utf-8",
         )
+
+    def put_stream(
+        self,
+        bucket: str,
+        key: str,
+        source: ByteSource,
+        content_type: str,
+        metadata: Mapping[str, str] | None = None,
+    ) -> StoredObject:
+        """Store a payload of unknown length, a megabyte at a time.
+
+        The bytes go to a temporary file renamed into place once complete; if
+        reading ``source`` raises, the temporary file is removed and the error
+        propagates.
+
+        Args:
+            bucket: target bucket.
+            key: object key.
+            source: where the bytes are read from, until it returns ``b""``.
+            content_type: MIME type of the payload.
+            metadata: user metadata to keep with the object.
+
+        Returns:
+            The :class:`~energy.ports.object_storage.StoredObject` written.
+
+        Raises:
+            FileExistsError: if the key is already present.
+        """
+        path = self._object_path(bucket, key)
+        if path.exists():
+            raise FileExistsError(f"object already exists: {bucket}/{key}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        partial = path.with_name(path.name + _PARTIAL_SUFFIX)
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with partial.open("wb") as target:
+                while chunk := source.read(_CHUNK_BYTES):
+                    digest.update(chunk)
+                    size += len(chunk)
+                    target.write(chunk)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
+
+        stored = StoredObject(
+            key=key,
+            size_bytes=size,
+            content_hash=digest.hexdigest(),
+            content_type=content_type,
+            stored_at=datetime.now(UTC),
+            metadata=dict(metadata or {}),
+        )
+        self._write_sidecar(path, stored)
         partial.replace(path)
         return stored
+
+    def copy(
+        self,
+        bucket: str,
+        source_key: str,
+        target_key: str,
+        metadata: Mapping[str, str] | None = None,
+    ) -> StoredObject:
+        """Copy an object inside a bucket, refusing to overwrite the target.
+
+        Args:
+            bucket: the bucket of both objects.
+            source_key: the object to copy.
+            target_key: the key of the copy.
+            metadata: the copy's user metadata, replacing the source's. Its
+                ``content-hash`` becomes the hash the copy is verified against.
+
+        Returns:
+            The copy's metadata.
+
+        Raises:
+            EntityNotFoundError: if the source does not exist.
+            FileExistsError: if the target already exists.
+        """
+        source = self.stat(bucket, source_key)
+        target = self._object_path(bucket, target_key)
+        if target.exists():
+            raise FileExistsError(f"object already exists: {bucket}/{target_key}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        replaced = dict(metadata or {})
+        stored = StoredObject(
+            key=target_key,
+            size_bytes=source.size_bytes,
+            content_hash=replaced.get("content-hash", source.content_hash),
+            content_type=source.content_type,
+            stored_at=datetime.now(UTC),
+            metadata=replaced,
+        )
+        partial = target.with_name(target.name + _PARTIAL_SUFFIX)
+        shutil.copyfile(self._object_path(bucket, source_key), partial)
+        self._write_sidecar(target, stored)
+        partial.replace(target)
+        return stored
+
+    def delete(self, bucket: str, key: str) -> None:
+        """Remove an object and its metadata; one that is not there is not an error.
+
+        Args:
+            bucket: source bucket.
+            key: object key.
+        """
+        path = self._object_path(bucket, key)
+        path.unlink(missing_ok=True)
+        self._sidecar(path).unlink(missing_ok=True)
+
+    def download_to(self, bucket: str, key: str, target: BinaryIO) -> StoredObject:
+        """Copy an object into a file a megabyte at a time, checking its hash.
+
+        Args:
+            bucket: source bucket.
+            key: object key.
+            target: an open binary file to write to.
+
+        Returns:
+            The object's metadata.
+
+        Raises:
+            EntityNotFoundError: if the key does not exist.
+            ContentHashMismatchError: if the bytes do not hash to the digest
+                recorded when the object was stored.
+        """
+        recorded = self.stat(bucket, key)
+        digest = hashlib.sha256()
+        with self._object_path(bucket, key).open("rb") as source:
+            while chunk := source.read(_CHUNK_BYTES):
+                digest.update(chunk)
+                target.write(chunk)
+        actual = digest.hexdigest()
+        if actual != recorded.content_hash:
+            raise ContentHashMismatchError(
+                "stored object does not match its recorded hash",
+                bucket=bucket,
+                key=key,
+                expected=recorded.content_hash,
+                actual=actual,
+            )
+        return recorded
 
     def get(self, bucket: str, key: str) -> bytes:
         """Retrieve a payload and verify its integrity.

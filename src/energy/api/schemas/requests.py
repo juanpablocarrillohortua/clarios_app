@@ -138,21 +138,24 @@ class BackfillRequest(TimeRangeRequest):
     force: bool = False
 
 
-class UploadMetadataRequest(StrictModel):
-    """Form metadata accompanying a file upload.
+class CommitDraftRequest(StrictModel):
+    """What a person confirms when they commit a draft (increment 7).
+
+    Who confirms is never part of it: it is the draft's owner, the caller.
 
     Attributes:
-        plant_code: the plant the file belongs to.
-        source_key: the configured source this file represents.
-        reporting_period: the month the workbook covers, as ``YYYY-MM``, used to
-            detect a file uploaded against the wrong period.
-        notes: free-text note from the uploader, stored with the Bronze run.
+        validation_digest: the ``validation_digest`` of the confirmation the
+            person saw. A validation that changed since is refused (409).
+        accept_warnings: ``true`` when the person accepts the draft's warnings.
+            A draft with warnings is refused without it (422).
+        base_run_id: for a catalogue, the ``current_version`` the person saw;
+            ``null`` when there was none. Another load having become current
+            since is refused (409). Ignored for movements.
     """
 
-    plant_code: str = Field(min_length=1, max_length=32)
-    source_key: str = Field(min_length=1, max_length=64)
-    reporting_period: str = Field(pattern=r"^\d{4}-\d{2}$")
-    notes: str = Field(default="", max_length=1000)
+    validation_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    accept_warnings: bool = False
+    base_run_id: UUID | None = None
 
 
 def parse_query_window(start: datetime, end: datetime) -> TimeRangeRequest:
@@ -177,12 +180,12 @@ def parse_query_window(start: datetime, end: datetime) -> TimeRangeRequest:
 
 __all__ = [
     "BackfillRequest",
+    "CommitDraftRequest",
     "Granularity",
     "KPIQueryRequest",
     "SensorBatchRequest",
     "SensorReadingRequest",
     "StrictModel",
     "TimeRangeRequest",
-    "UploadMetadataRequest",
     "parse_query_window",
 ]

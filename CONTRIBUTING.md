@@ -33,8 +33,9 @@ make check
 ```
 
 This runs format-check → lint → strict type-checking → security scanning → the
-full test suite, and it is **exactly what CI enforces**. A green `make check`
-locally means a green CI run.
+frontend gate → the full test suite, and it is **exactly what CI enforces**. A
+green `make check` locally means a green CI run. The frontend gate needs Node
+and one `make frontend-install`.
 
 Individual targets are documented in the README; `make help` lists everything.
 
@@ -221,6 +222,163 @@ SQL, no direct adapter construction. Request and response models live in
 `api/schemas/` and are deliberately separate from both the domain entities and
 the ORM tables — a database column rename must never become a breaking API change.
 
+**Every route says who may call it.** Mount the router in `api/main.py` with the
+permission it needs:
+
+```python
+app.include_router(things.router, dependencies=[Depends(requires(Permission.LOADS_WRITE))])
+```
+
+- A route is protected unless its path is in `PUBLIC_PATHS`. A router mounted
+  without a permission fails `tests/unit/test_api_auth.py`.
+- Ask for a **permission**, never for a role. If none fits, add one to
+  `Permission` and a row to `GRANTS` in `api/security.py`, with its test. That
+  table is the only place where a role is given a meaning.
+- A handler that needs the caller takes `principal: PrincipalDep`.
+- Never log a token, and never put the reason for a refusal in the response:
+  it goes to the log.
+- Add the endpoint's row to the table of [docs/api.md](docs/api.md#2-endpoints).
+  A missing row fails `tests/unit/test_api_reference.py`.
+
+[docs/api.md](docs/api.md) follows a request through the API and lists every
+endpoint; [docs/sign-in.md](docs/sign-in.md) has the Entra ID side.
+
+### Adding a dataset spec
+
+A kind of data people load through the web app is a file in
+`config/datasets/`, named after its key. [docs/dataset-specs.md](docs/dataset-specs.md)
+has the format and the steps.
+
+- **Copy the headers from the workbook by script,** never by typing them:
+  Bronze keys every column by its exact header text.
+- **Quote every allowed value.** YAML reads an unquoted `No` as false.
+- **Check it with `energy datasets check`** before `make test`. A malformed spec
+  stops the API at start.
+- `tests/unit/test_dataset_specs_committed.py` ties each spec to the Bronze
+  loader's routes, the Silver SQL, the translation file and, when present, the
+  real workbook.
+- **A snapshot says what Silver does with a removed row** (`silver.removed_rows`:
+  `kept` or `dropped`), and the same test checks it against the Silver SQL.
+  Give the dataset its own sentence for it, `datasets.<key>.removedRows` in
+  `es.json`, when the general one does not say enough.
+
+### Writing to Bronze
+
+Bronze is the evidence, so only two modules write it:
+`adapters/postgres_bronze_repo.py` (the command-line loader) and
+`adapters/postgres_load_committer.py` (the web app's commit).
+`tests/unit/test_load_service.py` scans `src/energy` and fails for any other
+module that inserts into, copies to, updates or deletes from a `bronze.`
+table.
+
+- **The commit shares the loader's SQL, not its methods.** The loader's
+  methods each commit by themselves; the commit must land the rows, complete
+  the run and update staging in one transaction, so it runs the loader's
+  statements (`SELECT_FILE`, `INSERT_FILE`, `INSERT_RUN`, `COMPLETE_RUN`) on
+  its own connection. Change a statement there and both paths change: the
+  integration test that loads one file both ways must still find the same
+  rows.
+- **A failed commit leaves nothing behind,** not even a failed run
+  ([ADR 0010](docs/adr/0010-a-draft-is-committed-once-in-one-transaction.md)).
+  Do not split it into several transactions.
+- **Staging never names a `bronze.` object** (`postgres_draft_repo.py`; a test
+  reads it), and Silver and Gold are never written from the app.
+
+### Adding a validation rule
+
+The checks of an uploaded file are pure functions in
+`src/energy/domain/draft_rules.py` (and `workbook_limits.py` for the archive);
+[docs/dataset-specs.md](docs/dataset-specs.md#what-a-file-is-checked-against)
+lists them.
+
+- **Give it an ID in `RuleId`,** `<group>.<name>`, and a severity. A rule a spec
+  configures takes the column's `severity`.
+- **Judge the text Bronze would store, as the Silver build reads it.** The
+  rows come from `landing.sheet_payloads`; a value is trimmed of spaces, as
+  `pg_temp.eq_txt` does. A rule about numbers or dates must agree with the
+  Silver build's parsing, and a test keeps `SILVER_NUMBER` equal to it.
+- **Write its sentence in `frontend/src/i18n/es.json`,** under
+  `loads.rules.<group>.<name>`, with a `name` and a `message`. The API sends
+  the ID and the values the message needs, never prose; a test fails for a
+  rule without its sentence.
+- **Test it in `tests/unit/test_draft_rules.py`** with the rows that break it,
+  and add a row to the broken files of `tests/fixtures/workbooks.py` when it
+  belongs in the end-to-end check.
+- **Keep it bounded.** Report through `IssueCollector`, which lists the first
+  1,000 issues of each rule in each column and counts the rest, so a file
+  broken on every row costs counters, not memory.
+- **Give it its own reason.** A new rule needs `default.<rule id>` in
+  `ReasonId` (`src/energy/domain/draft_reasons.py`) and a `fix` for it in
+  `es.json`; a test fails for a rule without one.
+
+### Adding a reason detector
+
+A reason says why an issue probably happened and what to do about it in Excel.
+Detectors are pure functions in `src/energy/domain/draft_reasons.py`, called
+by the checks of `draft_rules.py`, which hold the cell, its type as the
+workbook kept it, the column's spec, the row and the headers.
+
+- **Deterministic, from the file and the spec alone.** No model, no lookup of
+  data already loaded: the same file always gets the same reasons. A reason
+  that needs existing data waits for the checks of increment 8.
+- **Give it an ID in `ReasonId`,** `<group>.<name>`, and return a `Reason`
+  with the values its sentences need (`params`), never prose.
+- **Write two sentences in `frontend/src/i18n/es.json`,** under
+  `loads.reasons.<group>.<name>`: `why` it happened, and the `fix`, as actions
+  in Spanish-language Excel for Windows ("Inicio > Número > Texto"), naming
+  the cell with `{{cell}}` where it helps. A guess says "probablemente". A
+  test fails for a reason without both.
+- **Rank it.** `ranked()` puts the row's reasons first, then the cell's, then
+  the rule's own; a detector that explains more goes earlier.
+- **Test both ways** in `tests/unit/test_draft_reasons.py`: a file that shows
+  the defect gives the reason first, and the nearest sound value gives none.
+  Add the defect to `lines_defects()` or `invoices_defects()` of
+  `tests/fixtures/workbooks.py`, with its line in the manifest.
+- **Measure it on real data** before it ships, read-only, as `cell.text_damaged`
+  was: a detector that fires on sound rows teaches people to ignore reasons.
+
+### Changing the web app
+
+The app in `frontend/` (React, TypeScript, Vite) is what users open at `/`.
+[docs/frontend-plan.md](docs/frontend-plan.md) has its design and increments.
+
+```bash
+make frontend-install   # once, and after the lockfile changes
+make frontend-dev       # http://localhost:5173 with live reload; needs `make up`
+make frontend-format    # format, and apply safe lint fixes
+make frontend-check     # the gate: format, lint, type-check, test, build
+```
+
+- **No business rule in TypeScript.** Validation, messages about data and every
+  calculation come from the API. A rule that exists only in the browser is a
+  defect. That includes access: the app shows a section when `GET /api/me`
+  lists its permission, and never works out from a role what a user may do.
+- **Sign-in is behind `AuthClient`** (`frontend/src/auth/authClient.ts`). Only
+  `msalAuthClient.ts` imports Microsoft's library; tests hand the app a
+  stand-in. A new section is a row in `frontend/src/sections.ts`, with its
+  permission, and a route wrapped in `RequirePermission`.
+- **The Power BI report is behind `EmbedReport`**
+  (`frontend/src/powerbi/reportEmbed.ts`), in the same way. Only
+  `powerBiReportEmbed.ts` imports Microsoft's embedding library, and the app
+  loads that file when the dashboard opens. The app sends Power BI nothing but
+  `GET` requests, and what each of its answers means is written in one place,
+  `reportProblem.ts` ([docs/powerbi.md](docs/powerbi.md#the-report-inside-the-web-app)).
+- **Every text the user sees is a key in `frontend/src/i18n/es.json`.** The
+  interface is Spanish; keys, code and comments are English. A key that does not
+  exist fails the type-check.
+- **Addresses.** A new page gets a path in `frontend/src/paths.ts`, without a
+  file extension and not under `/api`, `/auth`, `/dash`, `/minio` or `/prefect`:
+  the `Caddyfile` routes those elsewhere.
+- **Packages.** Add or upgrade with a cooling-off week, so a release pulled
+  for being malicious never reaches the lockfile:
+  `npm install --before=<a date a week ago> <package>` inside `frontend/`.
+  Versions are exact, install scripts are off (`frontend/.npmrc`), and the
+  lockfile is committed.
+- **Folder names.** The root `.gitignore` ignores `lib/`, `build/`, `dist/`,
+  `env/` and `var/` anywhere, so a source folder with one of those names would
+  silently stay out of git.
+- **Node.** Use the version in `frontend/.nvmrc` (24 LTS); CI and the image do.
+
 ---
 
 ## Architecture rules
@@ -236,6 +394,12 @@ parses imports statically.
 | `adapters` | `domain`, `ports`, `core`, `db` |
 | `services` | `domain`, `ports`, `core` |
 | `api` / `dashboards` / `pipelines` | as tabled in [docs/architecture.md](docs/architecture.md) — **never each other** |
+
+One exception, by module:
+[ADR 0005](docs/adr/0005-api-composition-root.md) lets `api/deps.py`, and no
+other `api` module, import adapters. It is where the API binds adapters to
+ports. The test names that module and fails for an adapter import anywhere else
+in `api`. Another exception needs a decision record of its own.
 
 **If a change requires weakening that test, stop and discuss it in the pull
 request.** The test is load-bearing: the day it is relaxed to make something

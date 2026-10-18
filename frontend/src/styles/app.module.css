@@ -1,0 +1,575 @@
+/*
+ * The app's own pieces: the canvas of a page outside the shell, panels, the
+ * status line, the report's frame. All values come from tokens.css.
+ */
+
+/* A page outside the shell (sign-in, a problem, loading) stands on the same
+   canvas as the content area. */
+.canvas {
+  background: var(--ce-glow-ambient), var(--ce-gradient-canvas);
+  background-color: var(--ce-canvas-bottom);
+}
+
+/* Panels -------------------------------------------------------------------- */
+
+.panel {
+  --ce-panel-marker: transparent;
+  --ce-panel-top: var(--ce-gradient-panel-top);
+
+  position: relative;
+  overflow: hidden;
+  padding: var(--mantine-spacing-lg);
+  border: 1px solid var(--ce-border);
+  border-radius: var(--ce-radius-md);
+  background-color: var(--ce-surface);
+  box-shadow: var(--ce-glow-panel);
+  transition:
+    opacity var(--ce-duration-fade) var(--ce-ease-out),
+    translate var(--ce-duration-spring) var(--ce-ease-spring);
+}
+
+/* A panel arrives: it rises a little and fades in, on the spring. */
+@starting-style {
+  .panel {
+    opacity: 0;
+    translate: 0 var(--ce-enter-offset);
+  }
+}
+
+/* The top line, as on the report's panels. */
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--ce-panel-top);
+}
+
+/* The marker bar on the left: what kind of message this is. It only repeats
+   what the title says. */
+.panel[data-tone],
+.panel[data-accent] {
+  padding-inline-start: calc(var(--mantine-spacing-lg) + 3px);
+}
+
+.panel[data-tone]::after,
+.panel[data-accent]::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--ce-panel-marker);
+}
+
+.panel[data-tone="error"] {
+  --ce-panel-marker: var(--ce-error);
+}
+
+.panel[data-tone="warning"] {
+  --ce-panel-marker: var(--ce-warning);
+}
+
+.panel[data-tone="info"] {
+  --ce-panel-marker: var(--ce-info);
+}
+
+.panel[data-tone="success"] {
+  --ce-panel-marker: var(--ce-success);
+}
+
+/* Card accents, as the report's KPI cards: the bar and the top line in one
+   colour. Defined for summary cards to come; nothing uses them yet. */
+.panel[data-accent="pink"] {
+  --ce-panel-marker: var(--ce-accent-pink);
+  --ce-panel-top: var(--ce-accent-pink);
+}
+
+.panel[data-accent="blue"] {
+  --ce-panel-marker: var(--ce-accent-blue);
+  --ce-panel-top: var(--ce-accent-blue);
+}
+
+.panel[data-accent="purple"] {
+  --ce-panel-marker: var(--ce-accent-purple);
+  --ce-panel-top: var(--ce-accent-purple);
+}
+
+.panel[data-accent="cyan"] {
+  --ce-panel-marker: var(--ce-accent-cyan);
+  --ce-panel-top: var(--ce-accent-cyan);
+}
+
+.panel[data-accent="magenta"] {
+  --ce-panel-marker: var(--ce-accent-magenta);
+  --ce-panel-top: var(--ce-accent-magenta);
+}
+
+.panel[data-accent="amber"] {
+  --ce-panel-marker: var(--ce-accent-amber);
+  --ce-panel-top: var(--ce-accent-amber);
+}
+
+/* Status: a dot and a line ---------------------------------------------------- */
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--ce-radius-pill);
+  background-color: var(--ce-text-muted);
+  transition: background-color var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+.dot[data-tone="online"] {
+  background-color: var(--ce-online);
+}
+
+.dot[data-tone="error"] {
+  background-color: var(--ce-error);
+}
+
+.dot[data-tone="warning"] {
+  background-color: var(--ce-warning);
+}
+
+.dot[data-tone="info"] {
+  background-color: var(--ce-info);
+}
+
+.status {
+  color: var(--ce-text-muted);
+  letter-spacing: var(--ce-tracking-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.status[data-tone="online"] {
+  color: var(--ce-meta);
+}
+
+.status[data-tone="error"] {
+  color: var(--ce-error);
+}
+
+/* Quiet (the header): the words stay for screen readers and the tooltip, and
+   the dot is what is seen. A failure is never quiet. */
+.status[data-quiet] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Secondary text: the signed-in name, the lines under a title. */
+.secondary {
+  color: var(--ce-text-secondary);
+}
+
+/* The report ------------------------------------------------------------------ */
+
+/* The area the report may take. Once Power BI has said the open page's size
+   (DashboardPage.tsx sets --report-ratio, as "width / height"), the frame is
+   the largest box of the page's shape that fits, centred: the whole page is
+   in view and fills it, and what is left beside it is the app's canvas.
+   Until then the frame fills the area. */
+.reportArea {
+  flex: 1;
+  min-height: 0;
+  container-type: size;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  /* Centred across; at the top when the width is what limits it (a narrow
+     screen), so the page sits under the title. */
+  place-items: start center;
+}
+
+/* Full screen: the page as large as the screen allows, centred, on the
+   canvas. */
+.reportArea:fullscreen {
+  place-items: center;
+  background: var(--ce-gradient-canvas);
+  background-color: var(--ce-canvas-bottom);
+}
+
+/* The report draws its own pages, dark by design (powerBiReportEmbed.ts).
+   color-scheme: normal stays all the same: a frame whose element is "dark"
+   while its page is not gets an opaque white backdrop from the browser (CSS
+   Color Adjustment), which would show wherever Power BI leaves the frame
+   unpainted. */
+.reportFrame {
+  overflow: hidden;
+  border: 1px solid var(--ce-border);
+  border-radius: var(--ce-radius-md);
+  background-color: transparent;
+  color-scheme: normal;
+  width: 100%;
+  height: 100%;
+}
+
+.reportFrame[data-fitted] {
+  width: min(100cqw, 100cqh * var(--report-ratio));
+  height: auto;
+  aspect-ratio: var(--report-ratio);
+}
+
+.reportArea:fullscreen .reportFrame {
+  border: 0;
+  border-radius: 0;
+}
+
+/* Power BI's own page is white until the report has loaded: the report waits
+   out of sight, then fades in (DashboardPage.tsx says when). */
+.report {
+  transition: opacity var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+.report[data-waiting] {
+  opacity: 0;
+}
+
+/* Data loading ---------------------------------------------------------------- */
+
+/* A dataset to choose: a card that is a radio button. The chosen one takes
+   the accent's edge, at once. */
+.choice {
+  padding: var(--mantine-spacing-md);
+  border: 1px solid var(--ce-border);
+  border-radius: var(--ce-radius-md);
+  background-color: var(--ce-surface);
+  transition:
+    border-color var(--ce-duration-press) var(--ce-ease-out),
+    background-color var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+@media (hover: hover) {
+  .choice:hover {
+    background-color: var(--ce-surface-raised);
+  }
+}
+
+.choice[data-checked] {
+  border-color: var(--ce-accent);
+  background-color: var(--ce-surface-raised);
+}
+
+/* The drop zone: one button the size of a panel. A file dragged over it is
+   answered at once, with the accent's edge and tint: nothing waits for a
+   timer, and leaving takes the tint away as fast. */
+.dropZone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--mantine-spacing-xs);
+  width: 100%;
+  min-height: 132px;
+  padding: var(--mantine-spacing-lg);
+  border: 1px dashed var(--ce-border-control);
+  border-radius: var(--ce-radius-md);
+  background-color: var(--ce-surface-sunken);
+  color: var(--ce-text-secondary);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    transform var(--ce-duration-spring) var(--ce-ease-spring),
+    border-color var(--ce-duration-press) var(--ce-ease-out),
+    background-color var(--ce-duration-press) var(--ce-ease-out);
+}
+
+.dropZone:focus-visible {
+  outline: 2px solid var(--ce-focus);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) {
+  .dropZone:hover {
+    border-color: var(--ce-accent);
+    color: var(--ce-text);
+  }
+}
+
+/* Pressed: feedback on pointer-down. */
+.dropZone:active {
+  transform: scale(var(--ce-press-scale));
+  transition-duration: var(--ce-duration-press);
+  transition-timing-function: var(--ce-ease-out);
+}
+
+.dropZone[data-dragging] {
+  border-style: solid;
+  border-color: var(--ce-accent);
+  background-color: var(--ce-accent-tint);
+  color: var(--ce-text);
+}
+
+.dropZone[data-invalid] {
+  border-color: var(--ce-error);
+}
+
+.dropZone:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* An upload's bar. The fill is scaled along the track, which the compositor
+   alone draws; each new step starts from where the bar is, so it never jumps
+   back to replay a transition. */
+.progressTrack {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--ce-radius-pill);
+  background-color: var(--ce-surface-sunken);
+}
+
+.progressFill {
+  position: absolute;
+  inset: 0;
+  background: var(--ce-gradient-panel-top);
+  transform: scaleX(var(--progress, 0));
+  transform-origin: left center;
+  transition: transform var(--ce-duration-progress) linear;
+  will-change: transform;
+}
+
+/* The figures of a result: the size carries the hierarchy, tabular so they
+   line up, tighter as they grow. */
+.figure {
+  font-size: 1.75rem;
+  font-weight: var(--ce-weight-title);
+  line-height: var(--ce-leading-title);
+  letter-spacing: var(--ce-tracking-display);
+  font-variant-numeric: tabular-nums;
+}
+
+.figureLabel {
+  color: var(--ce-text-muted);
+  font-size: var(--mantine-font-size-sm);
+  letter-spacing: var(--ce-tracking-small);
+}
+
+.figure[data-tone="error"] {
+  color: var(--ce-error);
+}
+
+.figure[data-tone="warning"] {
+  color: var(--ce-warning);
+}
+
+/* The issues: small type, numbers that line up, and the found value quoted. */
+.issueTable {
+  font-size: var(--mantine-font-size-sm);
+  letter-spacing: var(--ce-tracking-small);
+}
+
+.issueTable td {
+  vertical-align: top;
+}
+
+/* A value found: room for a short code on one line; a long text breaks
+   between words, and inside a word only when nothing else fits. */
+.valueCell {
+  min-width: 8rem;
+  overflow-wrap: break-word;
+}
+
+.number {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.code {
+  font-family: var(--ce-font-mono);
+  font-size: 0.92em;
+  color: var(--ce-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.emptyValue {
+  color: var(--ce-text-muted);
+  font-style: italic;
+}
+
+/* A list whose next page is on its way stays where it is, dimmed, instead of
+   blinking out. */
+.stale {
+  opacity: 0.55;
+  transition: opacity var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+/* One issue on a narrow screen: a card instead of a table row. */
+.issueCard {
+  padding-block: var(--mantine-spacing-sm);
+  border-bottom: 1px solid var(--ce-hairline);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.figure[data-tone="success"] {
+  color: var(--ce-success);
+}
+
+/* Where an issue is, as Excel names the cell: what a person types into the
+   name box, so it carries the weight of the row. */
+.cellName {
+  font-weight: var(--ce-weight-title);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cellColumn {
+  min-width: 7rem;
+  max-width: 12rem;
+}
+
+/* Cause and fix: the widest column, so the sentences read as sentences. */
+.causeCell {
+  min-width: 18rem;
+}
+
+/* "Nuevo" on an issue a correction brought: a quiet outline, never colour
+   alone (the word says it). Never shrunk: in a narrow column the cell grows to
+   hold the whole word. Its edge is the controls' neutral one; pink stays for
+   the one primary action. */
+.newBadge {
+  flex: none;
+  border-color: var(--ce-border-control);
+  color: var(--ce-text);
+}
+
+/* A second likely cause, on request. The browser's own disclosure: it opens at
+   once, with nothing to animate. */
+.disclosure > summary {
+  cursor: pointer;
+  color: var(--ce-text-muted);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.disclosure > summary:focus-visible {
+  outline: 2px solid var(--ce-focus);
+  outline-offset: 2px;
+  border-radius: var(--ce-radius-xs);
+}
+
+/* A draft's page while a corrected file is dragged over it: the whole page
+   takes it, answered at once with the accent's edge. */
+.pageDrop {
+  border-radius: var(--ce-radius-md);
+  outline: 2px dashed transparent;
+  outline-offset: 6px;
+  transition: outline-color var(--ce-duration-press) var(--ce-ease-out);
+}
+
+.pageDrop[data-dragging] {
+  outline-color: var(--ce-accent);
+}
+
+/* Something shown on request (the cleared problems) arrives as a panel does:
+   a short rise and a fade, from wherever it is, never replayed. */
+.rise {
+  transition:
+    opacity var(--ce-duration-fade) var(--ce-ease-out),
+    translate var(--ce-duration-spring) var(--ce-ease-spring);
+}
+
+@starting-style {
+  .rise {
+    opacity: 0;
+    translate: 0 var(--ce-enter-offset);
+  }
+}
+
+/* A wait whose length is not known, such as a commit: a short band sweeps the
+   track, from where it is, at the pace of --ce-duration-sweep. Under reduced
+   motion it rests at the start and the words beside it say the rest. */
+.progressSweep {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 40%;
+  background: var(--ce-gradient-panel-top);
+  animation: sweep var(--ce-duration-sweep) var(--ce-ease-out) infinite;
+}
+
+@keyframes sweep {
+  from {
+    translate: -100% 0;
+  }
+  to {
+    translate: 250% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progressSweep {
+    animation: none;
+  }
+}
+
+/* The two pages of the loading section: "Nueva carga" and "Historial". Links
+   in a pill, the current one raised; the words say which, not colour alone. */
+.subnav {
+  display: flex;
+  gap: 4px;
+  width: fit-content;
+  padding: 4px;
+  border: 1px solid var(--ce-border);
+  border-radius: var(--ce-radius-pill);
+  background-color: var(--ce-surface-sunken);
+}
+
+.subnavLink {
+  padding: 6px 14px;
+  border-radius: var(--ce-radius-pill);
+  color: var(--ce-text-secondary);
+  font-size: var(--mantine-font-size-sm);
+  text-decoration: none;
+  transition:
+    background-color var(--ce-duration-press) var(--ce-ease-out),
+    color var(--ce-duration-press) var(--ce-ease-out);
+}
+
+.subnavLink:hover {
+  color: var(--ce-text);
+}
+
+.subnavLink[aria-current="page"] {
+  background-color: var(--ce-surface-raised);
+  color: var(--ce-text);
+  font-weight: var(--ce-weight-title);
+}
+
+.subnavLink:focus-visible {
+  outline: 2px solid var(--ce-focus);
+  outline-offset: 2px;
+}
+
+/* A load's facts: the name of each in the secondary colour, its value beside
+   it; one column on a phone. */
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--mantine-spacing-xs) var(--mantine-spacing-lg);
+  margin: 0;
+  font-size: var(--mantine-font-size-sm);
+}
+
+.facts dt {
+  color: var(--ce-text-secondary);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 36em) {
+  .facts {
+    grid-template-columns: 1fr;
+  }
+
+  .facts dd {
+    margin-block-end: var(--mantine-spacing-xs);
+  }
+}

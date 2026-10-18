@@ -30,7 +30,10 @@ The two meet in one indicator: energy used per equivalent battery.
 ## 2. Four schemas, one direction of travel
 
 Data moves through three layers, each stricter than the one before. A fourth schema
-holds the lists the others refer to.
+holds the lists the others refer to. A fifth, `reporting`, stores nothing: it is
+the read-only window BI tools such as Power BI look through (section 6). A sixth,
+`staging`, sits before the layers: files uploaded through the web app wait there
+while they are checked, and nothing in it is evidence (section 6b).
 
 ```mermaid
 flowchart LR
@@ -63,6 +66,7 @@ flowchart LR
     end
 
     REF[("reference<br/>plants, meters,<br/>shifts, targets")]
+    RP["reporting<br/>read-only views<br/>for Power BI"]
 
     M --> RR --> SR --> GK
     SR --> GS
@@ -72,6 +76,8 @@ flowchart LR
     LT --> ES
     ES --> EG
     EG -. "close-month" .-> EC
+    EG --> RP
+    EC --> RP
     REF -. "looked up by" .-> SR
     REF -. "looked up by" .-> GK
 ```
@@ -82,6 +88,8 @@ flowchart LR
 | `silver` | The same data, typed, checked and de-duplicated. | A correction replaces a row but keeps the old one. |
 | `gold` | The figures that reports and dashboards show. | KPIs are recomputed per period. EQUS figures are views; a closed month is frozen and changes only by a reclose. |
 | `reference` | Plants, meters, shifts and targets. | Maintained by people. |
+| `reporting` | Flat views of the EQUS figures for Power BI. | Nothing is stored; the views read Gold. |
+| `staging` | Files uploaded through the web app, while they are checked. | Freely: a new check replaces the last, and an abandoned upload is purged after 30 days. |
 
 The rule behind the layers: **never repair data where it lands**. Bronze keeps the
 evidence, Silver decides what is valid, Gold publishes. If a number looks wrong, you
@@ -149,6 +157,38 @@ structure and catalogue workbooks are snapshots, so there is one file of each,
 under its exact name: to update one, replace the file. Any workbook in the
 folder that the loader does not recognise is listed at the end of its output as
 not loaded.
+
+### Loading a file from the web app
+
+A person uploads a file, the app checks it in staging (section 6b), and
+confirming it lands it in Bronze. The commit does steps 2 to 6 above with the
+loader's own statements, in one transaction together with the staging update.
+
+```mermaid
+flowchart TD
+    D["A validated draft without errors<br/>staging.drafts, its rows in draft_rows"]
+    D --> K["1. Lock the draft, and the dataset"]
+    K --> V{"2. A catalogue: is the version it was<br/>compared with still the current one?"}
+    V -- "no" --> N["Refuse: the page shows the new difference"]
+    V -- "yes" --> F["3. Catalogue the original in raw_files,<br/>unless it is there; refuse a file<br/>whose sheet a completed run landed"]
+    F --> R["4. Open a run, copy the staged rows<br/>into the landing table, check the counts,<br/>close the run as completed"]
+    R --> S["5. Remove the staged rows,<br/>mark the draft committed"]
+    R -- "anything fails" --> X["Undo all of it: no run, no row;<br/>the draft stays validated"]
+```
+
+- **Unlike the loader, a failed commit leaves no run.** The whole commit is one
+  transaction, so nothing of it remains, and the person confirms again.
+- **A draft lands once.** Confirming it again, after a lost answer or from a
+  second tab, returns the first load.
+- **The rows are the loader's rows.** The same rules built the staged payloads
+  and the same statements land them, so a file landed either way gives the
+  same rows with the same hashes.
+- **The run records more than the loader's do.** Its `parameters` add the
+  person's name, the draft, the spec, the validation with the warnings
+  accepted and, for a catalogue, its difference from the version before. The
+  [data dictionary](data_dictionary.md#bronzeingestion_runs) lists every key.
+- **The original is not copied.** It was archived at upload under the loader's
+  key; the commit only catalogues it.
 
 ### The tables
 
@@ -697,6 +737,127 @@ build Silver, refresh the two conversion tables, refresh statistics, and print
 column H of the latest month. `make refresh` does the last three only. A refresh
 never touches a closed month, and two refreshes never run at once.
 
+### Reading it from Power BI
+
+Schema `reporting` (revision 0006) restates these figures as twelve flat views a
+BI tool can load and relate:
+
+| Group | Views |
+|---|---|
+| Monthly figures | `equs_mensual` (column H by month), `equs_batt_mensual`, `equs_poly_mensual`, `calidad_datos_mensual` |
+| The closes | `cierres`, `cierres_calidad`, `equs_cerrado`, `equs_cerrado_historial` |
+| The detail behind each driver | `aporte_cuenta`, `recibos_produccion` |
+| Dimensions | `cuentas`, `articulos` |
+
+It stores nothing. Every number comes from a Gold view, so Power BI and
+`make resumen` cannot disagree.
+
+Power BI connects with its own login, created by `make powerbi`. That login can
+read these views and nothing else, and its sessions are read-only. It arrives
+through `reporting-bridge`, an opt-in container that relays one port
+(127.0.0.1:5433) to the database. Step by step, with a model and starter
+measures: [powerbi.md](powerbi.md).
+
+---
+
+## 6b. Staging: uploads while they are checked
+
+Created by [`0007_create_staging_schema.py`](../migrations/versions/0007_create_staging_schema.py);
+reasons and corrections added by
+[`0008_add_reasons_and_corrections.py`](../migrations/versions/0008_add_reasons_and_corrections.py);
+the commit added by
+[`0009_add_draft_commit.py`](../migrations/versions/0009_add_draft_commit.py).
+
+A person loading data through the web app uploads a file for one dataset
+([dataset specs](dataset-specs.md)). The file becomes a **draft**: its original is
+archived in object storage at once, under the key the Bronze loader uses, and the
+draft waits here while it is checked. Nothing reaches Bronze until the person
+confirms the load (section 3, "Loading a file from the web app"), so the
+layers are untouched by an upload and by its checks.
+
+Every problem found carries its likely reasons and what to do in Excel. A file
+with problems is fixed in Excel and uploaded again as a **correction**: a draft
+of its own, which names the draft it corrects (`previous_draft_id`), so the two
+can be compared. Data is never edited here
+([ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)).
+
+```mermaid
+erDiagram
+    drafts ||--o{ draft_rows : "stages"
+    drafts ||--o{ draft_issues : "lists"
+    drafts ||--o{ draft_rule_counts : "counts"
+    drafts ||--o{ draft_reason_counts : "counts by reason"
+    drafts |o..o{ drafts : "corrected by (not enforced)"
+    drafts {
+        uuid draft_id PK
+        text dataset_key
+        text status "receiving, uploaded, validated, failed, committed"
+        text filename
+        char content_hash "of the original"
+        text object_key "where it is archived"
+        text created_by "the person, as Entra ID's subject"
+        timestamptz expires_at "30 days after the last work"
+        uuid previous_draft_id "the draft it corrects"
+        char spec_digest "the spec it was checked against"
+        uuid run_id "its load, once committed"
+        date window_start "the period its rows cover"
+        jsonb export_info "the export's Info sheet"
+    }
+    draft_rows {
+        int source_row "the Excel row"
+        char content_hash
+        jsonb payload "as Bronze would store it"
+    }
+    draft_issues {
+        text rule_id "for example cell.type"
+        text severity "error, warning, info"
+        int source_row
+        int column_index
+        text value
+        jsonb params
+        jsonb reasons "likely reasons, most likely first"
+        text reason_id "the first"
+        text match_key "the row's identity"
+    }
+    draft_rule_counts {
+        text rule_id
+        text column_key
+        bigint rows_affected "every row"
+        int issues_listed "at most 1,000"
+    }
+    draft_reason_counts {
+        text rule_id
+        text column_key
+        text reason_id
+        bigint rows_affected "every row"
+    }
+```
+
+| Table | Holds |
+|---|---|
+| `drafts` | One upload: which dataset, which file, whose, where its original is archived, what its last check found and against which spec, and the draft it corrects, if any. The check also keeps what the load will record: the workbook's sheets, the period its rows cover, and the export's Info sheet and search conditions. Once committed, its load |
+| `draft_rows` | The rows of the file exactly as Bronze would land them, so a confirmed load lands what was checked. The commit removes them: Bronze then holds them |
+| `draft_issues` | The first 1,000 problems of each rule in each column, with row, column, the value found, its likely reasons, and its row's identity |
+| `draft_rule_counts` | How many rows broke each rule in each column, every one of them |
+| `draft_reason_counts` | The same rows by their first reason |
+
+- **A draft is its owner's.** The API shows it to the person who uploaded it and
+  to nobody else.
+- **Removing a draft removes everything staged for it.** `energy drafts purge`
+  removes drafts not worked on for 30 days, and their original when nothing else
+  needs it.
+- **A correction keeps its link when the earlier draft is purged.** The link is
+  not a foreign key, so the page can still say that the earlier file is gone.
+  Uploading a correction extends the earlier draft's 30 days too.
+- **Two issues are the same issue** in a draft and its correction when they
+  share rule, column and `match_key`: the row's natural key, ignoring case,
+  spaces and accents, with its occurrence among rows of the same key; or the
+  row number when the key is incomplete.
+- **A committed draft stays 30 days,** with its issues and counts, so the
+  load's detail can link to it. Its original is never purged: Bronze
+  catalogues it.
+- **Power BI's login cannot see this schema.**
+
 ---
 
 ## 7. Which tables are time-partitioned
@@ -731,14 +892,20 @@ flowchart LR
     m3["0003<br/>reference + silver<br/>4 + 21 tables, 2 views,<br/>version 1 of the equation"]
     m4["0004<br/>gold<br/>3 + 6 tables, 15 views,<br/>8 functions"]
     m5["0005<br/>hypertables,<br/>compression, retention"]
-    m1 --> m2 --> m3 --> m4 --> m5
+    m6["0006<br/>reporting<br/>12 views for Power BI,<br/>role reporting_reader"]
+    m7["0007<br/>staging<br/>4 tables: uploads<br/>while they are checked"]
+    m8["0008<br/>staging<br/>reasons, corrections,<br/>1 table"]
+    m9["0009<br/>staging<br/>the commit: committed drafts,<br/>what a load records"]
+    m1 --> m2 --> m3 --> m4 --> m5 --> m6 --> m7 --> m8 --> m9
 ```
 
 Revisions 0002, 0003 and 0004 were rewritten in place while the EQUS layers were
 built. A database migrated before a rewrite is brought up to date by going down to
 the revision before the rewritten one and up again: for the Gold rewrite,
-`alembic -c pyproject.toml downgrade 0003` and then `make db-upgrade`. That leaves
-Bronze and Silver as they are, but it drops `gold`, closed months included.
+`make db-downgrade` until `alembic current` says `0003`, then `make db-upgrade`.
+That leaves Bronze and Silver as they are, but it drops `gold`, closed months
+included. Revisions 0006 to 0009 were added as new files, so `make db-upgrade`
+applies them to any database already at the revision before.
 
 ---
 
@@ -857,10 +1024,13 @@ SELECT * FROM gold.calidad_datos_rango(DATE '2026-09-01', DATE '2026-09-30');
 | **Column H** | The column of sheet RESUMEN EQU that holds the EQ of each driver; `gold.v_resumen_equ` in the database. |
 | **Close** | The official EQ of a month, frozen in `gold.resumen_equ` so that later corrections to the data do not change a published number. |
 | **Version (of the equation)** | A set of factors and rules with a validity period. Each month is computed with the version in force that month. |
+| **Reporting login** | The read-only database user Power BI connects with (`powerbi` by default). It can read the `reporting` views and nothing else. |
+| **Bridge** | `reporting-bridge`, the opt-in container that relays one port to the database so Power BI can reach it. |
 
 ## Related documents
 
 - [Data dictionary](data_dictionary.md): every column of every table
 - [Architecture](architecture.md): how the code is organised around the database
 - [EQUS context](EQUS_CONTEXT.md): the business rules of the equivalent-batteries calculation
+- [Power BI](powerbi.md): connecting Power BI Desktop and the Power BI Service to the reporting views
 - [Runbook](runbook.md): backups, restore, incident response

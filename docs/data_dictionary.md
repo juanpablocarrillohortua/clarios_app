@@ -23,6 +23,8 @@ exists and what it guarantees. New to the project? Start with the
 | `bronze` | Raw landing area | Append-only, immutable |
 | `silver` | Validated readings; EQUS tables | Readings: insert + supersede, never delete. EQUS: rebuilt from Bronze |
 | `gold` | Published KPIs; EQUS Gold | KPIs: replaced per period. EQUS: views over Silver, plus the frozen monthly close, changed only by a reclose |
+| `reporting` | Read-only views for BI tools such as Power BI | Views only; nothing is stored |
+| `staging` | Files uploaded through the web app, while they are checked | A working area: a new check replaces the last; abandoned drafts are purged after 30 days |
 
 ---
 
@@ -153,7 +155,9 @@ The ledger every Bronze row points at. The EQUS loader writes one row per load:
 it inserts the run as `running` before landing anything, then sets it to
 `completed` in the same transaction that lands the rows, or to `failed` after
 rolling them back. So a `completed` run has all its rows and a `failed` run has
-none.
+none. The web app's commit inserts and completes its run in the transaction
+that lands the rows: a commit that fails leaves no run at all, and its
+`started_at` equals its `finished_at`.
 
 | Column | Type | Null | Description |
 |---|---|---|---|
@@ -171,13 +175,29 @@ none.
 | `finished_at` | `TIMESTAMPTZ` | yes | Null while running. |
 | `row_count` | `BIGINT` | no | Rows written to Bronze. Never negative. |
 | `error` | `TEXT` | no | Failure message; empty on success. |
-| `parameters` | `JSONB` | no | Invocation parameters — what a retry replays. The EQUS loader stores `filename`, `content_hash`, `sheets` (name, dataset key and header row of each), `plant_code`, `force`, the period dates the caller gave (null when none), `uploaded_by`, and `info`: the whole *Info* sheet as a name-to-value object. |
+| `parameters` | `JSONB` | no | Invocation parameters — what a retry replays. The EQUS loader stores `filename`, `content_hash`, `sheets` (name, dataset key and header row of each), `plant_code`, `force`, the period dates the caller gave (null when none), `uploaded_by`, and `info`: the whole *Info* sheet as a name-to-value object. The web app's commit stores the same keys (`force` false, no period given) and the ones below. |
 
 **Indexes:** `(source_key, started_at DESC)`, `(plant_code, started_at DESC)`,
 `state`.
 
 **Constraints:** `state` and `source_key` restricted to the lists above;
 `window_start <= window_end` when both are present.
+
+**What the web app's commit adds to `parameters`** (`run_parameters` of
+`energy.domain.draft_commit`):
+
+| Key | Holds |
+|---|---|
+| `input_mode` | `upload`, the only mode ([ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)). A run without it came from the command line |
+| `dataset_key` | The dataset spec the file was checked against |
+| `draft_id`, `previous_draft_id` | The draft committed, and the draft it corrected (null when none) |
+| `spec_digest` | SHA-256 of the spec the check used |
+| `uploaded_by_name` | The person's display name; `uploaded_by` is their object ID. Never the sign-in name |
+| `validation` | `validated_at`; `digest`, the validation digest the person confirmed; `rows_read`, `rows_with_errors` (always 0), `rows_with_warnings`; `counts`, every count by `rule`, `severity`, `column_key` and `rows`; and `accepted`: null, or `{by, warnings}`, the person who accepted the warnings and the counts they accepted |
+| `difference` | For a catalogue only: `base_run_id`, the version it was compared with (null when there was none); `added`, `changed`, `removed`, `unchanged`; and `removed_rows`, what Silver did then with a removed row (`kept` or `dropped`) |
+
+The *Info* sheet, the search conditions and the period are read at validation,
+as the loader reads them, and kept on the draft until the commit.
 
 ### `bronze.raw_files`
 
@@ -196,8 +216,8 @@ bytes a plant sent.
 | `size_bytes` | `BIGINT` | no | Payload size. Must be positive. |
 | `plant_code` / `source_key` | `VARCHAR` | no | What it was uploaded for. `source_key` takes the same five values as on `ingestion_runs`. One workbook can feed several sources; this is the first one it was loaded for. |
 | `sheet_names` | `TEXT[]` | no | Every sheet found in the workbook, hidden ones included, whether or not it was landed. Empty by default. |
-| `uploaded_by` | `VARCHAR(200)` | no | Who submitted it. |
-| `uploaded_at` | `TIMESTAMPTZ` | no | Receipt time. |
+| `uploaded_by` | `VARCHAR(200)` | no | Who submitted it. For the web app, the person's object ID. |
+| `uploaded_at` | `TIMESTAMPTZ` | no | Receipt time. For the web app, when the commit catalogued the file, not when it was uploaded: the draft keeps that. |
 
 **Indexes:** `(source_key, uploaded_at DESC)`.
 
@@ -308,6 +328,15 @@ loader, in this order:
    rolls the rows back and sets the run to `failed`.
 
 The loader only inserts into landing tables and only updates `ingestion_runs`.
+
+**From the web app.** Confirming a draft (`POST /api/drafts/{draft_id}/commit`)
+does steps 2 to 5 with the loader's own statements, in one transaction that
+also updates staging: it catalogues the original unless `raw_files` has it,
+refuses a file whose sheet a completed run already landed, inserts the run,
+copies the staged rows with one `INSERT … SELECT`, checks that the counts
+agree, completes the run, removes the staged rows and marks the draft
+committed. Only `postgres_bronze_repo.py` and `postgres_load_committer.py`
+write Bronze, and a test keeps it so.
 
 **Any year, several files.** The loader does not know about fiscal years. It
 lands whatever dates an export holds; the fiscal year of a figure is assigned
@@ -925,6 +954,174 @@ categories with EQ). Every month of section 9.2 matches to the cent, and FY26 is
 2,310,724. Against column H of the workbook itself, only the rows section 9 explains
 differ: POS_ACT_MTL (the plate listed twice in PLACAS), COMP_DEC (the TERM-PRT
 protectors) and the totals that carry them (H36, H40, H44, H45).
+
+---
+
+## `reporting` — read-only views for BI tools
+
+Created by [`0006_create_reporting_schema.py`](../migrations/versions/0006_create_reporting_schema.py).
+How to connect Power BI to these views is in [powerbi.md](powerbi.md).
+
+Twelve views and one function, no table. They restate EQUS Gold, and the Silver
+tables Gold reads, as flat tables a BI tool can load and relate.
+
+- **Nothing is calculated twice.** Every number comes from a Gold view.
+  - `equs_mensual` is `gold.v_resumen_equ` with a zero for each driver nothing
+    fed.
+  - `aporte_cuenta` is the two Gold pairing views, row by row, so the detail adds
+    up to the month exactly.
+  - `equs_poly_mensual` and `calidad_datos_mensual` repeat the grouping of
+    `gold.inyeccion_rango_mes` and `gold.calidad_datos_rango` over every month.
+- **They read as their owner.** A view reads its tables with the privileges of
+  the role that owns it, so the reader needs no privilege on `gold` or `silver`.
+  For the same reason no view calls a Gold *function*: a function runs with the
+  rights of whoever queries it.
+- **Keys a BI tool can relate.** Power BI relates tables on one column, so every
+  view keyed by a driver carries `cuenta_id` = `version:cuenta_stats` (for
+  example `1:OXPROD_KG`).
+- **Time columns.** Every month-based view has `mes`, the first day of the month,
+  and `anio_fiscal` = `reporting.anio_fiscal(mes)`. The fiscal year runs from
+  October to September and is named after the year it closes in: FY26 is
+  October 2025 to September 2026.
+
+| View | One row per | Columns | Source |
+|---|---|---|---|
+| `cuentas` | version × driver | `cuenta_id`, `version`, `version_nombre`, `vigente_desde`, `vigente_hasta`, `cuenta_stats`, `descripcion`, `proceso`, `planta`, `area_planta`, `orden_proceso`, `fila`, `unidad`, `fuente`, `estandar_por_bat`, `multiplicador`, `peso`, `factor`, `suma_eq` | `silver.factores_equ`, `equs_version`, `gold.secciones_reporte`, `filas_resumen_equ` |
+| `articulos` | item | `numero_articulo`, `descripcion`, `descripcion2`, `unidad_de_medida`, `linea_de_productos`, `linea_de_productos_descripcion`, `campo_equs`, `tipo_de_articulo`, `grpo`, `familia_placa`, `peso_neto`, `estado` | `silver.item_master`, `linea_de_productos` |
+| `equs_mensual` | month × driver of the version in force, 0 included | `mes`, `anio_fiscal`, `cuenta_id`, `version`, `cuenta_stats`, `descripcion`, `proceso`, `planta`, `area_planta`, `fila`, `unidad`, `cantidad`, `factor`, `equs`, `suma_eq` | `gold.v_resumen_equ`, for each month with receipts or invoices that a version covers |
+| `equs_batt_mensual` | month | `mes`, `anio_fiscal`, `equs_orec`, `equs_ensamble`, `equs_formacion`, `equs_decorado`, `equs_shipping`, `equs_batt` | `gold.v_equs_batt_mes` |
+| `equs_poly_mensual` | month × plastic account and category | `mes`, `anio_fiscal`, `cuenta`, `categoria`, `area_planta`, `fila`, `piezas`, `piezas_con_equ`, `factor_equ` (null when the category mixes factors), `equs` | `gold.v_reporte_qad`, warehouse 1010 |
+| `aporte_cuenta` | receipt or invoice line × driver it fed, under the version in force | `origen` (`recibo` or `factura`), `numero_de_transaccion` (receipts only), `documento` (transaction number, or `num_fact/orden/linea`), `fecha_efectiva`, `mes`, `anio_fiscal`, `numero_articulo`, `cuenta_id`, `version`, `cuenta_stats`, `proceso`, `regla_n`, `valor`, `factor`, `equs` = `valor` × `factor`, `suma_eq` | `gold.v_reporte_qad_regla`, `gold.v_unit_ship_regla` |
+| `recibos_produccion` | production receipt (`RCT-WO`) | `numero_de_transaccion`, `fecha_efectiva`, `mes`, `anio_fiscal`, `numero_articulo`, `articulo_descripcion`, `linea_de_productos`, `campo_equs`, `almac`, `linea_produccion`, `area_planta`, `cantidad`, `mat_activo`, `comp_deco`, `categoria_poly`, `cuenta_poly`, `factor_poly`, `equs_poly` | `gold.v_reporte_qad`, `silver.lineas_produccion` |
+| `calidad_datos_mensual` | month × data-quality check, 0 included | `mes`, `anio_fiscal`, `vista`, `descripcion`, `bloqueante`, `filas` | the six `gold.dq_*` views, by `fecha_efectiva` (by `mes` for check 6) |
+| `cierres` | close or reclose | `cierre_id`, `mes`, `anio_fiscal`, `cerrado_en`, `closed_by`, `recierre`, `advertencias_aceptadas`, `vigente` (the latest close of its month) | `gold.cierre_mes` |
+| `cierres_calidad` | close × check | `cierre_id`, `mes`, `vista`, `descripcion`, `bloqueante`, `filas` | `gold.cierre_mes.calidad_datos` |
+| `equs_cerrado` | closed month × driver | `mes`, `anio_fiscal`, `cuenta_id`, `version`, `cuenta_stats`, `descripcion`, `proceso`, `planta`, `area_planta`, `fila`, `unidad`, `cantidad`, `factor`, `equs`, `suma_eq`, `fecha_calculo`, `closed_by` | `gold.resumen_equ` |
+| `equs_cerrado_historial` | row a reclose replaced | `cierre_id`, `mes`, `anio_fiscal`, `cuenta_id`, `version`, `cuenta_stats`, `proceso`, `cantidad`, `factor`, `equs`, `suma_eq`, `fecha_calculo`, `closed_by` | `gold.resumen_equ_historial` |
+
+**Who can read them.** The group role `reporting_reader` (`NOLOGIN`) has `USAGE`
+on the schema and `SELECT` on every view, and no privilege on any other schema.
+
+- **The login.** `energy reporting create-reader` (or `make powerbi`) creates a
+  login in that role, named by `REPORTING_DB_USER` (default `powerbi`), with the
+  password `REPORTING_DB_PASSWORD`. Its sessions are read-only, it searches
+  `reporting` first, and each query is stopped after 10 minutes. The command
+  refuses to use a role that may do more than read.
+- **Cluster-wide roles.** Roles belong to the whole PostgreSQL cluster, not to
+  one database. So the migration creates the role only if it is missing, and the
+  downgrade drops it only once no other database still grants it something.
+- **A new view grants itself.** A revision that adds a view here must also grant
+  `SELECT` on it to `reporting_reader`.
+
+**With the FY26 workbooks.**
+
+- **Figures:** `equs_mensual` gives every month of EQUS_CONTEXT section 9.2 to
+  the cent; `aporte_cuenta` (134,833 rows) adds up to it exactly;
+  `recibos_produccion` holds the 138,773 receipts.
+- **Speed:** every view answers in under a second, except
+  `calidad_datos_mensual`, which takes about 3 seconds.
+
+---
+
+## `staging` — uploads while they are checked
+
+Created by [`0007_create_staging_schema.py`](../migrations/versions/0007_create_staging_schema.py);
+reasons and corrections added by
+[`0008_add_reasons_and_corrections.py`](../migrations/versions/0008_add_reasons_and_corrections.py);
+the commit added by
+[`0009_add_draft_commit.py`](../migrations/versions/0009_add_draft_commit.py).
+The API's `/api/drafts` routes write it ([api.md](api.md)); what a file is
+checked against is in [dataset-specs.md](dataset-specs.md#what-a-file-is-checked-against).
+
+A working area, not a layer of the medallion: nothing here is evidence, no
+foreign key points into Bronze, and nothing in Bronze points here. The schema
+belongs to the application's role; `PUBLIC` and `reporting_reader` have no
+privilege on it.
+
+### `staging.drafts`
+
+One upload of one `.xlsx` for one dataset spec.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| `draft_id` | `UUID` | no | Primary key. |
+| `dataset_key` | `VARCHAR(64)` | no | The spec, `config/datasets/<key>.yaml`. Not a foreign key: specs are files. |
+| `source_key` | `VARCHAR(64)` | no | The spec's Bronze source; one of the five EQUS keys. |
+| `plant_code` | `VARCHAR(32)` | no | `1515`. |
+| `input_mode` | `VARCHAR(10)` | no | `upload`, the only mode: data is entered and corrected in Excel ([ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)). |
+| `status` | `VARCHAR(20)` | no | `receiving` while the bytes arrive, `uploaded` once the original is archived, `validated` once checked, `failed` when the upload broke off or was refused, `committed` once landed in Bronze. |
+| `filename` | `TEXT` | no | The name the person gave, cleaned: last path segment, NFC, no control characters, 1 to 255 characters. Data only: never a key or a path. |
+| `content_type` | `VARCHAR(150)` | no | What the browser declared. Not trusted: the bytes are checked. |
+| `declared_bytes` | `BIGINT` | no | The upload's `Content-Length`. |
+| `size_bytes`, `content_hash` | `BIGINT`, `CHAR(64)` | yes | Size and SHA-256 of what arrived; null until then. |
+| `bucket`, `object_key` | `VARCHAR(63)`, `TEXT` | yes | Where the original is archived: `bronze-raw`, `1515/<source_key>/<YYYY>/<MM>/<DD>/<sha256>.xlsx`, the key the Bronze loader uses for the same bytes. |
+| `created_by`, `created_by_name` | `VARCHAR(64)`, `VARCHAR(200)` | no, yes | The person: Entra ID's subject (object ID), and their name for display. Only they see the draft. |
+| `created_at`, `uploaded_at`, `validated_at` | `TIMESTAMPTZ` | no, yes, yes | When the upload began, when the original was archived, when it was last checked. |
+| `expires_at` | `TIMESTAMPTZ` | no | When an abandoned draft is purged: 30 days after the last work on it (question 17 of the frontend plan). |
+| `failure_code` | `VARCHAR(64)` | yes | Why a `failed` upload failed: `file_too_large`, `unsupported_file_format`, `incomplete_upload`, `client_disconnected`, `source_unavailable`. |
+| `sheet_name`, `header_row`, `rows_read`, `rows_with_errors`, `rows_with_warnings` | | yes | What the last check found. |
+| `spec_digest` | `CHAR(64)` | yes | SHA-256 of the spec the last check used; a correction is compared with its earlier draft only under the same one. |
+| `previous_draft_id` | `UUID` | yes | For a correction, the draft whose file it corrects. Not a foreign key: the earlier draft may be purged first, and the correction still says there was one. Never the draft itself. |
+| `sheet_names` | `TEXT[]` | yes | Every sheet of the workbook, read by the check; `raw_files.sheet_names` at the commit. |
+| `window_start`, `window_end` | `DATE` | yes | The first and last date of the dataset's period column, found by the check as the loader finds them. Null for a catalogue. |
+| `export_info`, `search_conditions` | `JSONB` | yes | The export's *Info* sheet as a name-to-value object, and its *Condiciones de búsqueda* rows, read by the check as the loader reads them. Empty for a workbook without them; null for a draft checked before revision 0009, which the commit checks again. |
+| `run_id`, `committed_at` | `UUID`, `TIMESTAMPTZ` | yes | The load in `bronze.ingestion_runs`, and when. Not a foreign key: staging points into Bronze by value only. |
+
+**Constraints:** the statuses, input modes and source keys above; the hash and
+digest formats; `uploaded`, `validated` and `committed` drafts know their size,
+hash, bucket and key; a `validated` or `committed` draft knows when and how
+many rows; the row counts are consistent; a draft does not correct itself; a
+draft is `committed` exactly when it has a `run_id` and a `committed_at`; the
+window is ordered; `export_info` is an object and `search_conditions` an array.
+**Indexes:** `(created_by, created_at DESC)`, `expires_at`, `content_hash`,
+`previous_draft_id`, `run_id`.
+
+A committed draft keeps its issues and counts for 30 days, then is purged like
+any other. The downgrade of revision 0009 refuses while a committed draft
+exists.
+
+### `staging.draft_rows`
+
+The rows of a checked file exactly as Bronze would land them, from the same
+rules (`energy.domain.landing`): `(draft_id, source_row)` as key,
+`content_hash` (SHA-256 of the canonical payload) and `payload` (JSONB object).
+Written by the check, for files the API checks itself (up to 5 MiB), and
+removed by the commit, in its transaction, once Bronze holds them.
+
+### `staging.draft_issues`
+
+The first 1,000 issues of each rule in each column.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| `issue_id` | `BIGINT` | no | Identity. |
+| `draft_id` | `UUID` | no | The draft; removing it removes its issues. |
+| `rule_id` | `VARCHAR(40)` | no | The rule, for example `cell.type` ([the list](dataset-specs.md#what-a-file-is-checked-against)). |
+| `severity` | `VARCHAR(10)` | no | `error`, `warning` or `info`. |
+| `source_row` | `INTEGER` | yes | The Excel row; null for the file as a whole. |
+| `column_index` | `INTEGER` | yes | The 0-based Excel column (0 is A); null when not in one column. |
+| `column_key` | `TEXT` | yes | The column's payload key. |
+| `value` | `TEXT` | yes | The text found, at most 200 characters. |
+| `params` | `JSONB` | no | What the message needs: the pattern, the allowed values, the bounds. |
+| `reasons` | `JSONB` | no | The likely reasons, most likely first, as an array of `{"id", "params"}`; the last is the rule's own ([reasons](dataset-specs.md#reasons-and-fixes)). `[]` for an issue stored before revision 0008: it is read as its rule's own. |
+| `reason_id` | `VARCHAR(60)` | yes | The first reason, for the list's filter. |
+| `match_key` | `VARCHAR(64)` | yes | The identity of the issue's row, to match it in a correction: `key:` and a digest of the row's natural key (case, spaces and accents ignored) with its occurrence, or `row:` and the row number. Null for the file or its header. |
+
+**Indexes:** `(draft_id, source_row, column_index)` for the list in order,
+`(draft_id, severity, rule_id)` for its filters, `(draft_id, reason_id)`, and
+`(draft_id, rule_id, column_key, match_key)` for matching a correction's issues.
+
+### `staging.draft_rule_counts`
+
+Every issue, counted: `(draft_id, rule_id, column_key)` as key (`column_key`
+empty for the file as a whole), `severity`, `rows_affected` (every row that
+broke the rule) and `issues_listed` (how many of them `draft_issues` holds).
+
+### `staging.draft_reason_counts`
+
+The same rows by their first reason: `(draft_id, rule_id, column_key,
+reason_id)` as key and `rows_affected`. They add up to the rule's
+`rows_affected`. Removing a draft removes them.
 
 ---
 

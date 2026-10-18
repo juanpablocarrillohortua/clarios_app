@@ -1,0 +1,706 @@
+{
+  "app": {
+    "name": "Clarios Energy"
+  },
+  "nav": {
+    "label": "Secciones",
+    "toggle": "Abrir o cerrar el menú",
+    "dashboard": "Tablero",
+    "loads": "Carga de datos"
+  },
+  "dashboard": {
+    "title": "Tablero",
+    "preparing": "Preparando el informe…",
+    "loading": "Cargando el informe…",
+    "slow": "Power BI aún no ha mostrado el informe. Si el recuadro de abajo sigue vacío, revise su conexión e intente de nuevo.",
+    "reportTitle": "Informe de Power BI",
+    "openInPowerBi": "Abrir en Power BI",
+    "fullscreen": "Pantalla completa",
+    "problem": {
+      "code": "Código: {{code}}",
+      "requestId": "Solicitud de Power BI: {{id}}",
+      "notConfigured": {
+        "title": "Informe no configurado",
+        "text": "El servidor no tiene configurado el informe de Power BI. Avise a un administrador."
+      },
+      "authorize": {
+        "title": "Power BI necesita su confirmación",
+        "text": "Microsoft debe confirmar su acceso a Power BI antes de mostrar el informe.",
+        "action": "Continuar con Microsoft"
+      },
+      "token": {
+        "title": "No se pudo obtener acceso a Power BI",
+        "text": "Microsoft no entregó el permiso para leer el informe, o Power BI no lo aceptó. Intente de nuevo; si el problema continúa, avise a un administrador."
+      },
+      "noAccess": {
+        "title": "Sin acceso al informe",
+        "text": "Su cuenta no tiene acceso al área de trabajo de Power BI donde está el informe. Pida a un administrador que se lo dé.",
+        "hint": "Si se lo acaban de dar, abra Power BI una vez y vuelva a intentarlo.",
+        "open": "Abrir Power BI"
+      },
+      "refused": {
+        "title": "Power BI no permitió abrir el informe",
+        "text": "Para ver el informe, su cuenta necesita acceso al área de trabajo y una licencia de Power BI. Pida a un administrador que revise ambas."
+      },
+      "notFound": {
+        "title": "Informe no encontrado",
+        "text": "El informe configurado no existe en Power BI o fue movido. Avise a un administrador."
+      },
+      "unreachable": {
+        "title": "Power BI no responde",
+        "text": "No fue posible comunicarse con Power BI. Revise su conexión e intente de nuevo en unos minutos."
+      },
+      "failed": {
+        "title": "No se pudo mostrar el informe",
+        "text": "Power BI informó un error al abrir el informe. Intente de nuevo; si el problema continúa, avise a un administrador con el código que aparece abajo."
+      }
+    }
+  },
+  "loads": {
+    "title": "Carga de datos",
+    "intro": "Elija qué datos va a cargar y suba el archivo. Antes de que nada llegue a la base de datos, se revisa contra la plantilla.",
+    "dataset": {
+      "heading": "Datos que va a cargar",
+      "sheet": "Hoja «{{sheet}}» · {{count}} columnas",
+      "template": "Descargar plantilla",
+      "templateHint": "La plantilla tiene exactamente las columnas que se esperan.",
+      "templateFailed": "No se pudo descargar la plantilla. Intente de nuevo.",
+      "loading": "Cargando los conjuntos de datos…",
+      "failed": "No se pudo obtener la lista de conjuntos de datos.",
+      "none": "Todavía no hay conjuntos de datos para cargar.",
+      "lastLoad": "Última carga: {{when}}"
+    },
+    "file": {
+      "heading": "Archivo",
+      "drop": "Arrastre aquí el archivo .xlsx",
+      "dropping": "Suelte el archivo para elegirlo",
+      "choose": "Elegir archivo",
+      "chooseAnother": "Elegir otro archivo",
+      "limits": "Hasta {{max}} · solo .xlsx",
+      "tooLarge": "Este archivo pesa {{size}}; el máximo es {{max}}.",
+      "notXlsx": "Solo se aceptan archivos .xlsx. Si tiene un .xls o un .csv, ábralo en Excel y guárdelo como «Libro de Excel (.xlsx)».",
+      "empty": "El archivo está vacío.",
+      "large": "Los archivos de más de {{limit}} se guardan, pero todavía no se validan.",
+      "upload": "Subir y validar",
+      "uploadOnly": "Subir"
+    },
+    "upload": {
+      "label": "Progreso de la carga",
+      "progress": "{{sent}} de {{total}} · {{percent}} %",
+      "remainingMinutes_one": "queda alrededor de {{count}} minuto",
+      "remainingMinutes_other": "quedan alrededor de {{count}} minutos",
+      "remainingSoon": "falta menos de un minuto",
+      "announce": "Carga al {{percent}} %",
+      "archiving": "Guardando el archivo…",
+      "cancel": "Cancelar",
+      "cancelled": "Carga cancelada. El archivo sigue elegido: puede subirlo de nuevo.",
+      "failed": "La carga se interrumpió. Revise su conexión e intente de nuevo.",
+      "tooLargeForServer": "El servidor no aceptó el archivo por su tamaño. Avise a un administrador.",
+      "refused": "El servidor no aceptó el archivo (código: {{code}}).",
+      "sessionRefused": "Su sesión ya no es válida. Recargue la página e inicie sesión de nuevo."
+    },
+    "draft": {
+      "loading": "Cargando el archivo subido…",
+      "missing": "Este archivo subido no existe o ya no está disponible. Los archivos que no se cargan se guardan 30 días.",
+      "failed": "No se pudo obtener el archivo subido.",
+      "unfinished": "La carga de este archivo no terminó. Súbalo de nuevo.",
+      "file": "{{name}} · {{size}}",
+      "validating": "Validando el archivo…",
+      "validate": "Validar",
+      "validateFailed": "No se pudo validar el archivo. Intente de nuevo.",
+      "busy": "El archivo se está validando en otra pestaña. Espere un momento e intente de nuevo.",
+      "archivedTitle": "Archivo guardado",
+      "notValidated": "La validación de archivos de más de {{limit}} llegará en una próxima versión. El archivo quedó guardado y no se cargó.",
+      "another": "Subir otro archivo"
+    },
+    "result": {
+      "blocking_one": "El archivo tiene {{rows}} fila con errores que impiden cargarlo.",
+      "blocking_other": "El archivo tiene {{rows}} filas con errores que impiden cargarlo.",
+      "fileBlocking": "El archivo tiene un problema que impide cargarlo.",
+      "warnings_one": "Sin errores · {{rows}} fila con advertencias.",
+      "warnings_other": "Sin errores · {{rows}} filas con advertencias.",
+      "clean": "El archivo cumple todas las reglas.",
+      "rowsRead": "Filas leídas",
+      "rowsWithErrors": "Con errores",
+      "rowsWithWarnings": "Con advertencias"
+    },
+    "issues": {
+      "heading": "Problemas encontrados",
+      "severityFilter": "Gravedad",
+      "allCount": "Todos ({{n}})",
+      "errorCount": "Errores ({{n}})",
+      "warningCount": "Advertencias ({{n}})",
+      "infoCount": "Información ({{n}})",
+      "rule": "Regla",
+      "anyRule": "Todas las reglas",
+      "column": "Columna",
+      "anyColumn": "Todas las columnas",
+      "row": "Fila",
+      "value": "Valor",
+      "detail": "Detalle",
+      "severity": "Gravedad",
+      "wholeFile": "Archivo",
+      "rowOnly": "Fila {{row}}",
+      "empty": "vacío",
+      "expected": "Formato esperado: {{pattern}}",
+      "range": "{{from}}–{{to}} de {{total}}",
+      "previous": "Anterior",
+      "next": "Siguiente",
+      "none": "Ninguna regla encontró problemas.",
+      "noMatch": "Ningún caso con estos filtros.",
+      "clearFilters": "Quitar filtros",
+      "failed": "No se pudo obtener la lista de problemas.",
+      "capped": "En la columna «{{column}}», «{{rule}}» afecta a {{rows}} filas; se muestran las primeras {{listed}}.",
+      "unknownRule": "Regla {{rule}}",
+      "cell": "Celda",
+      "causeAndFix": "Causa y solución",
+      "otherCauses_one": "Otra causa posible",
+      "otherCauses_other": "Otras {{count}} causas posibles",
+      "new": "Nuevo",
+      "change": "Cambio",
+      "anyChange": "Todos",
+      "changeNew": "Nuevos",
+      "changeRemaining": "Pendientes"
+    },
+    "severity": {
+      "error": "Error",
+      "warning": "Advertencia",
+      "info": "Información"
+    },
+    "types": {
+      "text": "un texto",
+      "integer": "un número entero",
+      "decimal": "un número",
+      "date": "una fecha de Excel"
+    },
+    "range": {
+      "both": "entre {{min}} y {{max}}",
+      "min": "como mínimo {{min}}",
+      "max": "como máximo {{max}}"
+    },
+    "unreadable": {
+      "not_a_zip": "El archivo no es un libro de Excel, aunque su nombre termine en .xlsx.",
+      "corrupt": "El archivo está dañado o incompleto. Ábralo en Excel, guárdelo de nuevo y vuelva a subirlo.",
+      "not_a_spreadsheet": "El archivo no es una hoja de cálculo de Excel.",
+      "macros": "El archivo tiene macros. Guárdelo como «Libro de Excel (.xlsx)», sin macros."
+    },
+    "rules": {
+      "file": {
+        "unreadable": {
+          "name": "Archivo ilegible",
+          "message": "El archivo no se puede leer como libro de Excel (.xlsx)."
+        },
+        "too_many_parts": {
+          "name": "Demasiadas partes",
+          "message": "El archivo tiene {{found}} partes internas; el máximo es {{limit}}."
+        },
+        "content_too_large": {
+          "name": "Contenido demasiado grande",
+          "message": "Abierto, el archivo ocuparía {{found_bytes}}; el máximo es {{limit_bytes}}."
+        },
+        "shared_strings_too_large": {
+          "name": "Demasiado texto",
+          "message": "El texto del archivo ocupa {{found_bytes}} al abrirlo; el máximo es {{limit_bytes}}."
+        },
+        "sheet_missing": {
+          "name": "Falta la hoja",
+          "message": "El archivo no tiene la hoja «{{sheet}}». Hojas encontradas: {{sheets}}."
+        },
+        "header_row_empty": {
+          "name": "Sin encabezados",
+          "message": "La fila {{row}} debería tener los encabezados y está vacía."
+        },
+        "no_rows": {
+          "name": "Sin filas",
+          "message": "La hoja «{{sheet}}» no tiene filas de datos debajo de los encabezados."
+        }
+      },
+      "schema": {
+        "header_mismatch": {
+          "name": "Encabezado distinto",
+          "message": "La columna se llama «{{found}}», pero la plantilla la llama «{{expected}}». Corrija el encabezado: con otro nombre, la columna no se usaría."
+        },
+        "column_missing": {
+          "name": "Falta una columna",
+          "message": "Falta la columna «{{header}}» de la plantilla."
+        },
+        "column_unknown": {
+          "name": "Columna desconocida",
+          "message": "La columna «{{header}}» no está en la plantilla. Sus valores se guardan, pero no se usan."
+        }
+      },
+      "cell": {
+        "required": {
+          "name": "Valor obligatorio",
+          "message": "Falta el valor; esta columna es obligatoria."
+        },
+        "type": {
+          "name": "Tipo de dato",
+          "message": "El valor no es {{type}}."
+        },
+        "pattern": {
+          "name": "Formato",
+          "message": "El valor no tiene el formato de esta columna."
+        },
+        "allowed": {
+          "name": "Valor no permitido",
+          "message": "El valor no es uno de los permitidos: {{allowed}}."
+        },
+        "range": {
+          "name": "Fuera de rango",
+          "message": "El valor debe estar {{range}}."
+        },
+        "text_damaged": {
+          "name": "Texto dañado",
+          "message": "El texto parece dañado por Excel o por un copiar y pegar."
+        }
+      }
+    },
+    "characters": {
+      "nbsp": "espacio de no separación",
+      "tab": "tabulación",
+      "zero_width": "carácter de ancho cero",
+      "line_break": "salto de línea",
+      "control": "carácter de control"
+    },
+    "differences": {
+      "case": "las mayúsculas",
+      "accent": "una tilde",
+      "spaces": "los espacios",
+      "several": "mayúsculas, tildes o espacios"
+    },
+    "reasons": {
+      "row": {
+        "header_repeated": {
+          "why": "La fila {{row}} repite los encabezados: es una fila de títulos pegada dentro de los datos.",
+          "fix": "Elimine la fila {{row}} completa: clic derecho en el número de la fila y Eliminar."
+        }
+      },
+      "date": {
+        "typed_as_text": {
+          "why": "La fecha está escrita como texto, no como una fecha de Excel.",
+          "fix": "Seleccione la columna {{column}} y use Datos > Texto en columnas > Siguiente > Siguiente, elija «Fecha: DMA» y Finalizar. O escriba la fecha de nuevo en una celda con formato Fecha."
+        },
+        "lost_format": {
+          "why": "El número {{value}} es la fecha {{date}} sin formato de fecha.",
+          "fix": "Seleccione la columna {{column}} y elija Inicio > Número > Fecha corta."
+        }
+      },
+      "number": {
+        "text_with_separators": {
+          "why": "El número está guardado como texto, con separadores de miles o con coma decimal.",
+          "fix": "Seleccione las celdas, haga clic en el aviso «Número almacenado como texto» y elija «Convertir en número». Si el aviso no aparece, use Inicio > Buscar y seleccionar > Reemplazar para quitar los separadores de miles."
+        }
+      },
+      "code": {
+        "scientific_notation": {
+          "why": "Excel convirtió el código en número y lo muestra en notación científica: los últimos dígitos ya se perdieron.",
+          "fix": "Dé formato Texto a la columna {{column}} (Inicio > Número > Texto) y vuelva a pegar los códigos desde el sistema de origen. Cambiar solo el formato no recupera los dígitos perdidos."
+        },
+        "trailing_zero_decimal": {
+          "why": "Excel convirtió el código en número y le agregó «.0» al final.",
+          "fix": "Dé formato Texto a la columna {{column}} (Inicio > Número > Texto) y escriba el código sin «.0», o péguelo de nuevo desde el sistema de origen."
+        },
+        "lost_leading_zeros": {
+          "why": "Excel convirtió el código en número y le quitó los ceros a la izquierda: el código lleva {{digits}} dígitos.",
+          "fix": "Dé formato Texto a la columna {{column}} (Inicio > Número > Texto) y escriba de nuevo el código completo, con sus ceros a la izquierda."
+        }
+      },
+      "text": {
+        "lowercase": {
+          "why": "El valor está en minúsculas y esta columna usa mayúsculas.",
+          "fix": "Escríbalo en mayúsculas. Para muchas celdas, use =MAYUSC({{cell}}) en una columna auxiliar y pegue el resultado con Pegado especial > Valores."
+        },
+        "invisible_characters": {
+          "why": "El valor tiene caracteres invisibles que deja un copiar y pegar: {{characters}}.",
+          "fix": "Use Inicio > Buscar y seleccionar > Reemplazar: en «Buscar», mantenga presionada la tecla Alt y escriba 0160 en el teclado numérico; deje «Reemplazar con» vacío y elija «Reemplazar todos». Para tabulaciones y saltos de línea, use =LIMPIAR({{cell}}) en una columna auxiliar y pegue como valores."
+        },
+        "wrong_encoding": {
+          "why": "El texto se leyó con otra codificación: por eso aparecen signos como «Ã³» en lugar de letras como «ó».",
+          "repaired": "Debería decir «{{repaired}}».",
+          "fix": "El texto pasó por un archivo CSV abierto con otra codificación. Ábralo de nuevo con Datos > Obtener datos > Desde el texto/CSV, elija «65001: Unicode (UTF-8)» en «Origen del archivo», cargue los datos y guarde el libro como .xlsx."
+        }
+      },
+      "allowed": {
+        "near_match": {
+          "why": "Probablemente quiso escribir «{{suggestion}}»: solo cambian las mayúsculas, los espacios o las tildes.",
+          "fix": "Escriba «{{suggestion}}» exactamente, o elíjalo en la lista desplegable de la columna; la plantilla la trae."
+        }
+      },
+      "header": {
+        "near_match": {
+          "why": "El encabezado «{{found}}» se diferencia de «{{expected}}» solo en {{difference}}, y con otro nombre la columna no se usaría.",
+          "fix": "Escriba el encabezado de la celda {{cell}} exactamente como «{{expected}}». Lo más seguro es copiarlo de la plantilla."
+        },
+        "similar": {
+          "why": "Probablemente es la columna «{{found}}», con el encabezado mal escrito.",
+          "fix": "Corrija el encabezado «{{found}}» para que diga exactamente «{{header}}». Lo más seguro es copiarlo de la plantilla."
+        }
+      },
+      "sheet": {
+        "near_match": {
+          "why": "Probablemente es la hoja «{{found}}», con otro nombre.",
+          "fix": "Cambie el nombre de la hoja «{{found}}» a «{{sheet}}»: doble clic en su pestaña, escriba el nombre y presione Enter."
+        }
+      },
+      "unreadable": {
+        "macros": {
+          "why": "El libro tiene macros.",
+          "fix": "Use Archivo > Guardar como, elija el tipo «Libro de Excel (*.xlsx)» y suba ese archivo."
+        },
+        "corrupt": {
+          "why": "El archivo está dañado o incompleto.",
+          "fix": "Ábralo en Excel; si ofrece repararlo, acepte. Luego use Archivo > Guardar como > «Libro de Excel (*.xlsx)» y súbalo de nuevo."
+        },
+        "not_a_spreadsheet": {
+          "why": "El archivo es un documento de Office, pero no un libro de Excel.",
+          "fix": "Abra el libro con los datos en Excel y guárdelo con Archivo > Guardar como > «Libro de Excel (*.xlsx)»."
+        },
+        "not_a_zip": {
+          "why": "El archivo no es un libro .xlsx, aunque su nombre lo diga: puede ser un CSV o un libro antiguo (.xls) con el nombre cambiado.",
+          "fix": "Ábralo en Excel y use Archivo > Guardar como > «Libro de Excel (*.xlsx)»."
+        }
+      },
+      "default": {
+        "file": {
+          "unreadable": {
+            "fix": "Ábralo en Excel y guárdelo con Archivo > Guardar como > «Libro de Excel (*.xlsx)»."
+          },
+          "too_many_parts": {
+            "fix": "Pase la hoja de datos a un libro nuevo: clic derecho en su pestaña > Mover o copiar > «(nuevo libro)», marque «Crear una copia», y guarde ese libro como .xlsx."
+          },
+          "content_too_large": {
+            "fix": "Pase la hoja de datos a un libro nuevo (clic derecho en su pestaña > Mover o copiar > «(nuevo libro)»), quite las fórmulas con Pegado especial > Valores y guárdelo como .xlsx."
+          },
+          "shared_strings_too_large": {
+            "fix": "Pase la hoja de datos a un libro nuevo (clic derecho en su pestaña > Mover o copiar > «(nuevo libro)») y elimine las columnas de texto que no estén en la plantilla."
+          },
+          "sheet_missing": {
+            "fix": "Cambie el nombre de la hoja con los datos a «{{sheet}}» (doble clic en su pestaña), o copie los datos a la plantilla."
+          },
+          "header_row_empty": {
+            "fix": "Inserte o elimine filas para que los encabezados queden en la fila {{row}}, como en la plantilla."
+          },
+          "no_rows": {
+            "fix": "Pegue los datos debajo de los encabezados, desde la fila siguiente."
+          }
+        },
+        "schema": {
+          "header_mismatch": {
+            "fix": "Escriba el encabezado de la celda {{cell}} exactamente como «{{expected}}»."
+          },
+          "column_missing": {
+            "fix": "Agregue la columna «{{header}}» con ese encabezado exacto; puede copiarla de la plantilla."
+          },
+          "column_unknown": {
+            "fix": "Si la columna sobra, elimínela: clic derecho en la letra {{column}} > Eliminar. Si es una columna de la plantilla, corrija su encabezado."
+          }
+        },
+        "cell": {
+          "required": {
+            "fix": "Escriba el valor en la celda {{cell}}."
+          },
+          "type": {
+            "fix": "Escriba en la celda {{cell}} {{type}}, sin letras ni símbolos que sobren."
+          },
+          "pattern": {
+            "fix": "Escriba el valor de la celda {{cell}} con el mismo formato que las demás filas de la columna."
+          },
+          "allowed": {
+            "fix": "Escriba en la celda {{cell}} uno de los valores permitidos: {{allowed}}. La lista desplegable de la plantilla los trae."
+          },
+          "range": {
+            "fix": "Corrija el valor de la celda {{cell}}: debe estar {{range}}."
+          },
+          "text_damaged": {
+            "fix": "Revise la celda {{cell}} y escriba de nuevo su valor."
+          }
+        }
+      }
+    },
+    "correction": {
+      "upload": "Subir archivo corregido",
+      "hint": "Corrija el archivo en Excel y súbalo de nuevo: se compara con este y verá qué se corrigió.",
+      "dropping": "Suelte el archivo para subirlo como corrección",
+      "same": "Es el mismo archivo que subió antes: no cambió nada."
+    },
+    "comparison": {
+      "cleared_one": "Se corrigió {{n}} problema",
+      "cleared_other": "Se corrigieron {{n}} problemas",
+      "noneCleared": "No se corrigió ningún problema",
+      "remaining_one": "queda {{n}}",
+      "remaining_other": "quedan {{n}}",
+      "new_one": "{{n}} nuevo",
+      "new_other": "{{n}} nuevos",
+      "allFixed_one": "Se corrigió el problema del archivo anterior.",
+      "allFixed_other": "Se corrigieron los {{n}} problemas del archivo anterior.",
+      "unchanged": "Los problemas son los mismos que en el archivo anterior.",
+      "clearedLabel": "Corregidos",
+      "remainingLabel": "Pendientes",
+      "newLabel": "Nuevos",
+      "against": "Comparado con «{{name}}», validado el {{when}}.",
+      "revalidated": "El archivo anterior se volvió a validar con las reglas actuales.",
+      "byCount": "En la columna «{{column}}», «{{rule}}»: antes {{before}}, ahora {{after}}. Son demasiados para compararlos uno a uno.",
+      "previousGone": "El archivo anterior ya no está disponible: se muestran solo los problemas de este archivo.",
+      "previousNotValidated": "El archivo anterior no se validó, así que no hay con qué comparar.",
+      "rulesChanged": "Las reglas cambiaron desde el archivo anterior y no se pudo validar de nuevo: los problemas no se comparan uno a uno.",
+      "showCleared_one": "Ver el problema corregido",
+      "showCleared_other": "Ver los {{n}} problemas corregidos",
+      "hideCleared": "Ocultar los problemas corregidos",
+      "clearedHeading": "Problemas corregidos",
+      "clearedFailed": "No se pudo obtener la lista de problemas corregidos.",
+      "before": "Antes"
+    },
+    "copy": {
+      "button": "Copiar para Excel",
+      "copying": "Copiando…",
+      "done_one": "Copiado: {{n}} problema. Péguelo en una hoja nueva de Excel.",
+      "done_other": "Copiado: {{n}} problemas. Péguelo en una hoja nueva de Excel.",
+      "failed": "No se pudo copiar. Intente de nuevo.",
+      "columns": {
+        "severity": "Gravedad",
+        "cell": "Celda",
+        "column": "Columna",
+        "value": "Valor",
+        "rule": "Regla",
+        "cause": "Causa",
+        "fix": "Solución",
+        "change": "Cambio"
+      }
+    },
+    "tabs": {
+      "label": "Carga de datos",
+      "new": "Nueva carga",
+      "history": "Historial"
+    },
+    "confirm": {
+      "loading": "Preparando la confirmación…",
+      "failed": "No se pudo preparar la confirmación.",
+      "ready_one": "Listo para cargar: {{rows}} fila en {{dataset}}.",
+      "ready_other": "Listo para cargar: {{rows}} filas en {{dataset}}.",
+      "period": "Período del archivo: del {{from}} al {{to}}.",
+      "overlapping_one": "Ya hay una carga que cubre parte de este período:",
+      "overlapping_other": "Ya hay {{count}} cargas que cubren parte de este período:",
+      "overlappingLoad": "«{{file}}», del {{from}} al {{to}}, cargada el {{when}}",
+      "overlappingRule": "Las filas con la misma clave se reemplazan con las de este archivo; las que no estén en él se quedan como están.",
+      "current": "Comparado con la versión actual: «{{file}}», cargada el {{when}}.",
+      "firstVersion": "Es la primera versión de este catálogo: todas sus filas son nuevas.",
+      "added": "Agregadas",
+      "changed": "Cambiadas",
+      "removed": "Quitadas",
+      "unchanged": "Sin cambios",
+      "warningsTitle": "Advertencias que acepta al confirmar",
+      "warningLine_one": "{{rule}} en «{{column}}»: {{rows}} fila",
+      "warningLine_other": "{{rule}} en «{{column}}»: {{rows}} filas",
+      "warningFile_one": "{{rule}}: {{rows}} fila",
+      "warningFile_other": "{{rule}}: {{rows}} filas",
+      "accept_one": "Revisé la fila con advertencias y quiero cargar el archivo con ella.",
+      "accept_other": "Revisé las {{n}} filas con advertencias y quiero cargar el archivo con ellas.",
+      "acceptFirst": "Marque la casilla para confirmar con advertencias.",
+      "confirm": "Confirmar carga",
+      "confirming": "Confirmando…",
+      "writing_one": "Escribiendo {{rows}} fila en la base de datos…",
+      "writing_other": "Escribiendo {{rows}} filas en la base de datos…",
+      "noCancel": "La confirmación no se detiene a medias: termina en segundos, y repetirla es seguro.",
+      "alreadyLoaded": "Este archivo ya se cargó: no se carga dos veces.",
+      "seeLoad": "Ver la carga",
+      "check": "Comprobar",
+      "retry": "Intentar de nuevo",
+      "errors": {
+        "validationChanged": "El archivo se validó de nuevo y el resultado cambió: revíselo antes de confirmar.",
+        "currentVersionChanged": "Otra carga de este catálogo se confirmó mientras tanto: revise los cambios de nuevo.",
+        "datasetBusy": "Otra carga de este conjunto se está confirmando. Intente de nuevo en un momento.",
+        "draftBusy": "Este archivo se está confirmando o validando en otra pestaña. Compruebe en un momento.",
+        "originalMissing": "El archivo guardado ya no está disponible. Súbalo de nuevo.",
+        "unknown": "No se sabe si la carga se completó: la conexión se cortó antes de la respuesta.",
+        "failed": "No se pudo confirmar la carga."
+      }
+    },
+    "committed": {
+      "title": "Carga confirmada",
+      "rows_one": "{{rows}} fila escrita en la base de datos.",
+      "rows_other": "{{rows}} filas escritas en la base de datos.",
+      "when": "Confirmada el {{when}}.",
+      "id": "Identificador: {{id}}",
+      "figures": "El tablero mostrará estos datos cuando se actualicen las cifras, en una próxima versión.",
+      "detail": "Ver el detalle",
+      "history": "Ver el historial"
+    },
+    "difference": {
+      "show": "Ver los cambios",
+      "label": "Tipo de cambio",
+      "added": "Agregadas ({{n}})",
+      "changed": "Cambiadas ({{n}})",
+      "removed": "Quitadas ({{n}})",
+      "key": "Clave",
+      "row": "Fila",
+      "what": "Qué cambió",
+      "values": "Valores",
+      "change": "{{column}}: {{before}} → {{after}}",
+      "value": "{{column}}: {{value}}",
+      "empty": "vacío",
+      "none": "Ninguna fila con este cambio.",
+      "failed": "No se pudo obtener la lista de cambios.",
+      "removedRows": {
+        "kept": "Quitadas: dejan de cargarse, pero Silver conserva las que ya conoce.",
+        "dropped": "Quitadas: desaparecen de Silver en la próxima actualización de las cifras."
+      }
+    }
+  },
+  "datasets": {
+    "kind": {
+      "snapshot": "Catálogo",
+      "movement": "Movimientos"
+    },
+    "lineas_produccion": {
+      "name": "Líneas de producción",
+      "description": "Catálogo de las líneas de producción: hoja «Lineas Produccion» del libro EQUS BATT.",
+      "removedRows": "Quitadas: dejan de estar en el catálogo, pero Silver no las borra. Una línea con recibos de producción queda sin descripción, almacén ni unidades por hora; una sin recibos conserva sus datos anteriores."
+    },
+    "qad_facturas": {
+      "name": "Unidades facturadas",
+      "description": "Exportación de QAD con las líneas de factura: hoja «Datos»."
+    }
+  },
+  "notFound": {
+    "title": "Página no encontrada",
+    "text": "La dirección no corresponde a ninguna sección.",
+    "back": "Ir al tablero"
+  },
+  "api": {
+    "checking": "Comprobando el servicio…",
+    "online": "Servicio en línea · versión {{version}}",
+    "offline": "Sin conexión con el servicio"
+  },
+  "session": {
+    "starting": "Iniciando…",
+    "redirecting": "Abriendo el inicio de sesión de Microsoft…"
+  },
+  "signIn": {
+    "title": "Iniciar sesión",
+    "text": "Para usar la aplicación, inicie sesión con su cuenta de Microsoft.",
+    "signedOut": "Cerró la sesión. Puede cerrar esta pestaña o iniciar sesión de nuevo.",
+    "failed": "No se pudo completar el inicio de sesión. Intente de nuevo.",
+    "errorCode": "Código del error: {{code}}",
+    "action": "Iniciar sesión"
+  },
+  "user": {
+    "signOut": "Cerrar sesión"
+  },
+  "noAccess": {
+    "title": "Sin acceso",
+    "text": "Su cuenta no tiene permisos en esta aplicación. Pida a un administrador que le asigne un rol.",
+    "account": "Cuenta: {{account}}"
+  },
+  "forbidden": {
+    "title": "Sin permiso",
+    "text": "Su cuenta no tiene permiso para abrir esta sección.",
+    "back": "Ir al inicio"
+  },
+  "problem": {
+    "retry": "Reintentar",
+    "notConfigured": {
+      "title": "Inicio de sesión no configurado",
+      "text": "El servidor no tiene configurado el inicio de sesión. Avise a un administrador."
+    },
+    "unreachable": {
+      "title": "Servicio no disponible",
+      "text": "No fue posible comunicarse con el servicio. Intente de nuevo en unos minutos."
+    },
+    "cannotStart": {
+      "title": "No se pudo preparar el inicio de sesión",
+      "text": "Abra la aplicación con la dirección que le indicó su administrador. Si el problema continúa, avísele."
+    },
+    "sessionRefused": {
+      "title": "Sesión no aceptada",
+      "text": "El servicio no aceptó su sesión. Inicie sesión de nuevo."
+    }
+  },
+  "history": {
+    "intro": "Todo lo que se cargó en la base de datos, desde esta aplicación o desde la línea de comandos.",
+    "loading": "Cargando el historial…",
+    "failed": "No se pudo obtener el historial.",
+    "empty": "Todavía no hay cargas.",
+    "emptyAction": "Hacer la primera carga",
+    "noMatch": "Ninguna carga con estos filtros.",
+    "clearFilters": "Quitar filtros",
+    "range": "{{from}}–{{to}} de {{total}}",
+    "previous": "Anterior",
+    "next": "Siguiente",
+    "filters": {
+      "dataset": "Conjunto",
+      "anyDataset": "Todos los conjuntos",
+      "state": "Estado",
+      "anyState": "Todos",
+      "person": "Persona",
+      "anyPerson": "Todas",
+      "mine": "Mis cargas",
+      "origin": "Origen",
+      "anyOrigin": "Todos",
+      "more": "Más filtros",
+      "periodFrom": "Período desde",
+      "periodTo": "Período hasta",
+      "from": "Cargada desde",
+      "to": "Cargada hasta"
+    },
+    "columns": {
+      "when": "Fecha",
+      "dataset": "Conjunto",
+      "file": "Archivo",
+      "rows": "Filas",
+      "warnings": "Advertencias aceptadas",
+      "state": "Estado",
+      "person": "Persona",
+      "origin": "Origen"
+    },
+    "states": {
+      "pending": "Pendiente",
+      "running": "En curso",
+      "completed": "Completada",
+      "failed": "Fallida",
+      "cancelled": "Anulada"
+    },
+    "origins": {
+      "app": "Aplicación",
+      "cli": "Línea de comandos"
+    },
+    "commandLine": "Línea de comandos",
+    "sheets": "Hojas: {{names}}",
+    "noFile": "Sin archivo"
+  },
+  "load": {
+    "back": "Volver al historial",
+    "loading": "Cargando la carga…",
+    "missing": "Esta carga no existe o no es de su planta.",
+    "failed": "No se pudo obtener la carga.",
+    "rowsWritten": "Filas escritas",
+    "warningsAccepted": "Advertencias aceptadas",
+    "facts": {
+      "id": "Identificador",
+      "who": "Quién",
+      "when": "Cuándo",
+      "period": "Período",
+      "sheets": "Hojas",
+      "origin": "Origen",
+      "state": "Estado",
+      "file": "Archivo",
+      "hash": "Huella del archivo (SHA-256)"
+    },
+    "periodValue": "del {{from}} al {{to}}",
+    "none": "—",
+    "sheetRows_one": "{{name}}: {{rows}} fila",
+    "sheetRows_other": "{{name}}: {{rows}} filas",
+    "fileValue": "{{name}} · {{size}}",
+    "validationTitle": "Lo que encontró la validación",
+    "validationNone": "Ninguna regla encontró problemas.",
+    "acceptedTitle": "Advertencias aceptadas al confirmar",
+    "differenceTitle": "Frente a la versión que reemplazó",
+    "error": "Por qué falló: {{error}}",
+    "download": "Descargar archivo original",
+    "downloading": "Descargando… {{received}} de {{total}}",
+    "downloadFailed": "No se pudo descargar el archivo.",
+    "draft": "Ver el archivo subido",
+    "cliNote": "Cargada desde la línea de comandos: la aplicación no la validó.",
+    "countLine": "{{rule}} · {{severity}}{{column}}: {{rows}}"
+  }
+}

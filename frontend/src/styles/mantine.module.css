@@ -1,0 +1,165 @@
+/*
+ * Mantine's components in the app's palette. theme.ts attaches these classes
+ * to the components, so the pages keep using Mantine as they did. Mantine's
+ * colours themselves are mapped onto the tokens in theme.ts.
+ */
+
+/* Buttons ------------------------------------------------------------------- */
+
+.button {
+  font-weight: var(--ce-weight-title);
+  letter-spacing: var(--ce-tracking-small);
+  /* Released: back to rest on the spring. */
+  transition:
+    transform var(--ce-duration-spring) var(--ce-ease-spring),
+    background-color var(--ce-duration-fade) var(--ce-ease-out),
+    border-color var(--ce-duration-fade) var(--ce-ease-out),
+    box-shadow var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+/* Pressed: feedback on pointer-down, not on release. */
+.button:active {
+  transform: scale(var(--ce-press-scale));
+  transition-duration: var(--ce-duration-press);
+  transition-timing-function: var(--ce-ease-out);
+}
+
+/* The primary action: the view's one strong glow. */
+.button[data-variant="filled"] {
+  box-shadow: var(--ce-glow-primary);
+}
+
+/* Secondary buttons keep the surface until hovered. */
+.button[data-variant="default"] {
+  color: var(--ce-text);
+}
+
+/* Navigation ---------------------------------------------------------------- */
+
+/* Inactive items are bordered tabs, as the report's inactive tabs. */
+.navLink {
+  position: relative;
+  isolation: isolate;
+  margin-bottom: 6px;
+  border: 1px solid var(--ce-border);
+  border-radius: var(--ce-radius-sm);
+  background-color: var(--ce-surface);
+  color: var(--ce-text-secondary);
+  transition:
+    background-color var(--ce-duration-fade) var(--ce-ease-out),
+    color var(--ce-duration-fade) var(--ce-ease-out),
+    border-color var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+@media (hover: hover) {
+  .navLink:hover {
+    background-color: var(--ce-surface-raised);
+    color: var(--ce-text);
+  }
+}
+
+/* The active item's gradient and glow live on a layer of their own, so they
+   can fade in on the spring (a gradient itself cannot be transitioned). */
+.navLink::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--ce-gradient-nav-active);
+  box-shadow: var(--ce-glow-nav);
+  opacity: 0;
+  transition: opacity var(--ce-duration-spring) var(--ce-ease-spring);
+}
+
+.navLink[data-active] {
+  border-color: transparent;
+  background-color: transparent;
+  color: var(--ce-text-on-accent);
+  font-weight: var(--ce-weight-title);
+}
+
+.navLink[data-active]::before {
+  opacity: 1;
+}
+
+@media (hover: hover) {
+  .navLink[data-active]:hover {
+    background-color: transparent;
+    color: var(--ce-text-on-accent);
+  }
+}
+
+/* Tooltips: a raised surface (theme.ts sets its colours). */
+.tooltip {
+  border: 1px solid var(--ce-border);
+  letter-spacing: var(--ce-tracking-small);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Links and titles ---------------------------------------------------------- */
+
+.anchor {
+  color: var(--ce-link);
+  text-underline-offset: 0.2em;
+}
+
+.title {
+  font-weight: var(--ce-weight-title);
+  line-height: var(--ce-leading-title);
+  letter-spacing: var(--ce-tracking-title);
+}
+
+.title[data-order="1"],
+.title[data-order="2"] {
+  letter-spacing: var(--ce-tracking-display);
+}
+
+/* The shell ----------------------------------------------------------------- */
+
+.shell {
+  --app-shell-border-color: var(--ce-hairline);
+}
+
+/* Header and footer: a translucent layer the content passes under. */
+.header,
+.footer {
+  background-color: var(--ce-material);
+  backdrop-filter: var(--ce-material-blur);
+}
+
+/* The report's header line, across the top of the app. */
+.header::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--ce-gradient-header);
+}
+
+/* The sidebar: a heavier, solid material that separates a region. */
+.navbar {
+  background-color: var(--ce-surface);
+}
+
+/* The content area: the report's page background, its light and its grid. */
+.main {
+  position: relative;
+  isolation: isolate;
+  background: var(--ce-glow-ambient), var(--ce-gradient-canvas);
+  background-color: var(--ce-canvas-bottom);
+}
+
+/* The grid fades out downward, so it never sits under the reading area. */
+.main::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--ce-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--ce-grid-line) 1px, transparent 1px);
+  background-size: var(--ce-grid-size) var(--ce-grid-size);
+  mask-image: linear-gradient(to bottom, black, transparent 55%);
+}

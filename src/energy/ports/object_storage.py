@@ -14,8 +14,12 @@ Responsibility:
 Depends on:
     ``energy.domain``, standard library typing only.
 
-Implemented in:
-    Phase 3 - Ingestion adapters
+Streaming:
+    :meth:`ObjectStorage.put_stream` and :meth:`ObjectStorage.download_to`
+    pass a file through a piece at a time, for uploads of up to 300 MB that
+    must never be held in memory. :meth:`ObjectStorage.copy` lets an upload
+    written under a temporary key move to the key that carries its hash
+    without its bytes passing through the application.
 """
 
 from __future__ import annotations
@@ -27,6 +31,16 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
     from datetime import datetime, timedelta
     from io import BufferedReader
+    from typing import BinaryIO
+
+
+@runtime_checkable
+class ByteSource(Protocol):
+    """Something bytes can be read from, a piece at a time: a file, an upload."""
+
+    def read(self, size: int = -1, /) -> bytes:
+        """Return up to ``size`` bytes; an empty result means the end."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +115,93 @@ class ObjectStorage(Protocol):
         Raises:
             SourceUnavailableError: if the backend is unreachable.
             FileExistsError: if ``key`` already exists.
+        """
+        ...
+
+    def put_stream(
+        self,
+        bucket: str,
+        key: str,
+        source: ByteSource,
+        content_type: str,
+        metadata: Mapping[str, str] | None = None,
+    ) -> StoredObject:
+        """Store a payload of unknown length, a part at a time.
+
+        The payload is never held whole: it is sent in parts of a fixed size
+        and hashed on the way. If reading ``source`` raises, nothing is left
+        under ``key`` and the error propagates. Write-once, as :meth:`put`.
+
+        Args:
+            bucket: target bucket.
+            key: object key.
+            source: where the bytes are read from, until it returns ``b""``.
+            content_type: MIME type of the payload.
+            metadata: user metadata to attach.
+
+        Returns:
+            The :class:`StoredObject` written, with its size and SHA-256.
+
+        Raises:
+            SourceUnavailableError: if the backend is unreachable.
+            FileExistsError: if ``key`` already exists.
+        """
+        ...
+
+    def copy(
+        self,
+        bucket: str,
+        source_key: str,
+        target_key: str,
+        metadata: Mapping[str, str] | None = None,
+    ) -> StoredObject:
+        """Copy an object inside a bucket, without passing its bytes through here.
+
+        Write-once, as :meth:`put`: the target must not exist.
+
+        Args:
+            bucket: the bucket of both objects.
+            source_key: the object to copy.
+            target_key: the key of the copy.
+            metadata: the copy's user metadata, replacing the source's. Must
+                include ``content-hash`` for :meth:`get` to verify the copy.
+
+        Returns:
+            The :class:`StoredObject` written.
+
+        Raises:
+            EntityNotFoundError: if the source does not exist.
+            FileExistsError: if the target already exists.
+        """
+        ...
+
+    def delete(self, bucket: str, key: str) -> None:
+        """Remove an object. Removing one that is not there is not an error.
+
+        Args:
+            bucket: source bucket.
+            key: object key.
+
+        Raises:
+            SourceUnavailableError: if the backend is unreachable.
+        """
+        ...
+
+    def download_to(self, bucket: str, key: str, target: BinaryIO) -> StoredObject:
+        """Copy an object's bytes into a file, a piece at a time, checking them.
+
+        Args:
+            bucket: source bucket.
+            key: object key.
+            target: an open binary file to write to.
+
+        Returns:
+            The object's metadata.
+
+        Raises:
+            EntityNotFoundError: if the key does not exist.
+            ContentHashMismatchError: if the bytes do not hash to the digest
+                recorded at upload time.
         """
         ...
 
@@ -200,4 +301,4 @@ class ObjectStorage(Protocol):
         ...
 
 
-__all__ = ["ObjectStorage", "StoredObject"]
+__all__ = ["ByteSource", "ObjectStorage", "StoredObject"]

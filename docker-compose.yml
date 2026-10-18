@@ -7,6 +7,11 @@
 # reachable from the host, which is why `make db-upgrade` runs Alembic inside
 # the api container.
 #
+# One opt-in exception: `reporting-bridge` (profile `reporting`, started by
+# `make powerbi`) publishes a database port for BI tools such as Power BI. It is
+# never started by `make up`, listens on 127.0.0.1 by default, and the only
+# login meant for it can read the `reporting` views and nothing else.
+#
 # Every service declares a healthcheck, and every dependency is gated on
 # `condition: service_healthy`, so `docker compose up --wait` returns only once
 # the stack is genuinely usable rather than merely started.
@@ -43,10 +48,17 @@ x-restart: &restart
 
 services:
   # ---------------------------------------------------------------------------
-  # Reverse proxy - the single ingress
+  # Reverse proxy - the single ingress, and the web app
   # ---------------------------------------------------------------------------
+  # caddy:2 with the static build of frontend/ in /srv. The app is served from
+  # the root; the Caddyfile routes /api, /dash, /prefect and /minio away from it.
   caddy:
-    image: caddy:2
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: web
+      args:
+        NODE_VERSION: "24"
     <<: *restart
     ports:
       - "${CADDY_HTTP_PORT:-8080}:80"
@@ -218,6 +230,22 @@ services:
       PREFECT_API_URL: http://prefect-server:4200/api
       DATA_FRESHNESS_MAX_LAG_HOURS: ${DATA_FRESHNESS_MAX_LAG_HOURS:-6}
       CONFIG_DIR: /app/config
+      # Read by `energy reporting create-reader` (make powerbi).
+      REPORTING_DB_USER: ${REPORTING_DB_USER:-powerbi}
+      REPORTING_DB_PASSWORD: ${REPORTING_DB_PASSWORD:-}
+      REPORTING_BIND_ADDRESS: ${REPORTING_BIND_ADDRESS:-127.0.0.1}
+      REPORTING_PORT: ${REPORTING_PORT:-5433}
+      # Sign-in: the tenant and the app registration whose access tokens the API
+      # accepts. Both are public identifiers. Left empty, the API starts and
+      # says that sign-in is not configured. ENTRA_CLIENT_SECRET is deliberately
+      # not passed: the API checks tokens with Entra ID's public keys.
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
+      ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
+      # The published report the dashboard shows (docs/powerbi.md). Identifiers
+      # too: the API hands them to the web app and never calls Power BI itself.
+      # Left empty, the dashboard says that the report is not configured.
+      POWERBI_WORKSPACE_ID: ${POWERBI_WORKSPACE_ID:-}
+      POWERBI_REPORT_ID: ${POWERBI_REPORT_ID:-}
     networks: [backend]
     depends_on:
       db:
@@ -242,12 +270,43 @@ services:
       <<: [*common-env, *db-env]
       DASH_HOST: 0.0.0.0
       DASH_PORT: "8050"
-      DASH_URL_BASE_PATHNAME: ${DASH_URL_BASE_PATHNAME:-/}
+      # Fixed, not read from .env: it must be the path the Caddyfile routes to
+      # this service, and the two cannot be allowed to drift. The image's
+      # healthcheck probes the same path.
+      DASH_URL_BASE_PATHNAME: /dash/
       CONFIG_DIR: /app/config
     networks: [backend]
     depends_on:
       db:
         condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Reporting bridge - opt-in database port for BI tools (Power BI)
+  # ---------------------------------------------------------------------------
+  # A plain TCP relay to the database, started only with the `reporting`
+  # profile (`make powerbi`) and removed by `make powerbi-down`. What a client
+  # may read is decided in the database: the login `energy reporting
+  # create-reader` creates sees the `reporting` views and nothing else. The
+  # database speaks no TLS, so keep the default 127.0.0.1 unless the network
+  # in between is trusted.
+  reporting-bridge:
+    image: alpine/socat:1.8.0.3
+    profiles: [reporting]
+    <<: *restart
+    command: ["TCP-LISTEN:5432,fork,reuseaddr", "TCP:db:5432"]
+    ports:
+      - "${REPORTING_BIND_ADDRESS:-127.0.0.1}:${REPORTING_PORT:-5433}:5432"
+    networks: [backend]
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # The relay is only useful if it can reach the database.
+      test: ["CMD", "socat", "-u", "OPEN:/dev/null", "TCP:db:5432,connect-timeout=3"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
 
 networks:
   # Only Caddy sits on `edge`; everything else is backend-only.

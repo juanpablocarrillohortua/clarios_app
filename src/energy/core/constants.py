@@ -14,15 +14,26 @@ from datetime import UTC, timedelta
 from typing import Final
 
 # -----------------------------------------------------------------------------
-# Database schemas (one per medallion layer, plus shared dimensions)
+# Database schemas (one per medallion layer, plus shared dimensions and the
+# read-only views BI tools connect to)
 # -----------------------------------------------------------------------------
 REFERENCE_SCHEMA: Final = "reference"
 BRONZE_SCHEMA: Final = "bronze"
 SILVER_SCHEMA: Final = "silver"
 GOLD_SCHEMA: Final = "gold"
+REPORTING_SCHEMA: Final = "reporting"
+# Drafts of data loaded through the web app: a working area, not a layer.
+STAGING_SCHEMA: Final = "staging"
 
 MEDALLION_SCHEMAS: Final[tuple[str, ...]] = (BRONZE_SCHEMA, SILVER_SCHEMA, GOLD_SCHEMA)
-ALL_SCHEMAS: Final[tuple[str, ...]] = (REFERENCE_SCHEMA, *MEDALLION_SCHEMAS)
+# In dependency order: reporting reads gold, so it comes last and is dropped first.
+# Staging depends on nothing and nothing depends on it.
+ALL_SCHEMAS: Final[tuple[str, ...]] = (
+    REFERENCE_SCHEMA,
+    *MEDALLION_SCHEMAS,
+    STAGING_SCHEMA,
+    REPORTING_SCHEMA,
+)
 
 # -----------------------------------------------------------------------------
 # Canonical time grid
@@ -94,6 +105,30 @@ LAYER_GOLD: Final = "gold"
 REQUEST_ID_HEADER: Final = "X-Request-ID"
 REQUEST_ID_LOG_KEY: Final = "request_id"
 
+# -----------------------------------------------------------------------------
+# Sign-in (Microsoft Entra ID)
+# -----------------------------------------------------------------------------
+# The public cloud's sign-in host. A tenant's authority, token issuer and
+# signing keys all live under it.
+ENTRA_LOGIN_HOST: Final = "https://login.microsoftonline.com"
+# The one scope the app registration exposes ("Expose an API"). The web app
+# asks for a token with it, and the API accepts no token without it.
+ENTRA_API_SCOPE_NAME: Final = "access_as_user"
+
+# -----------------------------------------------------------------------------
+# The embedded report (Power BI Service, public cloud)
+# -----------------------------------------------------------------------------
+# The web app shows the published report with the signed-in user's own token.
+# This process never calls Power BI: it only tells the app where to ask.
+#
+# The one delegated permission the app requests: read the reports the user may
+# already open. Nothing here lets it write or refresh.
+POWERBI_REPORT_SCOPE: Final = "https://analysis.windows.net/powerbi/api/Report.Read.All"
+# Power BI's REST API, as the signed-in user ("myorg" is the user's own tenant).
+POWERBI_API_URL: Final = "https://api.powerbi.com/v1.0/myorg"
+# The Power BI Service, where a person opens the report.
+POWERBI_SERVICE_URL: Final = "https://app.powerbi.com"
+
 __all__ = [
     "ALL_SCHEMAS",
     "BRONZE_SCHEMA",
@@ -102,11 +137,16 @@ __all__ = [
     "CANONICAL_TIMEZONE",
     "CONTENT_HASH_ALGORITHM",
     "CONTENT_HASH_LENGTH",
+    "ENTRA_API_SCOPE_NAME",
+    "ENTRA_LOGIN_HOST",
     "GOLD_SCHEMA",
     "LAYER_BRONZE",
     "LAYER_GOLD",
     "LAYER_SILVER",
     "MEDALLION_SCHEMAS",
+    "POWERBI_API_URL",
+    "POWERBI_REPORT_SCOPE",
+    "POWERBI_SERVICE_URL",
     "PROVENANCE_COLUMNS",
     "QUALITY_FLAGS",
     "QUALITY_FLAG_ESTIMATED",
@@ -115,10 +155,12 @@ __all__ = [
     "QUALITY_FLAG_OK",
     "QUALITY_FLAG_SUSPECT",
     "REFERENCE_SCHEMA",
+    "REPORTING_SCHEMA",
     "REQUEST_ID_HEADER",
     "REQUEST_ID_LOG_KEY",
     "SECONDS_PER_HOUR",
     "SILVER_SCHEMA",
+    "STAGING_SCHEMA",
     "UNIT_ELECTRICITY",
     "UNIT_GAS_ENERGY",
     "UNIT_GAS_VOLUME",

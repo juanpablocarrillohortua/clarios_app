@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
+    from pathlib import Path
 
     from energy.domain.landing import CellValue
 
@@ -91,4 +92,30 @@ class WorkbookReader(Protocol):
         ...
 
 
-__all__ = ["OpenWorkbook", "SheetRange", "WorkbookReader"]
+@runtime_checkable
+class WorkbookFileReader(Protocol):
+    """Interface for opening a workbook kept in a local file.
+
+    The streaming counterpart of :class:`WorkbookReader`: a file of up to
+    300 MB is never held in memory, so it is copied from the archive into a
+    temporary file, its hash checked on the way, and read there. A zip
+    archive keeps its directory at its end, so a workbook cannot be read from
+    a stream that only goes forward.
+    """
+
+    def open_workbook_file(self, path: Path) -> OpenWorkbook:
+        """Open a workbook from a local file, reading its parts in place.
+
+        Args:
+            path: the file. It must stay in place while the workbook is read.
+
+        Returns:
+            An :class:`OpenWorkbook`.
+
+        Raises:
+            UnsupportedFileFormatError: if the file is not a readable workbook.
+        """
+        ...
+
+
+__all__ = ["OpenWorkbook", "SheetRange", "WorkbookFileReader", "WorkbookReader"]

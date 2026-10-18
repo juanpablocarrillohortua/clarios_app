@@ -14,6 +14,6 @@ import kpis`` only type-checks when the name is bound and listed in ``__all__``.
 
 from __future__ import annotations
 
-from energy.api.routers import health, ingest, kpis, runs, uploads
+from energy.api.routers import client_config, health, ingest, kpis, me
 
-__all__ = ["health", "ingest", "kpis", "runs", "uploads"]
+__all__ = ["client_config", "health", "ingest", "kpis", "me"]

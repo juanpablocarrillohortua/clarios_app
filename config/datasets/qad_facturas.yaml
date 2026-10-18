@@ -1,0 +1,85 @@
+# =============================================================================
+# Invoice lines - sheet "Datos" of the QAD export "Unidades facturadas"
+#
+# Movements: rows add up, each dated by Fecha Efectiva, and a corrected row
+# replaces the old one by its natural key. Upload only: it comes from QAD.
+#
+# All 49 headers of the export, in its order. "Almac" appears twice; Bronze
+# keys the second one "Almac #2". Silver reads 27 of these columns, and drops
+# a row that lacks any of the six marked required.
+#
+# Quantities and amounts go negative on credit notes, so they have no lower
+# bound. Item and customer codes are digits today but carry no pattern: a new
+# code with a letter must not block a monthly load.
+#
+# docs/dataset-specs.md describes every field.
+# =============================================================================
+version: 1
+
+key: qad_facturas
+kind: movement
+label: datasets.qad_facturas.name
+description: datasets.qad_facturas.description
+entry_modes: [upload]
+
+bronze:
+  source_key: qad_facturas
+  sheet: Datos
+  header_row: 1
+
+silver:
+  table: silver.unit_ship
+
+natural_key: [Núm Fact, Orden, Línea]
+period_column: Fecha Efectiva
+
+columns:
+  - {header: Almac, type: text, pattern: "^[0-9]{4}$"}
+  - {header: Núm Fact, type: text, required: true}
+  - {header: Orden, type: text, required: true}
+  - {header: Tipo Embarque, type: text}
+  - {header: Fecha de orden, type: date}
+  - {header: Remisión, type: text}
+  - {header: Observacion Notas Credito, type: text}
+  - {header: Canal, type: text}
+  - {header: Fecha de la Factura, type: date}
+  - {header: Vendido-A, type: text}
+  - {header: Ordenar Nombre, type: text}
+  - {header: Tipo, type: text}
+  - {header: Cobrar-A, type: text}
+  - {header: Embarcar-para, type: text}
+  - {header: NOMBRE_SHIP-TO, type: text}
+  - {header: País, type: text}
+  - {header: Corrección, type: text}
+  - {header: Línea, type: integer, required: true, min: 1}
+  - {header: Almac, type: text, pattern: "^[0-9]{4}$"}
+  - {header: Línea de productos, type: text, pattern: "^[0-9]{4}$"}
+  - {header: Descripción Línea Producto, type: text}
+  - {header: Número Artículo, type: text, required: true}
+  - {header: Descripcion, type: text}
+  - {header: UM, type: text}
+  - {header: Cantidad fac, type: decimal, required: true}
+  - {header: Cant Ord, type: decimal}
+  - {header: Cantidad en Órdenes Pendientes, type: decimal}
+  - {header: Precio de Lista, type: decimal, min: 0}
+  - {header: Valor Bruto (MT), type: decimal}
+  - {header: Valor Bruto (MB), type: decimal}
+  - {header: Porcentaje Descuento, type: decimal, min: 0, max: 100}
+  - {header: Monto del Descuento, type: decimal}
+  - {header: Total Descuento (MT), type: decimal}
+  - {header: Total Descuento (MB), type: decimal}
+  - {header: Precio Neto, type: decimal}
+  - {header: Monto Factura, type: decimal}
+  - {header: Moneda, type: text, pattern: "^[A-Z]{3}$"}
+  - {header: Tipos de Cambio, type: decimal, min: 0}
+  - {header: Importe de factura MB, type: decimal}
+  - {header: Vendedor, type: text}
+  - {header: Términos de crédito, type: text}
+  - {header: Fecha vcto, type: date}
+  - {header: Fch Embar, type: date}
+  - {header: TOTAL_PLOMO, type: decimal}
+  - {header: Campo Equs, type: text}
+  - {header: Fecha Efectiva, type: date, required: true}
+  - {header: Med embar, type: text}
+  - {header: FECHA_LIBERACION, type: date}
+  - {header: HORA_LIBERACION, type: text, pattern: "^[0-9]{2}:[0-9]{2}:[0-9]{2}$"}

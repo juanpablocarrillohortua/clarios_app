@@ -382,3 +382,20 @@ def test_archive_object_key_carries_provenance_and_ends_in_the_hash() -> None:
     key = archive_object_key("1515", "qad_rct_wo", "ab" * 32, ".XLSX", date(2026, 10, 7))
 
     assert key == f"1515/qad_rct_wo/2026/10/07/{'ab' * 32}.xlsx"
+
+
+def test_sheet_payloads_keep_the_cells_beside_each_payload() -> None:
+    """The rows kept for landing, with their raw cells: what the checks of an upload read."""
+    from energy.domain.landing import sheet_payloads  # noqa: PLC0415
+
+    rows = [["Fecha", "Cant"], [datetime(2025, 10, 1), 3.0], ["", ""], ["x", None]]  # noqa: DTZ001 - Excel has no time zones
+
+    kept = list(sheet_payloads(rows))
+
+    assert [(row.source_row, row.payload) for row in kept] == [
+        (2, {"Fecha": "2025-10-01T00:00:00", "Cant": "3"}),
+        (4, {"Fecha": "x"}),
+    ]
+    assert kept[0].cells == [datetime(2025, 10, 1), 3.0]  # noqa: DTZ001 - Excel has no time zones
+    assert kept[0].keys == ("Fecha", "Cant")
+    assert [row.source_row for row in landing_rows(rows)] == [2, 4]

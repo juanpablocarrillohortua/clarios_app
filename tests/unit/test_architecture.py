@@ -45,6 +45,16 @@ ALLOWED: dict[str, frozenset[str]] = {
 
 SIBLING_ENTRY_POINTS = frozenset({"api", "dashboards", "pipelines"})
 
+# Exceptions to ALLOWED, by module. Each entry point needs one place where
+# adapters are bound to the ports its code depends on. `pipelines` may import
+# adapters as a layer; the API may not, so its composition root is named here:
+# `api/deps.py`, and no other module of `api`, may import `adapters`.
+# Decided in docs/adr/0005-api-composition-root.md. Do not add to this without
+# a decision record of its own.
+COMPOSITION_ROOTS: dict[str, frozenset[str]] = {
+    "api/deps.py": frozenset({"adapters"}),
+}
+
 
 def _iter_modules() -> list[str]:
     """Return every importable module name under ``energy``."""
@@ -127,7 +137,7 @@ def test_layer_dependency_rule(source_file: Path) -> None:
     if layer not in ALLOWED:
         return
 
-    permitted = ALLOWED[layer]
+    permitted = ALLOWED[layer] | COMPOSITION_ROOTS.get(relative.as_posix(), frozenset())
     violations: list[str] = []
 
     for imported in _internal_imports(source_file):
@@ -179,6 +189,30 @@ def test_entry_points_do_not_import_each_other(entry_point: str) -> None:
                 f"{path.relative_to(SRC_ROOT)} imports {imported}, but '{entry_point}' "
                 f"and '{layer}' are sibling entry points and must stay independent"
             )
+
+
+@pytest.mark.unit
+def test_only_the_composition_root_of_the_api_imports_adapters() -> None:
+    """In `api`, adapters are named in `deps.py` and nowhere else.
+
+    The exception of ADR 0005 is one module wide. A router that imported an
+    adapter would need a database or a network to be tested, which is what the
+    layer rule exists to prevent; this test fails for it even if someone widens
+    COMPOSITION_ROOTS to let it through.
+    """
+    grown = "an exception to the layer rule needs a decision record of its own"
+    assert set(COMPOSITION_ROOTS) == {"api/deps.py"}, grown
+    assert set(COMPOSITION_ROOTS["api/deps.py"]) == {"adapters"}, grown
+
+    importers = {
+        path.relative_to(SRC_ROOT).as_posix()
+        for path in (SRC_ROOT / "api").rglob("*.py")
+        if any(_layer_of(imported) == "adapters" for imported in _internal_imports(path))
+    }
+
+    assert importers <= {"api/deps.py"}, (
+        f"only api/deps.py may import energy.adapters, but so do: {sorted(importers)}"
+    )
 
 
 @pytest.mark.unit
