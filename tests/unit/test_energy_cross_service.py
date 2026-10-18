@@ -51,34 +51,51 @@ DAYS = (date(2026, 8, 31), date(2026, 9, 1), date(2026, 9, 2))
 # =============================================================================
 # Fakes
 # =============================================================================
-def _area_energy(resolution: str = "day", area: str = "F&A") -> AreaEnergy:
+def _area_energy(
+    resolution: str = "day",
+    area: str = "F&A",
+    *,
+    source: str = "export.xlsx",
+    months_kwh: tuple[int | None, int | None] = (1000, 2000),
+) -> AreaEnergy:
     """1,000 kWh a day, the second day frozen; the months clipped to the range."""
     days = tuple(
         EnergySpan(day, day, None if day == DAYS[1] else Decimal(1000), Decimal(1), 1)
         for day in DAYS
     )
+    first, second = (None if kwh is None else Decimal(kwh) for kwh in months_kwh)
     months = (
-        EnergySpan(DAYS[0], DAYS[0], Decimal(1000), Decimal(1), 1),
-        EnergySpan(DAYS[1], DAYS[2], Decimal(2000), Decimal("0.5"), 1),
+        EnergySpan(DAYS[0], DAYS[0], first, Decimal(1), 1),
+        EnergySpan(DAYS[1], DAYS[2], second, Decimal("0.5"), 1),
     )
+    known = first is not None and second is not None
+    total = (first or 0) + (second or 0) if known else None
     return AreaEnergy(
         area=area,
-        source="export.xlsx",
+        source=source,
         resolution="day" if resolution == "day" else "month",
         period=SEPTEMBER,
         meters=("R1",),
         days=days if resolution == "day" else (),
         months=months,
-        total=EnergySpan(DAYS[0], DAYS[2], Decimal(3000), Decimal("0.67"), 2),
+        total=EnergySpan(DAYS[0], DAYS[2], total, Decimal("0.67"), 2),
     )
 
 
 class FakeSource:
     """An energy source with fixed answers."""
 
-    def __init__(self, *areas: str, resolution: str = "day") -> None:
+    def __init__(
+        self,
+        *areas: str,
+        resolution: str = "day",
+        source: str = "export.xlsx",
+        months_kwh: tuple[int | None, int | None] = (1000, 2000),
+    ) -> None:
         self._areas = areas or ("F&A",)
         self._resolution = resolution
+        self._source = source
+        self._months_kwh = months_kwh
         self.asked: list[tuple[str, DateRange]] = []
 
     @property
@@ -87,7 +104,9 @@ class FakeSource:
 
     def energy(self, area: str, period: DateRange) -> AreaEnergy:
         self.asked.append((area, period))
-        return _area_energy(self._resolution, area)
+        return _area_energy(
+            self._resolution, area, source=self._source, months_kwh=self._months_kwh
+        )
 
 
 class FakeEquivalents:
@@ -185,12 +204,19 @@ def test_a_month_cut_by_the_range_gets_the_eq_of_its_days_only() -> None:
 
 
 def test_a_monthly_source_answers_only_the_monthly_cross() -> None:
-    """The port takes a monthly workbook as it is; the daily cross refuses it."""
-    cross = EnergyCross([FakeSource("OREC", resolution="month")], FakeEquivalents())
+    """Named in a daily cross, a monthly-only area is refused; unnamed, it is left out."""
+    cross = EnergyCross(
+        [FakeSource("F&A"), FakeSource("OREC", resolution="month")], FakeEquivalents()
+    )
 
-    assert len(cross.cross(SEPTEMBER, frequency="month").areas[0].rows) == 2
+    monthly = cross.cross(SEPTEMBER, frequency="month", areas=["OREC"])
+    daily = cross.cross(SEPTEMBER, frequency="day")
+
+    assert len(monthly.areas[0].rows) == 2
+    assert [area.area for area in daily.areas] == ["F&A"]
+    assert daily.monthly_only == ("OREC",)
     with pytest.raises(InvalidPeriodError, match="only monthly energy"):
-        cross.cross(SEPTEMBER, frequency="day")
+        cross.cross(SEPTEMBER, frequency="day", areas=["OREC"])
 
 
 def test_areas_are_matched_ignoring_case_and_kept_in_the_order_asked() -> None:
@@ -221,9 +247,24 @@ def test_a_question_without_an_answer_is_refused(options: dict[str, Any], messag
         EnergyCross([FakeSource()], FakeEquivalents()).cross(SEPTEMBER, **options)
 
 
-def test_two_sources_cannot_claim_one_area() -> None:
-    with pytest.raises(ConfigurationError):
-        EnergyCross([FakeSource("F&A"), FakeSource("F&A")], FakeEquivalents())
+def test_the_sources_of_one_area_are_tried_in_the_order_given() -> None:
+    """SCADA first; the workbook fills the month SCADA does not cover whole."""
+    scada = FakeSource(source="scada.xlsx", months_kwh=(1000, None))
+    book = FakeSource(source="book.xlsx", resolution="month", months_kwh=(900, 1900))
+    cross = EnergyCross([scada, book], FakeEquivalents())
+
+    monthly = cross.cross(SEPTEMBER, frequency="month")
+    daily = cross.cross(SEPTEMBER)
+
+    (area,) = monthly.areas
+    assert [energy.source for energy in area.sources] == ["scada.xlsx", "book.xlsx"]
+    assert [(row.kwh, row.energy_source) for row in area.rows] == [
+        (Decimal(1000), "scada.xlsx"),
+        (Decimal(1900), "book.xlsx"),
+    ]
+    assert (area.total.kwh, area.total.eq) == (Decimal(2900), Decimal(300))
+    assert area.total.energy_source == "scada.xlsx + book.xlsx"
+    assert [energy.source for energy in daily.areas[0].sources] == ["scada.xlsx"]
 
 
 def test_daily_eq_that_does_not_add_up_is_reported() -> None:
@@ -280,6 +321,23 @@ def test_the_export_is_read_as_local_time_and_wh(tmp_path: Path) -> None:
     assert energy.source == "scada.xlsx"
     assert energy.meters == METERS
     assert source.counters("F&A") is counters  # read once
+
+
+def test_a_meter_may_count_in_its_own_unit(tmp_path: Path) -> None:
+    """The RC export's main meter counts kWh while the others count Wh."""
+    path = _export(tmp_path / "scada.xlsx")
+    source = ScadaCounterSource(
+        [
+            CounterWorkbook(
+                "F&A", path, "Dataset 1", "t_stamp", METERS, ZONE,
+                meter_units_per_kwh={"RECTIFICADOR 3": Decimal(1)},
+            )
+        ]
+    )  # fmt: skip
+
+    energy = source.energy("F&A", DateRange(date(2026, 7, 2), date(2026, 7, 2)))
+
+    assert energy.days[0].kwh == Decimal(24 * 100 + 24 * 200 + 24 * 50_000)
 
 
 def test_an_area_without_an_export_is_refused(tmp_path: Path) -> None:

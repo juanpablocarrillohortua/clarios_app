@@ -19,6 +19,7 @@ import pytest
 from energy.domain.energy_cross import (
     CROSS_FIELDS,
     AreaCross,
+    AreaEnergy,
     CounterReading,
     EnergyCrossSeries,
     classify_counters,
@@ -32,7 +33,9 @@ from energy.domain.energy_cross import (
     fiscal_label,
     fiscal_month,
     fiscal_year,
+    meter_months,
     month_spans,
+    monthly_area_energy,
 )
 from energy.domain.equs_gold import DateRange
 from energy.domain.equs_series import PeriodTotal
@@ -233,15 +236,32 @@ def test_a_counter_is_frozen_only_with_all_three_signs(
     assert all(row.kwh is not None for row in daily_energy(counters, DateRange(DAY2, DAY3)))
 
 
-def test_a_counter_that_goes_down_is_a_reset_and_has_no_kwh() -> None:
+def test_a_counter_that_loses_more_than_half_its_value_was_reset() -> None:
+    """From 1,003,000 kWh down to 10: the meter started again, nothing spans it."""
     reset = _steady(72)
-    reset[30] = -500
+    reset[30] = -1_002_990
     counters = classify_counters(("R1",), _readings(reset), ZONE)
 
     (day2,) = daily_energy(counters, DateRange(DAY2, DAY2))
 
     assert (day2.kwh, day2.state) == (None, "reset")
     assert counters.kwh_between("R1", counters.midnight(DAY2), counters.midnight(DAY3)) is None
+
+
+def test_a_small_drop_is_a_dip_that_leaves_its_day_but_not_its_month() -> None:
+    """500 kWh down from 1,003,000 is a bad reading: its day is missing, never 0,
+    and the counter difference across it still holds."""
+    dip = _steady(72)
+    dip[30] = -500
+    counters = classify_counters(("R1",), _readings(dip), ZONE)
+
+    day2, day3 = daily_energy(counters, DateRange(DAY2, DAY3))
+    both = counters.kwh_between("R1", counters.midnight(DAY2), counters.midnight(date(2026, 7, 4)))
+
+    assert counters.intervals["R1"][30].state == "dip"
+    assert (day2.kwh, day2.state) == (None, "dip")
+    assert (day3.kwh, day3.state) == (Decimal(2400), "ok")
+    assert both == Decimal(4800 - 100 - 500)
 
 
 def test_a_blank_reading_leaves_its_day_without_kwh() -> None:
@@ -344,9 +364,11 @@ def _area_cross() -> tuple[AreaCross, EnergyCrossSeries]:
         DAY2: PeriodTotal(DAY2, {"FORMACION": Decimal(8), "DECORADO": Decimal(4)}, Decimal(12)),
         DAY3: PeriodTotal(DAY3, {"FORMACION": Decimal(48), "DECORADO": Decimal(24)}, Decimal(72)),
     }
-    rows, total = cross_rows(energy, eq_days, ("FORMACION", "DECORADO"), "day")
-    area = AreaCross(energy, ("FORMACION", "DECORADO"), rows, total, (date(2026, 7, 1),), 0)
-    return area, EnergyCrossSeries(period, "day", (area,))
+    rows, total, without = cross_rows([energy], eq_days, ("FORMACION", "DECORADO"), "day")
+    area = AreaCross(
+        (energy,), ("FORMACION", "DECORADO"), rows, total, without, (date(2026, 7, 1),)
+    )
+    return area, EnergyCrossSeries(period, "day", (area,), monthly_only=("OREC",))
 
 
 def test_the_cross_sets_each_day_against_the_eq_of_the_same_day() -> None:
@@ -373,10 +395,135 @@ def test_the_cross_renders_as_a_table_json_and_csv() -> None:
     payload = cross_json(series)
     csv_rows = cross_csv_rows(series)
 
-    assert "F&A: export.xlsx (1 meter) against FORMACION + DECORADO" in table
+    assert "F&A against FORMACION + DECORADO; energy, in priority order: export.xlsx" in table
     assert "2026-07-02" in table
     assert "EQ: the days add up to gold.v_resumen_equ exactly: 2026-07." in table
+    assert "Monthly energy only, so left out of the daily cross: OREC." in table
     assert payload["areas"][0]["total"]["kwh_por_eq"] == 5.7143
+    assert payload["areas"][0]["total"]["fuente_energia"] == "export.xlsx"
     assert payload["areas"][0]["filas"][1]["eq_procesos"] == {"FORMACION": 48, "DECORADO": 24}
+    assert payload["solo_mensual"] == ["OREC"]
     assert csv_rows[0] == list(CROSS_FIELDS)
     assert csv_rows[1][:5] == ["F&A", "2026-07-02", "2026-07-02", "2026-07-02", 1]
+    assert csv_rows[1][-1] == "export.xlsx"
+
+
+# =============================================================================
+# Monthly sources and priority
+# =============================================================================
+JULY, AUGUST, SEPTEMBER = date(2026, 7, 1), date(2026, 8, 1), date(2026, 9, 1)
+SUMMER = DateRange(JULY, date(2026, 9, 30))
+
+
+def _book(months: dict[date, Decimal | None], period: DateRange = SUMMER) -> AreaEnergy:
+    return monthly_area_energy("F&A", "book.xlsx", months, period)
+
+
+def test_a_monthly_source_answers_whole_months_only() -> None:
+    """A month cut by the range cannot be split, so it has no kWh."""
+    period = DateRange(date(2026, 7, 15), date(2026, 9, 30))
+
+    energy = _book({JULY: Decimal(100), AUGUST: Decimal(200), SEPTEMBER: Decimal(300)}, period)
+
+    assert energy.resolution == "month"
+    assert energy.days == ()
+    assert [(span.start, span.kwh, span.coverage) for span in energy.months] == [
+        (date(2026, 7, 15), None, 0),
+        (AUGUST, Decimal(200), 1),
+        (SEPTEMBER, Decimal(300), 1),
+    ]
+    assert energy.total.kwh is None
+    assert energy.total.coverage == Decimal(61) / 78
+
+
+def test_a_monthly_source_has_a_total_when_every_month_is_whole_and_known() -> None:
+    energy = _book({JULY: Decimal(100), AUGUST: Decimal(200), SEPTEMBER: Decimal(300)})
+    missing = _book({JULY: Decimal(100), AUGUST: Decimal(200)})
+
+    assert (energy.total.kwh, energy.total.coverage) == (Decimal(600), 1)
+    assert missing.total.kwh is None
+
+
+def _eq_days(per_day: int = 10) -> dict[date, PeriodTotal]:
+    days = {}
+    day = JULY
+    while day <= SUMMER.end:
+        days[day] = PeriodTotal(day, {"FORMACION": Decimal(per_day)}, Decimal(per_day))
+        day += timedelta(days=1)
+    return days
+
+
+def _counters_from(first: date) -> AreaEnergy:
+    """1 kWh an hour from 00:30 local on a day until after September."""
+    start = datetime(first.year, first.month, first.day, 0, 30, tzinfo=ZONE)
+    hours = int((datetime(2026, 10, 1, 1, tzinfo=ZONE) - start) / timedelta(hours=1))
+    counters = classify_counters(("R1",), _readings([1] * hours, start=start), ZONE)
+    return counter_area_energy("F&A", "scada.xlsx", counters, SUMMER)
+
+
+def test_each_month_takes_the_first_source_that_covers_it_whole() -> None:
+    """SCADA starts on 1 July at 00:30, so July is the book's and August SCADA's."""
+    scada = _counters_from(JULY)
+    book = _book({JULY: Decimal(1000), AUGUST: Decimal(2000)})
+
+    rows, total, without = cross_rows([scada, book], _eq_days(), ("FORMACION",), "month")
+
+    assert [(row.start, row.kwh, row.energy_source) for row in rows] == [
+        (JULY, Decimal(1000), "book.xlsx"),
+        (AUGUST, Decimal(744), "scada.xlsx"),
+        (SEPTEMBER, Decimal(720), "scada.xlsx"),
+    ]
+    assert total.energy_source == "book.xlsx + scada.xlsx"
+    assert (total.kwh, total.eq, without) == (Decimal(1000 + 744 + 720), Decimal(920), 0)
+
+
+def test_a_total_pairs_the_kwh_with_the_eq_of_the_same_months_only() -> None:
+    """September has EQ and no energy: its EQ stays out of the ratio and is reported."""
+    book = _book({JULY: Decimal(1000), AUGUST: Decimal(2000)})
+
+    rows, total, without = cross_rows([book], _eq_days(), ("FORMACION",), "month")
+
+    assert (rows[2].kwh, rows[2].energy_source, rows[2].eq) == (None, None, Decimal(300))
+    assert (total.kwh, total.eq) == (Decimal(3000), Decimal(620))
+    assert total.kwh_per_eq == Decimal(3000) / 620
+    assert without == Decimal(300)
+    assert total.coverage == Decimal(62) / 92
+
+
+def test_a_source_that_covers_the_whole_range_gives_the_total() -> None:
+    """The counters' own total, the difference between the range's midnights, comes first."""
+    scada = _counters_from(date(2026, 6, 30))
+    book = _book({JULY: Decimal(1000), AUGUST: Decimal(2000), SEPTEMBER: Decimal(3000)})
+
+    _, total, without = cross_rows([scada, book], _eq_days(), ("FORMACION",), "month")
+
+    assert (total.kwh, total.energy_source, without) == (Decimal(92 * 24), "scada.xlsx", 0)
+
+
+def test_a_daily_cross_takes_only_sources_with_days() -> None:
+    with pytest.raises(DomainRuleError):
+        cross_rows([_book({JULY: Decimal(1)})], _eq_days(), ("FORMACION",), "day")
+    with pytest.raises(DomainRuleError):
+        cross_rows([], _eq_days(), ("FORMACION",), "month")
+
+
+def test_each_meter_can_be_read_month_by_month() -> None:
+    start = datetime(2026, 7, 30, 0, 30, tzinfo=ZONE)
+    readings = _readings(_steady(96), _steady(96, 10), start=start)
+    counters = classify_counters(("R1", "R2"), readings, ZONE)
+
+    months = meter_months(counters, DateRange(date(2026, 7, 31), date(2026, 8, 2)))
+
+    assert [span.kwh for span in months["R1"]] == [Decimal(2400), Decimal(4800)]
+    assert [span.kwh for span in months["R2"]] == [Decimal(240), Decimal(480)]
+
+
+def test_a_total_never_mixes_one_source_s_months_with_another_s_total() -> None:
+    """The book has all three months, but SCADA gave August and September: add the rows."""
+    scada = _counters_from(JULY)
+    book = _book({JULY: Decimal(1000), AUGUST: Decimal(2000), SEPTEMBER: Decimal(3000)})
+
+    rows, total, _ = cross_rows([scada, book], _eq_days(), ("FORMACION",), "month")
+
+    assert total.kwh == sum((row.kwh for row in rows if row.kwh is not None), start=Decimal(0))
+    assert total.energy_source == "book.xlsx + scada.xlsx"

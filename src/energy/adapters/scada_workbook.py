@@ -21,7 +21,7 @@ Depends on:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -42,7 +42,7 @@ from energy.domain.exceptions import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Iterator, Mapping, Sequence
     from datetime import tzinfo
     from pathlib import Path
 
@@ -63,6 +63,8 @@ class CounterWorkbook:
         meters: the headers of the counter columns, one per meter.
         zone: the time zone of the naive timestamps.
         units_per_kwh: how many counter units make one kWh (1000 for Wh).
+        meter_units_per_kwh: the same, for the meters whose unit differs (the
+            RC export's main meter counts kWh while the others count Wh).
     """
 
     area: str
@@ -72,6 +74,11 @@ class CounterWorkbook:
     meters: tuple[str, ...]
     zone: tzinfo
     units_per_kwh: Decimal = Decimal(1000)
+    meter_units_per_kwh: Mapping[str, Decimal] = field(default_factory=dict)
+
+    def units(self, meter: str) -> Decimal:
+        """Return how many counter units of one meter make one kWh."""
+        return self.meter_units_per_kwh.get(meter, self.units_per_kwh)
 
 
 def _counter(value: CellValue) -> Decimal | None:
@@ -169,8 +176,8 @@ class ScadaCounterSource:
                 )
             local = stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=workbook.zone)
             kwh = tuple(
-                None if (value := _counter(cell)) is None else value / workbook.units_per_kwh
-                for cell in cells[1:]
+                None if (value := _counter(cell)) is None else value / workbook.units(meter)
+                for meter, cell in zip(workbook.meters, cells[1:], strict=True)
             )
             readings.append(CounterReading(local, kwh))
         return readings

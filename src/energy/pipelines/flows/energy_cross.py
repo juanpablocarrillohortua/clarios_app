@@ -1,4 +1,4 @@
-"""Cross the energy of the SCADA exports with the equivalent batteries (EQ).
+"""Cross the energy of the plant's exports with the equivalent batteries (EQ).
 
 Layer: pipelines
 
@@ -10,10 +10,20 @@ Responsibility:
     :class:`~energy.services.equs_gold.BatterySeries`) into
     :class:`~energy.services.energy_cross.EnergyCross`.
 
-    Only F&A is crossed: its three rectifiers are the only meters with an EQ
-    to set them against. RC has SCADA energy and gas but no EQ, so it has no
-    export here. A monthly source for OREC and ENSAMBLE would be one more entry
-    of :func:`energy_sources`.
+    The sources, in priority order:
+
+    1. the SCADA counters of F&A's three rectifiers, by day;
+    2. ``Base_de_datos.xlsx``, by month, for OREC, Ensamble and F&A.
+
+    So F&A takes SCADA for every month SCADA covers whole (from August 2026)
+    and the workbook for the others; OREC and Ensamble take the workbook.
+    SHIPPING has no energy at all.
+
+    RC has energy (SCADA and the workbook) but no EQ, so it is not a source of
+    the cross. :func:`rc_sources` reads it on its own, for comparisons such as
+    what the main meter EMCALI measures. That comparison found that EMCALI is
+    neither RC alone nor the whole site, so it gives no daily energy for OREC
+    and Ensamble (``notebooks/eda_cruce_herramienta.ipynb``).
 
     Nothing here writes: the workbooks are read and the database is queried.
 
@@ -24,10 +34,12 @@ Depends on:
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 from zoneinfo import ZoneInfo
 
+from energy.adapters.energy_book import BookSheet, EnergyBookSource
 from energy.adapters.postgres_equs_gold import PostgresGoldReader
 from energy.adapters.scada_workbook import CounterWorkbook, ScadaCounterSource
 from energy.core.settings import get_settings
@@ -53,19 +65,44 @@ SCADA_ZONE: Final = ZoneInfo("America/Bogota")
 # F&A: the counters of the three formation rectifiers, in Wh.
 FA_AREA: Final = "F&A"
 FA_WORKBOOK: Final = "SCADA-Base de datos F&A.xlsx"
-FA_SHEET: Final = "Dataset 1"
-FA_TIMESTAMP: Final = "t_stamp"
+SCADA_SHEET: Final = "Dataset 1"
+SCADA_TIMESTAMP: Final = "t_stamp"
 FA_METERS: Final = ("RECTIFICADOR 1", "RECTIFICADOR 2", "RECTIFICADOR 3")
+
+# The monthly workbook: each area's total row, named as the EQ data names the area.
+ENERGY_BOOK: Final = "Base_de_datos.xlsx"
+BOOK_SHEETS: Final = (
+    BookSheet(area="OREC", sheet="OREC", total_row="OREC"),
+    BookSheet(area="Ensamble", sheet="Ensamble", total_row="Ensamble"),
+    BookSheet(area=FA_AREA, sheet="F&A", total_row="F&A"),
+)
+
+# RC, outside the cross: the plant's SCADA meters and its sheet of the workbook.
+# EMCALI, the main meter, counts kWh; the other meters count Wh.
+RC_AREA: Final = "RC"
+RC_WORKBOOK: Final = "SCADA-Base de datos Energia RC.xlsx"
+RC_MAIN_METER: Final = "EMCALI"
+RC_BUILDING_METER: Final = "EDIF ADMON"
+RC_PLANT_METERS: Final = (
+    "FILTRO 1",
+    "FILTRO 2",
+    "HORNO",
+    "REFINO 1",
+    "REFINO 2",
+    "TRITURADO",
+    "PTARI",
+)
+RC_BOOK_SHEET: Final = BookSheet(area=RC_AREA, sheet="RC Energia", total_row="RC")
 
 
 def energy_sources(data_dir: Path | None = None) -> tuple[AreaEnergySource, ...]:
-    """Return the energy sources of the cross, reading from a directory.
+    """Return the energy sources of the cross, in priority order.
 
     Args:
         data_dir: the directory holding the exports; ``data/`` when ``None``.
 
     Returns:
-        The sources, one per kind of export.
+        The SCADA counters first, then the monthly workbook.
     """
     directory = data_dir or DEFAULT_DATA_DIRECTORY
     return (
@@ -74,14 +111,45 @@ def energy_sources(data_dir: Path | None = None) -> tuple[AreaEnergySource, ...]
                 CounterWorkbook(
                     area=FA_AREA,
                     path=directory / FA_WORKBOOK,
-                    sheet=FA_SHEET,
-                    timestamp_header=FA_TIMESTAMP,
+                    sheet=SCADA_SHEET,
+                    timestamp_header=SCADA_TIMESTAMP,
                     meters=FA_METERS,
                     zone=SCADA_ZONE,
                 ),
             )
         ),
+        EnergyBookSource(directory / ENERGY_BOOK, BOOK_SHEETS),
     )
+
+
+def rc_sources(data_dir: Path | None = None) -> tuple[ScadaCounterSource, EnergyBookSource]:
+    """Return the energy of RC, which has no EQ: its SCADA meters and its sheet.
+
+    The SCADA source has every meter of the export, the main meter EMCALI and
+    the administration building included, as the area ``RC``; read them one by
+    one with :func:`~energy.domain.energy_cross.meter_months`.
+
+    Args:
+        data_dir: the directory holding the exports; ``data/`` when ``None``.
+
+    Returns:
+        The SCADA counters and the monthly workbook, each for ``RC`` alone.
+    """
+    directory = data_dir or DEFAULT_DATA_DIRECTORY
+    scada = ScadaCounterSource(
+        (
+            CounterWorkbook(
+                area=RC_AREA,
+                path=directory / RC_WORKBOOK,
+                sheet=SCADA_SHEET,
+                timestamp_header=SCADA_TIMESTAMP,
+                meters=(RC_MAIN_METER, RC_BUILDING_METER, *RC_PLANT_METERS),
+                zone=SCADA_ZONE,
+                meter_units_per_kwh={RC_MAIN_METER: Decimal(1)},
+            ),
+        )
+    )
+    return scada, EnergyBookSource(directory / ENERGY_BOOK, (RC_BOOK_SHEET,))
 
 
 def build_cross(*, data_dir: Path | None = None, engine: Engine | None = None) -> EnergyCross:
@@ -139,4 +207,5 @@ __all__ = [
     "build_cross",
     "energy_cross",
     "energy_sources",
+    "rc_sources",
 ]

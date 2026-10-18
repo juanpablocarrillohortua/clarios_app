@@ -829,7 +829,8 @@ def equs_cruce(
         list[str] | None,
         typer.Option(
             "--area",
-            help="Keep only this plant area. Repeat for several. Only F&A has energy so far.",
+            help="Keep only this plant area (F&A, OREC, Ensamble). Repeat for several. "
+            "Only F&A has daily energy.",
         ),
     ] = None,
     data_dir: Annotated[
@@ -845,11 +846,14 @@ def equs_cruce(
 ) -> None:
     """Print the kWh of each plant area against its equivalent batteries.
 
-    Read-only: the SCADA exports are read from the data directory and the EQ
-    from the database, live. F&A sets its three rectifiers against FORMACION +
-    DECORADO. A day is a local day; a frozen counter leaves its days without
-    kWh but keeps its energy in the month and the range. kWh/EQ is always the
-    ratio of the sums. Exits 1, after printing, when the daily EQ does not add
+    Read-only: the SCADA exports and Base_de_datos.xlsx are read from the data
+    directory and the EQ from the database, live. F&A sets its three
+    rectifiers against FORMACION + DECORADO, and takes the workbook for the
+    months SCADA does not cover whole; OREC and Ensamble take the workbook, by
+    month only. Every row says its energy source. A day is a local day; a
+    frozen counter leaves its days without kWh but keeps its energy in the
+    month and the range. kWh/EQ is always the ratio of the sums, over the
+    months with energy. Exits 1, after printing, when the daily EQ does not add
     up to its months.
     """
     try:

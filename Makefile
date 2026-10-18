@@ -204,7 +204,7 @@ daily: ## EQUS BATT by day: MONTH=YYYY-MM or START= END= [FREQUENCY=month] [PROC
 	@test -n "$(MONTH)" || test -n "$(START)" -a -n "$(END)" || { echo "error: MONTH or START and END are required, for example: make daily MONTH=2026-09" >&2; exit 1; }
 	$(ENERGY) equs daily $(if $(MONTH),--month $(MONTH)) $(if $(START),--start $(START)) $(if $(END),--end $(END)) $(if $(FREQUENCY),--frequency $(FREQUENCY)) $(foreach p,$(PROCESS),--process "$(p)") $(foreach a,$(AREA),--area "$(a)") $(if $(FORMAT),--format $(FORMAT))
 
-# AREA takes one or more names separated by spaces; only F&A has energy so far.
+# AREA takes one or more names separated by spaces (F&A OREC Ensamble); only F&A has days.
 cruce: ## SCADA kWh against EQ: START=YYYY-MM-DD END=YYYY-MM-DD [FREQUENCY=day|month] [AREA=] [FORMAT=]
 	@test -n "$(START)" -a -n "$(END)" || { echo "error: START and END are required, for example: make cruce START=2026-07-02 END=2026-09-30" >&2; exit 1; }
 	$(ENERGY_SCADA) equs cruce --start $(START) --end $(END) --data-dir $(SCADA_RUN_DIR) $(if $(FREQUENCY),--frequency $(FREQUENCY)) $(foreach a,$(AREA),--area "$(a)") $(if $(FORMAT),--format $(FORMAT))

@@ -856,9 +856,10 @@ def _cross(*, mismatches: int = 0) -> Any:
     def row(span: EnergySpan) -> CrossRow:
         eq = Decimal(1000) * span.days
         return CrossRow("F&A", span.start, span.end, span.kwh, span.coverage, span.measured_days,
-                        eq, {"FORMACION": eq / 2, "DECORADO": eq / 2})  # fmt: skip
+                        eq, {"FORMACION": eq / 2, "DECORADO": eq / 2},
+                        "SCADA-Base de datos F&A.xlsx")  # fmt: skip
 
-    area = AreaCross(energy, ("FORMACION", "DECORADO"), tuple(row(s) for s in spans), row(total),
+    area = AreaCross((energy,), ("FORMACION", "DECORADO"), tuple(row(s) for s in spans), row(total),
                      eq_mismatches=mismatches)  # fmt: skip
     return EnergyCrossSeries(period, "day", (area,))
 
@@ -922,8 +923,12 @@ def test_cruce_passes_its_options_and_writes_json_and_csv(
     )
     assert as_csv.exit_code == 0, as_csv.output
     lines = as_csv.output.splitlines()
-    assert lines[0] == "area,periodo,desde,hasta,dias,dias_medidos,cobertura,kwh,eq,kwh_por_eq"
-    assert lines[1] == "F&A,2026-09-01,2026-09-01,2026-09-01,1,1,1,20900,1000,20.9"
+    assert lines[0] == (
+        "area,periodo,desde,hasta,dias,dias_medidos,cobertura,kwh,eq,kwh_por_eq,fuente_energia"
+    )
+    assert lines[1] == (
+        "F&A,2026-09-01,2026-09-01,2026-09-01,1,1,1,20900,1000,20.9,SCADA-Base de datos F&A.xlsx"
+    )
 
 
 @pytest.mark.usefixtures("cruce")

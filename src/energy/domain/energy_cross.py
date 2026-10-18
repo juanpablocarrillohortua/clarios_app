@@ -12,7 +12,12 @@ Responsibility:
     interval is the difference between two consecutive readings. Two things
     make an interval unusable, and an unusable interval is *missing*, never 0:
 
-    * a counter that goes down (a reset) or a reading that is blank;
+    * a reading that is blank, or a counter that goes down. A drop of more
+      than :data:`RESET_SHARE` of the counter's value is a *reset*: the meter
+      started again, and no difference across it means anything. A smaller
+      drop is a *dip*, a bad reading (the RC export has hundreds of a few Wh):
+      its interval is missing, but the counter difference across it still
+      holds, as across a frozen run;
     * a *frozen counter*: the counter stops for at least
       :data:`FROZEN_MIN_HOURS` while a sibling meter keeps moving, and the
       interval right after the run jumps above the meter's physical limit
@@ -32,6 +37,12 @@ Responsibility:
     difference is exact even when the counter froze inside the period: freezing
     hides *when* the energy was used, not *how much*. It needs both boundaries
     to fall inside usable intervals and no reset between them.
+
+    **Monthly sources.** A source with only monthly totals (a workbook) answers
+    whole months; a month cut by the range has no kWh, since a monthly figure
+    cannot be split. Each area may have several sources, in priority order: a
+    row takes the first source that has kWh for all of it, and says which
+    (:func:`cross_rows`).
 
     **Ratios.** kWh per EQ is always Σ kWh / Σ EQ over the same days, never the
     mean of daily or monthly ratios. It is not
@@ -72,6 +83,8 @@ PHYSICAL_LIMIT_FACTOR: Final = Decimal(2)
 LIMIT_QUANTILE: Final = Decimal("0.99")
 # Below this many kWh in an hour, a meter counts as off.
 OPERATING_KWH_PER_HOUR: Final = Decimal(50)
+# A counter that loses more than this share of its value was reset; less is a dip.
+RESET_SHARE: Final = Decimal("0.5")
 
 KWH_PLACES: Final = 2
 RATIO_PLACES: Final = 4
@@ -83,8 +96,8 @@ _CENT = Decimal("0.01")
 _MICROS_PER_HOUR = Decimal(3_600_000_000)
 _MICROSECOND = timedelta(microseconds=1)
 
-IntervalState = Literal["ok", "frozen", "jump", "reset", "unread"]
-DayState = Literal["ok", "frozen", "reset", "unread", "outside"]
+IntervalState = Literal["ok", "frozen", "jump", "dip", "reset", "unread"]
+DayState = Literal["ok", "frozen", "dip", "reset", "unread", "outside"]
 Resolution = Literal["day", "month"]
 
 # The columns of one row of the cross, in CSV order.
@@ -99,6 +112,7 @@ CROSS_FIELDS: Final = (
     "kwh",
     "eq",
     "kwh_por_eq",
+    "fuente_energia",
 )
 
 
@@ -166,8 +180,9 @@ class Interval:
         counter_start: the counter at ``start``, in kWh; ``None`` if blank.
         counter_end: the counter at ``end``, in kWh; ``None`` if blank.
         state: ``ok``, ``frozen`` (part of a frozen run), ``jump`` (the interval
-            that releases a frozen run), ``reset`` (the counter went down) or
-            ``unread`` (a reading is blank).
+            that releases a frozen run), ``dip`` (the counter went down a
+            little), ``reset`` (it lost more than half its value) or ``unread``
+            (a reading is blank).
     """
 
     start: datetime
@@ -235,8 +250,8 @@ class MeterDay:
             ``None`` when the day is not wholly measured.
         coverage: the share of the day inside usable intervals, 0 to 1.
         state: ``ok``; the worst interval touching the day (``reset``,
-            ``unread``, ``frozen``); or ``outside`` when the readings do not
-            span the whole day.
+            ``unread``, ``dip``, ``frozen``); or ``outside`` when the readings
+            do not span the whole day.
     """
 
     meter: str
@@ -312,9 +327,9 @@ class CounterEnergy:
     def kwh_between(self, meter: str, start: datetime, end: datetime) -> Decimal | None:
         """Return the energy of a meter between two instants.
 
-        The counter difference is exact across a frozen run, so only a reset or
-        a blank reading between the two instants, or an instant at which the
-        counter is not known, leaves it unknown.
+        The counter difference is exact across a frozen run or a dip, so only a
+        reset or a blank reading between the two instants, or an instant at
+        which the counter is not known, leaves it unknown.
         """
         if any(item.state in ("reset", "unread") for item in self.overlapping(meter, start, end)):
             return None
@@ -437,7 +452,10 @@ def _interval(
 ) -> Interval:
     if before is None or after is None:
         return Interval(start, end, before, after, "unread")
-    return Interval(start, end, before, after, "reset" if after < before else "ok")
+    if after >= before:
+        return Interval(start, end, before, after, "ok")
+    reset = before - after > before * RESET_SHARE
+    return Interval(start, end, before, after, "reset" if reset else "dip")
 
 
 def _rate(interval: Interval) -> Decimal | None:
@@ -513,11 +531,12 @@ def _freeze(
 _DAY_STATE: Final[Mapping[IntervalState, DayState]] = {
     "jump": "frozen",
     "frozen": "frozen",
+    "dip": "dip",
     "reset": "reset",
     "unread": "unread",
     "ok": "ok",
 }
-_DAY_SEVERITY: Final[tuple[DayState, ...]] = ("reset", "unread", "frozen")
+_DAY_SEVERITY: Final[tuple[DayState, ...]] = ("reset", "unread", "dip", "frozen")
 
 
 def daily_energy(counters: CounterEnergy, period: DateRange) -> tuple[MeterDay, ...]:
@@ -696,6 +715,73 @@ def counter_area_energy(
     )
 
 
+def monthly_area_energy(
+    area: str, source: str, months: Mapping[date, Decimal | None], period: DateRange
+) -> AreaEnergy:
+    """Give the monthly totals of a source the shape of an area's energy.
+
+    A month answers only when the range holds it whole and the source has a
+    figure for it: a monthly total cannot be cut to the days of a range. The
+    whole range answers only when every month it touches does.
+
+    Args:
+        area: the plant area.
+        source: where the totals come from.
+        months: the kWh of each month, by its first day; ``None`` where the
+            source has a row without a figure.
+        period: the days, both ends included.
+
+    Returns:
+        The energy of the area by month and over the range; no days.
+    """
+    spans = []
+    for span in month_spans(period):
+        whole = span.start.day == 1 and span.end == month_end(span.start)
+        kwh = months.get(span.start) if whole else None
+        spans.append(EnergySpan(span.start, span.end, kwh, _ONE if kwh is not None else _ZERO))
+    known_days = sum(span.days for span in spans if span.kwh is not None)
+    total = EnergySpan(
+        period.start,
+        period.end,
+        _sum_all([span.kwh for span in spans]),
+        Decimal(known_days) / period.days,
+    )
+    return AreaEnergy(
+        area=area,
+        source=source,
+        resolution="month",
+        period=period,
+        meters=(),
+        days=(),
+        months=tuple(spans),
+        total=total,
+    )
+
+
+def meter_months(counters: CounterEnergy, period: DateRange) -> dict[str, tuple[EnergySpan, ...]]:
+    """Return each meter's counter difference over each month of a range, clipped to it.
+
+    For looking at the meters one by one, as when testing what a main meter
+    measures; :func:`counter_area_energy` adds them up for the cross.
+    """
+    result: dict[str, tuple[EnergySpan, ...]] = {}
+    for meter in counters.meters:
+        spans = []
+        for span in month_spans(period):
+            start = counters.midnight(span.start)
+            end = counters.midnight(span.end + timedelta(days=1))
+            spans.append(
+                EnergySpan(
+                    span.start,
+                    span.end,
+                    counters.kwh_between(meter, start, end),
+                    counters.coverage(meter, start, end),
+                )
+            )
+        result[meter] = tuple(spans)
+    return result
+
+
 # =============================================================================
 # The cross
 # =============================================================================
@@ -707,12 +793,16 @@ class CrossRow:
         area: the plant area.
         start: the first day.
         end: the last day, included.
-        kwh: the energy; ``None`` when it is not known.
+        kwh: the energy; ``None`` when no source knows it.
         coverage: the share of the span whose energy was measured, 0 to 1.
         measured_days: the days of the span with a kWh of their own; ``None``
             for a source without days.
-        eq: the EQ of the area's battery processes over the same days.
+        eq: the EQ of the area's battery processes over the same days as the
+            kWh. For a total added up from several rows, only the rows with kWh.
         eq_by_process: the EQ of each of those processes.
+        energy_source: the source the kWh comes from; several, joined with
+            ``+``, for a total added up from rows of different sources;
+            ``None`` without kWh.
     """
 
     area: str
@@ -723,6 +813,7 @@ class CrossRow:
     measured_days: int | None
     eq: Decimal
     eq_by_process: dict[str, Decimal]
+    energy_source: str | None = None
 
     @property
     def days(self) -> int:
@@ -747,6 +838,7 @@ class CrossRow:
             "kwh": json_number(self.kwh, KWH_PLACES),
             "eq": json_number(self.eq, KWH_PLACES),
             "kwh_por_eq": json_number(self.kwh_per_eq, RATIO_PLACES),
+            "fuente_energia": self.energy_source,
         }
 
 
@@ -755,25 +847,39 @@ class AreaCross:
     """The cross of one area over a range.
 
     Attributes:
-        energy: the energy of the area, with its meters and frozen counters.
+        sources: the energy of the area from each of its sources, in priority
+            order, with their meters and frozen counters.
         procesos: the battery processes whose EQ the energy is set against.
         rows: one row per day or month.
-        total: the whole range.
+        total: the whole range: Σ kWh / Σ EQ of the days that have kWh.
+        eq_without_energy: the EQ of the days of the range that no source has
+            kWh for, left out of the total's ratio.
         reconciled_months: the months whose daily EQ was checked against the month.
         eq_mismatches: how many driver-months of EQ did not add up.
     """
 
-    energy: AreaEnergy
+    sources: tuple[AreaEnergy, ...]
     procesos: tuple[str, ...]
     rows: tuple[CrossRow, ...]
     total: CrossRow
+    eq_without_energy: Decimal = _ZERO
     reconciled_months: tuple[date, ...] = ()
     eq_mismatches: int = 0
+
+    @property
+    def energy(self) -> AreaEnergy:
+        """The energy from the area's first source, the one tried first."""
+        return self.sources[0]
 
     @property
     def area(self) -> str:
         """The plant area."""
         return self.energy.area
+
+    @property
+    def frozen(self) -> tuple[FrozenRun, ...]:
+        """The frozen counters of every source of the area."""
+        return tuple(run for source in self.sources for run in source.frozen)
 
 
 @dataclass(frozen=True, slots=True)
@@ -784,11 +890,14 @@ class EnergyCrossSeries:
         period: the days, both ends included.
         frequency: ``day`` or ``month``.
         areas: one cross per area, in the order asked.
+        monthly_only: the areas left out of a daily cross because no source of
+            theirs has days.
     """
 
     period: DateRange
     frequency: Frequency
     areas: tuple[AreaCross, ...]
+    monthly_only: tuple[str, ...] = ()
 
     @property
     def eq_mismatches(self) -> int:
@@ -797,32 +906,56 @@ class EnergyCrossSeries:
 
 
 def cross_rows(
-    energy: AreaEnergy,
+    sources: Sequence[AreaEnergy],
     eq_days: Mapping[date, PeriodTotal],
     procesos: Sequence[str],
     frequency: Frequency,
-) -> tuple[tuple[CrossRow, ...], CrossRow]:
-    """Pair the energy of an area with the EQ of the same days.
+) -> tuple[tuple[CrossRow, ...], CrossRow, Decimal]:
+    """Pair the energy of an area with the EQ of the same days, source by priority.
+
+    Each row takes the first source, in the order given, that has kWh for the
+    whole row; a row no source knows keeps no kWh. The total of the range is a
+    source's own total when every row with kWh came from that source and it
+    has one (for counters, the difference between the range's midnights, which
+    keeps the energy of frozen days); otherwise the rows with kWh are added up
+    and set against the EQ of those same rows only. Either way the total never
+    mixes a source's figure for a month with another's.
 
     Args:
-        energy: the energy of the area.
+        sources: the energy of the area from each source, in priority order;
+            all over the same range. For a daily cross, only sources with days.
         eq_days: the EQ of the area's processes on each day of the range.
         procesos: those processes, in report order.
         frequency: ``day`` or ``month``.
 
     Returns:
-        The rows and the total of the range.
-    """
+        The rows, the total of the range, and the EQ of the range that no row
+        with kWh covers.
 
-    def row(span: EnergySpan) -> CrossRow:
+    Raises:
+        DomainRuleError: if there is no source, or a daily cross is given a
+            source without days.
+    """
+    if not sources:
+        raise DomainRuleError("an area needs at least one energy source")
+    if frequency == "day" and any(source.resolution != "day" for source in sources):
+        raise DomainRuleError("a daily cross takes only sources with days")
+    area = sources[0].area
+
+    def eq_of(start: date, end: date) -> dict[str, Decimal]:
         by_process = dict.fromkeys(procesos, _ZERO)
-        for offset in range(span.days):
-            total = eq_days.get(span.start + timedelta(days=offset))
+        day = start
+        while day <= end:
+            total = eq_days.get(day)
             if total is not None:
                 for name in procesos:
                     by_process[name] += total.by_process.get(name, _ZERO)
+            day += timedelta(days=1)
+        return by_process
+
+    def row(span: EnergySpan, source: str | None, by_process: dict[str, Decimal]) -> CrossRow:
         return CrossRow(
-            area=energy.area,
+            area=area,
             start=span.start,
             end=span.end,
             kwh=span.kwh,
@@ -830,10 +963,58 @@ def cross_rows(
             measured_days=span.measured_days,
             eq=sum(by_process.values(), start=_ZERO),
             eq_by_process=by_process,
+            energy_source=source if span.kwh is not None else None,
         )
 
-    spans = energy.days if frequency == "day" else energy.months
-    return tuple(row(span) for span in spans), row(energy.total)
+    def chosen(spans: Sequence[EnergySpan | None]) -> tuple[EnergySpan, str | None]:
+        for source, span in zip(sources, spans, strict=True):
+            if span is not None and span.kwh is not None:
+                return span, source.source
+        first = next(span for span in spans if span is not None)
+        return first, None
+
+    if frequency == "day":
+        rows_by_source: list[tuple[EnergySpan, ...]] = [source.days for source in sources]
+    else:
+        rows_by_source = [source.months for source in sources]
+    rows = []
+    for spans in zip(*rows_by_source, strict=True):
+        span, span_source = chosen(spans)
+        rows.append(row(span, span_source, eq_of(span.start, span.end)))
+
+    whole = eq_of(sources[0].period.start, sources[0].period.end)
+    whole_eq = sum(whole.values(), start=_ZERO)
+    used = {item.energy_source for item in rows if item.kwh is not None}
+    for source in sources:
+        if source.total.kwh is not None and used <= {source.source}:
+            return tuple(rows), row(source.total, source.source, whole), _ZERO
+
+    # No source knows the whole range: add up the rows that have kWh, and set
+    # them against the EQ of those rows alone.
+    paired = [item for item in rows if item.kwh is not None]
+    by_process = dict.fromkeys(procesos, _ZERO)
+    for item in paired:
+        for name in procesos:
+            by_process[name] += item.eq_by_process[name]
+    names = list(dict.fromkeys(item.energy_source for item in paired if item.energy_source))
+    period = sources[0].period
+    measured = [item.measured_days for item in paired]
+    total = CrossRow(
+        area=area,
+        start=period.start,
+        end=period.end,
+        kwh=sum((item.kwh for item in paired if item.kwh is not None), start=_ZERO)
+        if paired
+        else None,
+        coverage=Decimal(sum(item.days for item in paired)) / period.days,
+        measured_days=None
+        if any(days is None for days in measured)
+        else sum(days for days in measured if days is not None),
+        eq=sum(by_process.values(), start=_ZERO),
+        eq_by_process=by_process,
+        energy_source=" + ".join(names) or None,
+    )
+    return tuple(rows), total, whole_eq - total.eq
 
 
 # =============================================================================
@@ -855,39 +1036,45 @@ def _local(instant: datetime, zone: tzinfo) -> str:
     return instant.astimezone(zone).strftime("%Y-%m-%d %H:%M")
 
 
+def _source_label(energy: AreaEnergy) -> str:
+    count = len(energy.meters)
+    meters = f" ({count} meter{'' if count == 1 else 's'})" if count else ""
+    return f"{energy.source}{meters}, by {energy.resolution}"
+
+
 def describe_cross(series: EnergyCrossSeries) -> list[str]:
-    """Render a cross as a table per area, with its frozen counters and coverage."""
+    """Render a cross as a table per area, with its sources, frozen counters and coverage."""
     unit = "day" if series.frequency == "day" else "month"
     lines = [
         f"kWh against equivalent batteries by {unit}, "
         f"{series.period.start.isoformat()} to {series.period.end.isoformat()} (live EQ)",
     ]
     for area in series.areas:
-        energy = area.energy
-        count = len(energy.meters)
-        meters = f" ({count} meter{'' if count == 1 else 's'})" if count else ""
         lines += [
             "",
-            f"{area.area}: {energy.source}{meters} against {' + '.join(area.procesos)}",
-            f"{unit:<12}{'kWh':>16}{'coverage':>10}{'EQ':>14}{'kWh/EQ':>10}",
+            f"{area.area} against {' + '.join(area.procesos)}; energy, in priority order: "
+            + "; then ".join(_source_label(energy) for energy in area.sources),
+            f"{unit:<12}{'kWh':>16}{'coverage':>10}{'EQ':>14}{'kWh/EQ':>10}  energy source",
         ]
         for item in (*area.rows, area.total):
             label = "total" if item is area.total else period_label(item.start, series.frequency)
             lines.append(
                 f"{label:<12}{_amount(item.kwh):>16}{_percent(item.coverage):>10}"
                 f"{_amount(item.eq):>14}{_amount(item.kwh_per_eq):>10}"
+                f"  {item.energy_source or '-'}"
             )
         total = area.total
-        if total.measured_days is not None:
+        if total.measured_days is not None and area.energy.resolution == "day":
+            lines.append(f"Days with a measured kWh: {total.measured_days} of {total.days}.")
+        if area.eq_without_energy:
             lines.append(
-                f"Days with a measured kWh: {total.measured_days} of {total.days}. "
-                "The total is the counter difference over the range, so a frozen counter "
-                "keeps its energy there."
+                f"EQ without energy, left out of the total: {_amount(area.eq_without_energy)}."
             )
-        for run in energy.frozen:
+        for run in area.frozen:
+            zone = next(e.zone for e in area.sources if run in e.frozen)
             lines.append(
-                f"Frozen counter, left out of its days: {run.meter} from "
-                f"{_local(run.start, energy.zone)} to {_local(run.end, energy.zone)} local "
+                f"Frozen counter, left out of its days but kept in longer spans: {run.meter} "
+                f"from {_local(run.start, zone)} to {_local(run.end, zone)} local "
                 f"({_amount(run.hours, 0)} h), then a jump of {_amount(run.jump_kwh)} kWh"
             )
         if area.reconciled_months:
@@ -896,6 +1083,9 @@ def describe_cross(series: EnergyCrossSeries) -> list[str]:
                 lines.append(f"EQ: {area.eq_mismatches} driver-months of {months} do not add up.")
             else:
                 lines.append(f"EQ: the days add up to gold.v_resumen_equ exactly: {months}.")
+    if series.monthly_only:
+        left_out = ", ".join(series.monthly_only)
+        lines += ["", f"Monthly energy only, so left out of the daily cross: {left_out}."]
     return lines
 
 
@@ -910,9 +1100,14 @@ def cross_json(series: EnergyCrossSeries) -> dict[str, Any]:
         "areas": [
             {
                 "area": area.area,
-                "fuente": area.energy.source,
-                "resolucion": area.energy.resolution,
-                "medidores": list(area.energy.meters),
+                "fuentes": [
+                    {
+                        "fuente": energy.source,
+                        "resolucion": energy.resolution,
+                        "medidores": list(energy.meters),
+                    }
+                    for energy in area.sources
+                ],
                 "procesos": list(area.procesos),
                 "filas": [
                     {
@@ -925,6 +1120,7 @@ def cross_json(series: EnergyCrossSeries) -> dict[str, Any]:
                     for item in area.rows
                 ],
                 "total": area.total.as_dict(series.frequency),
+                "eq_sin_energia": json_number(area.eq_without_energy, KWH_PLACES),
                 "contadores_congelados": [
                     {
                         "medidor": run.meter,
@@ -934,7 +1130,7 @@ def cross_json(series: EnergyCrossSeries) -> dict[str, Any]:
                         "salto_kwh": json_number(run.jump_kwh, KWH_PLACES),
                         "limite_kwh_hora": json_number(run.limit_kwh_per_hour, KWH_PLACES),
                     }
-                    for run in area.energy.frozen
+                    for run in area.frozen
                 ],
                 "conciliacion_eq": {
                     "meses": [month_label(month) for month in area.reconciled_months],
@@ -943,6 +1139,7 @@ def cross_json(series: EnergyCrossSeries) -> dict[str, Any]:
             }
             for area in series.areas
         ],
+        "solo_mensual": list(series.monthly_only),
     }
 
 
@@ -962,6 +1159,7 @@ __all__ = [
     "FY_START_MONTH",
     "OPERATING_KWH_PER_HOUR",
     "PHYSICAL_LIMIT_FACTOR",
+    "RESET_SHARE",
     "AreaCross",
     "AreaEnergy",
     "CounterEnergy",
@@ -983,5 +1181,7 @@ __all__ = [
     "fiscal_label",
     "fiscal_month",
     "fiscal_year",
+    "meter_months",
     "month_spans",
+    "monthly_area_energy",
 ]
