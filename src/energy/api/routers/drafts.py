@@ -26,9 +26,18 @@ increment commits them.
   corrects. The new draft is linked to that one, which lives on as long.
 - ``GET /drafts/{draft_id}/cleared`` pages through the issues of the
   corrected file that its correction no longer has.
+- ``GET /drafts/{draft_id}/confirmation`` says what confirming the draft
+  would write (increment 7): its rows, the warnings to accept, the period of
+  a movement and the loads that already cover it, and for a catalogue the
+  current version and how the new one differs from it.
+- ``GET /drafts/{draft_id}/difference`` pages through the rows a catalogue's
+  new version adds, changes or removes.
+- ``POST /drafts/{draft_id}/commit`` lands the draft in Bronze, in one
+  transaction, once: asked again it answers with the same load (200).
 
 A correction's draft carries a ``comparison``: how many issues were cleared,
-remain and are new. Data is corrected in Excel, not here (ADR 0009).
+remain and are new. Data is corrected in Excel, not here (ADR 0009). Nothing
+here writes Silver or Gold, and Bronze only through the commit.
 
 Every route needs ``loads:write``, attached where ``api/main.py`` mounts this
 router, and a draft is visible to its owner only: someone else's answers 404.
@@ -49,25 +58,37 @@ import anyio.to_thread
 from fastapi import APIRouter, Header, Query, Request, Response, status
 from starlette.requests import ClientDisconnect
 
-from energy.api.deps import DraftServiceDep, PrincipalDep
+from energy.api.deps import DraftServiceDep, LoadServiceDep, PrincipalDep
+from energy.api.routers.loads import load_detail, load_reference
+from energy.api.schemas.requests import CommitDraftRequest
 from energy.api.schemas.responses import (
+    ColumnChangeResponse,
     ComparisonResponse,
+    ConfirmationResponse,
     CountOnlyResponse,
+    DifferenceCountsResponse,
+    DifferencePageResponse,
+    DifferenceRowResponse,
     DraftResponse,
     DraftValidationResponse,
     ErrorResponse,
     IssueResponse,
     IssuesPageResponse,
+    LoadDetailResponse,
+    PeriodResponse,
     PreviousFileResponse,
     ReasonCountResponse,
     ReasonResponse,
     RuleCountResponse,
+    WarningCountResponse,
 )
+from energy.domain.draft_commit import RowChange
 from energy.domain.draft_comparison import IssueChange
 from energy.domain.draft_reasons import ReasonId
 from energy.domain.draft_rules import IssueSeverity, RuleId
 from energy.domain.exceptions import InvalidFilenameError, UploadAbortedError
 from energy.ports.draft_repository import IssueFilter
+from energy.services.load_service import CommitRequest
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Mapping
@@ -76,7 +97,9 @@ if TYPE_CHECKING:
     from energy.domain.draft_rules import Issue
     from energy.domain.drafts import Draft
     from energy.ports.draft_repository import IssuePage
+    from energy.ports.load_committer import DifferencePage
     from energy.services.draft_service import DraftService
+    from energy.services.load_service import Confirmation
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
 
@@ -206,6 +229,8 @@ def _draft(draft: Draft, compared: Comparison | None = None) -> DraftResponse:
         validation=validation,
         previous_draft_id=draft.previous_draft_id,
         comparison=_comparison(compared),
+        run_id=draft.run_id,
+        committed_at=draft.committed_at,
     )
 
 
@@ -543,6 +568,200 @@ def list_cleared(
             no correction that can be compared (404).
     """
     return _page(service.cleared(draft_id, principal.subject, offset, limit), offset, limit)
+
+
+def _confirmation(found: Confirmation) -> ConfirmationResponse:
+    """Describe what confirming a draft would write."""
+    draft = found.draft
+    spec = found.spec
+    reasons = {
+        (count.rule.value, count.column_key): count.reasons
+        for count in (draft.validation.counts if draft.validation else ())
+    }
+    difference = None
+    if found.difference is not None:
+        counts = found.difference
+        difference = DifferenceCountsResponse(
+            base_run_id=counts.base_run_id,
+            added=counts.added,
+            changed=counts.changed,
+            removed=counts.removed,
+            unchanged=counts.unchanged,
+            removed_rows=spec.removed_rows.value if spec.removed_rows else None,
+        )
+    return ConfirmationResponse(
+        draft_id=draft.draft_id,
+        dataset_key=spec.key,
+        kind=spec.kind.value,
+        filename=draft.filename,
+        sheet=spec.bronze.sheet,
+        can_confirm=found.blocked_by is None,
+        blocked_by=found.blocked_by.value if found.blocked_by else None,
+        validation_digest=found.validation_digest,
+        rows=found.rows,
+        warnings=[
+            WarningCountResponse(
+                rule=count.rule.value,
+                column=count.column_key,
+                rows=count.rows,
+                reasons=[
+                    ReasonCountResponse(reason=by_reason.reason.value, rows=by_reason.rows)
+                    for by_reason in reasons.get((count.rule.value, count.column_key), ())
+                ],
+            )
+            for count in found.warnings
+        ],
+        warnings_to_accept=bool(found.warnings),
+        period=PeriodResponse(start=found.period[0], end=found.period[1]) if found.period else None,
+        overlapping_loads=[load_reference(load) for load in found.overlapping],
+        current_version=load_reference(found.current_version) if found.current_version else None,
+        difference=difference,
+        already_loaded_run_id=found.already_loaded,
+        run_id=draft.run_id,
+    )
+
+
+def _difference_page(page: DifferencePage, offset: int, limit: int) -> DifferencePageResponse:
+    """Describe a page of the rows a catalogue's new version adds, changes or removes."""
+    return DifferencePageResponse(
+        total=page.total,
+        offset=offset,
+        limit=limit,
+        items=[
+            DifferenceRowResponse(
+                change=row.change.value,
+                key=list(row.key),
+                row=row.source_row,
+                previous_row=row.previous_source_row,
+                values=dict(row.values),
+                columns=[
+                    ColumnChangeResponse(
+                        column=column.key, before=column.before, after=column.after
+                    )
+                    for column in row.columns
+                ],
+            )
+            for row in page.items
+        ],
+    )
+
+
+@router.get(
+    "/{draft_id}/confirmation",
+    summary="What confirming a draft would write",
+    status_code=status.HTTP_200_OK,
+    responses={
+        **_NOT_FOUND,
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorResponse,
+            "description": "It had to be validated again, and another validation is running.",
+        },
+    },
+)
+def get_confirmation(
+    draft_id: UUID, principal: PrincipalDep, service: LoadServiceDep
+) -> ConfirmationResponse:
+    """Return what committing one of the caller's drafts would write.
+
+    A draft judged by another spec, or validated before the commit kept what
+    a workbook says about itself, is validated again first.
+
+    Raises:
+        UnknownDraftError: no live draft of the caller has that ID (404).
+        DraftBusyError: it must be validated again and is being validated (409).
+    """
+    return _confirmation(service.confirmation(draft_id, principal.subject))
+
+
+@router.get(
+    "/{draft_id}/difference",
+    summary="A page of the rows a catalogue's new version adds, changes or removes",
+    status_code=status.HTTP_200_OK,
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": "No draft of yours, or no validated catalogue to compare.",
+        }
+    },
+)
+def list_difference(
+    draft_id: UUID,
+    principal: PrincipalDep,
+    service: LoadServiceDep,
+    change: Annotated[RowChange, Query(description="added, changed or removed.")],
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> DifferencePageResponse:
+    """Return a page of the rows of one kind of change, ordered by natural key.
+
+    Raises:
+        UnknownDraftError: no live draft of the caller has that ID, or it is
+            no validated draft of a catalogue (404).
+    """
+    page = service.difference(draft_id, principal.subject, change, offset, limit)
+    return _difference_page(page, offset, limit)
+
+
+@router.post(
+    "/{draft_id}/commit",
+    summary="Land a validated draft in Bronze",
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        status.HTTP_200_OK: {
+            "model": LoadDetailResponse,
+            "description": "The draft was committed before: its load.",
+        },
+        **_NOT_FOUND,
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorResponse,
+            "description": (
+                "Busy, not validated, validated again with another result, another"
+                " load became current, the same file was loaded, another commit of the"
+                " dataset is running, or its original is gone."
+            ),
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse,
+            "description": "It has errors, warnings not accepted, or no row.",
+        },
+    },
+)
+def commit_draft(
+    draft_id: UUID,
+    body: CommitDraftRequest,
+    request: Request,
+    response: Response,
+    principal: PrincipalDep,
+    service: LoadServiceDep,
+) -> LoadDetailResponse:
+    """Land one of the caller's validated drafts in Bronze, once.
+
+    Answers 201 with the new load and its ``Location``; 200 with the same
+    load for a draft committed before, whatever the body.
+
+    Raises:
+        UnknownDraftError: no live draft of the caller has that ID (404).
+        DraftBusyError, NotValidatedError, ValidationChangedError,
+        CurrentVersionChangedError, AlreadyLoadedError, DatasetBusyError,
+        OriginalMissingError: refused (409).
+        DraftBlockedError, WarningsNotAcceptedError, NothingToLoadError:
+        refused (422).
+    """
+    outcome = service.commit(
+        draft_id,
+        principal.subject,
+        CommitRequest(
+            validation_digest=body.validation_digest,
+            accept_warnings=body.accept_warnings,
+            base_run_id=body.base_run_id,
+        ),
+    )
+    run_id = outcome.load.summary.run_id
+    if outcome.created:
+        response.headers["Location"] = f"{request.scope.get('root_path', '')}/loads/{run_id}"
+    else:
+        response.status_code = status.HTTP_200_OK
+    return load_detail(outcome.load, principal.subject, draft_available=True)
 
 
 __all__ = ["router"]

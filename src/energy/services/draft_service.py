@@ -76,6 +76,7 @@ from energy.domain.drafts import (
     XLSX_MEDIA_TYPE,
     XLSX_SUFFIX,
     DraftStatus,
+    ExportFacts,
     UploadGuard,
     ValidationSummary,
     check_declared_size,
@@ -89,7 +90,13 @@ from energy.domain.exceptions import (
     UnknownDraftError,
     UnsupportedFileFormatError,
 )
-from energy.domain.landing import DEFAULT_PLANT_CODE, archive_object_key
+from energy.domain.landing import DEFAULT_PLANT_CODE, DateSpan, archive_object_key, landing_source
+from energy.domain.qad_export import (
+    CONDITIONS_SHEET,
+    INFO_SHEET,
+    info_dictionary,
+    search_conditions,
+)
 from energy.domain.workbook_limits import IN_REQUEST, package_issue, unreadable
 from energy.ports.draft_repository import ArchivedFile, IssueFilter, NewDraft
 
@@ -105,7 +112,7 @@ if TYPE_CHECKING:
     from energy.ports.draft_repository import DraftRepository, DraftValidation, IssuePage
     from energy.ports.object_storage import ByteSource, ObjectStorage
     from energy.ports.workbook_package import WorkbookPackageInspector
-    from energy.ports.workbook_reader import WorkbookFileReader
+    from energy.ports.workbook_reader import OpenWorkbook, WorkbookFileReader
 
 logger = get_logger(__name__)
 
@@ -536,9 +543,15 @@ class DraftService:
         return self._earlier(draft, owner)
 
     def _check(self, spec: DatasetSpec, path: Path, writing: DraftValidation) -> ValidationSummary:
-        """Check one file against its spec, staging rows and issues as it goes."""
+        """Check one file against its spec, staging rows and issues as it goes.
+
+        What the workbook says about itself (its sheets, the period its rows
+        cover, its Info and search-conditions sheets) is read on the way, for
+        the run a commit opens: the same facts the command-line loader records.
+        """
         collector = IssueCollector(self._listed_per_column)
         rows_read = 0
+        facts: ExportFacts | None = None
         problem = self._package_problem(path)
         if problem is not None:
             collector.add(problem)
@@ -549,11 +562,14 @@ class DraftService:
                 if missing is not None:
                     collector.add(missing)
                 else:
+                    period_key = landing_source(spec.bronze.source_key).period_key
+                    span = DateSpan(period_key) if period_key else None
                     sheet = workbook.sheet(spec.bronze.sheet)
                     rows = check_sheet(
-                        spec, sheet.rows, collector, sheet.first_row, sheet.first_column
+                        spec, sheet.rows, collector, sheet.first_row, sheet.first_column, span
                     )
                     rows_read = writing.stage_rows(_flushing(rows, collector, writing))
+                    facts = _export_facts(workbook, span)
             except UnsupportedFileFormatError:
                 collector.add(unreadable("corrupt"))
         writing.add_issues(collector.take())
@@ -565,6 +581,7 @@ class DraftService:
             rows_with_warnings=collector.rows_with_warnings,
             counts=collector.counts(),
             spec_digest=spec_digest(spec),
+            facts=facts,
         )
 
     def _package_problem(self, path: Path) -> Issue | None:
@@ -629,17 +646,20 @@ class DraftService:
     # -------------------------------------------------------------------------
     def purge(
         self,
-        landed: Callable[[str], bool],
+        landed: Callable[[str, str, str], bool],
         dry_run: bool = False,
         only: UUID | None = None,
     ) -> PurgeOutcome:
         """Remove expired drafts, and the originals nothing else needs.
 
-        An original stays while another draft points at it or Bronze has
-        landed the same bytes (``landed``).
+        An original stays while another draft points at it or Bronze
+        catalogues that very object (``landed``): a committed draft's original
+        is evidence. The same bytes archived by the command line under another
+        key do not keep a draft's copy.
 
         Args:
-            landed: says whether Bronze catalogued a file of that hash.
+            landed: says, from a file's hash, bucket and key, whether Bronze
+                catalogues that object.
             dry_run: count what would go, and remove nothing.
             only: purge this one draft, expired or not, and nothing else.
 
@@ -656,7 +676,7 @@ class DraftService:
                 continue
             if self._repository.references(candidate.bucket, key, ids):
                 continue
-            if candidate.content_hash and landed(candidate.content_hash):
+            if candidate.content_hash and landed(candidate.content_hash, candidate.bucket, key):
                 continue
             objects.add(key)
             if not dry_run:
@@ -679,6 +699,24 @@ class DraftService:
             dry_run=dry_run,
         )
         return PurgeOutcome(drafts=removed, objects=len(objects), incoming=incoming)
+
+
+def _export_facts(workbook: OpenWorkbook, span: DateSpan | None) -> ExportFacts:
+    """Return what a workbook says about itself, as the loader reads it (``_new_run``)."""
+    info: dict[str, str] = {}
+    if INFO_SHEET in workbook.sheet_names:
+        info = info_dictionary(workbook.sheet(INFO_SHEET).rows)
+    conditions: list[dict[str, str]] = []
+    if CONDITIONS_SHEET in workbook.sheet_names:
+        conditions = search_conditions(workbook.sheet(CONDITIONS_SHEET).rows)
+    first, last = span.bounds() if span is not None else (None, None)
+    return ExportFacts(
+        sheet_names=tuple(workbook.sheet_names),
+        window_start=first,
+        window_end=last,
+        export_info=info,
+        search_conditions=tuple(conditions),
+    )
 
 
 def _flushing(

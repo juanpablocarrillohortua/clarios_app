@@ -33,6 +33,8 @@ from energy.adapters.entra_token_verifier import EntraTokenVerifier
 from energy.adapters.local_storage import LocalObjectStorage
 from energy.adapters.minio_storage import MinioObjectStorage
 from energy.adapters.postgres_draft_repo import PostgresDraftRepository
+from energy.adapters.postgres_load_committer import PostgresLoadCommitter
+from energy.adapters.postgres_load_ledger import PostgresLoadLedger
 from energy.adapters.xlsx_dataset_template import XlsxDatasetTemplateWriter
 from energy.adapters.yaml_dataset_specs import load_dataset_specs
 from energy.adapters.zip_package import ZipPackageInspector
@@ -47,6 +49,7 @@ from energy.ports.dataset_template import DatasetTemplateWriter
 from energy.ports.object_storage import ObjectStorage
 from energy.ports.token_verifier import TokenVerifier
 from energy.services.draft_service import DraftService
+from energy.services.load_service import LoadService
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -291,6 +294,31 @@ def get_draft_service(request: Request) -> DraftService:
     return service
 
 
+def get_load_service(request: Request) -> LoadService:
+    """Return the load service, building it on first use.
+
+    Args:
+        request: the current request, whose app holds the settings, the
+            dataset specs and, once built, the service.
+
+    Returns:
+        The :class:`~energy.services.load_service.LoadService`.
+    """
+    service: LoadService | None = getattr(request.app.state, "load_service", None)
+    if service is None:
+        settings: Settings = request.app.state.settings
+        engine = get_engine()
+        service = LoadService(
+            drafts=get_draft_service(request),
+            committer=PostgresLoadCommitter(engine),
+            ledger=PostgresLoadLedger(engine),
+            storage=build_object_storage(settings),
+            catalogue=request.app.state.dataset_catalogue,
+        )
+        request.app.state.load_service = service
+    return service
+
+
 # -----------------------------------------------------------------------------
 # Annotated aliases - route handlers depend on these, never on the functions.
 # -----------------------------------------------------------------------------
@@ -302,6 +330,7 @@ PrincipalDep = Annotated[Principal, Depends(get_principal)]
 DatasetCatalogueDep = Annotated[DatasetCatalogue, Depends(get_dataset_catalogue)]
 TemplateWriterDep = Annotated[DatasetTemplateWriter, Depends(get_template_writer)]
 DraftServiceDep = Annotated[DraftService, Depends(get_draft_service)]
+LoadServiceDep = Annotated[LoadService, Depends(get_load_service)]
 
 
 def requires(permission: Permission) -> Callable[[Principal], Principal]:
@@ -332,6 +361,7 @@ __all__ = [
     "APIKeyDep",
     "DatasetCatalogueDep",
     "DraftServiceDep",
+    "LoadServiceDep",
     "PrincipalDep",
     "RequestIdDep",
     "SessionDep",
@@ -342,6 +372,7 @@ __all__ = [
     "get_dataset_catalogue",
     "get_db_session",
     "get_draft_service",
+    "get_load_service",
     "get_principal",
     "get_request_id",
     "get_template_writer",

@@ -3,6 +3,7 @@
 // The specs are the server's (config/datasets/*.yaml); the app draws from them
 // and holds no rule of its own.
 import type { Api, Download } from "./client";
+import type { LoadReference } from "./loads";
 
 export interface DatasetColumn {
   header: string;
@@ -32,6 +33,8 @@ export interface Dataset {
   natural_key: string[];
   period_column: string | null;
   columns: DatasetColumn[];
+  /** The latest completed load of the dataset; null before one. */
+  last_load?: LoadReference | null;
 }
 
 export interface UploadLimits {

@@ -46,27 +46,36 @@ from energy.api.routers import (
     health,
     ingest,
     kpis,
+    loads,
     me,
-    runs,
-    uploads,
 )
 from energy.api.security import Permission
 from energy.core.logging import configure_from_settings, get_logger
 from energy.core.settings import Settings, get_settings
 from energy.db.session import dispose_engine
 from energy.domain.exceptions import (
+    AlreadyLoadedError,
     AuthenticationError,
+    CommitCountMismatchError,
+    CurrentVersionChangedError,
+    DatasetBusyError,
     DatasetSpecError,
+    DraftBlockedError,
     DraftBusyError,
     EnergyError,
     EntityNotFoundError,
     FileTooLargeError,
     IdentityProviderUnavailableError,
     LengthRequiredError,
+    NothingToLoadError,
+    NotValidatedError,
+    OriginalMissingError,
     PermissionDeniedError,
     SignInNotConfiguredError,
     SourceUnavailableError,
     UnsupportedFileFormatError,
+    ValidationChangedError,
+    WarningsNotAcceptedError,
 )
 
 if TYPE_CHECKING:
@@ -93,17 +102,29 @@ TAGS_METADATA = [
     {"name": "health", "description": "Liveness and readiness probes."},
     {"name": "session", "description": "Sign-in settings, and who is signed in."},
     {"name": "kpis", "description": "Gold-layer KPI queries for dashboards and reports."},
-    {"name": "uploads", "description": "Excel and CSV file ingestion into Bronze."},
     {"name": "ingest", "description": "Sensor and historian push endpoint into Bronze."},
-    {"name": "runs", "description": "Pipeline run status and history."},
     {"name": "datasets", "description": "The dataset specs, and the empty template of each."},
     {"name": "drafts", "description": "Files uploaded to be loaded, and the issues found in them."},
+    {
+        "name": "loads",
+        "description": "What landed in Bronze: the history, and each load in detail.",
+    },
 ]
 
 #: Domain errors that have an HTTP status of their own. Anything else the
 #: domain raises on purpose is a 400.
 _STATUS_OF: Final[dict[type[EnergyError], int]] = {
     DraftBusyError: status.HTTP_409_CONFLICT,
+    NotValidatedError: status.HTTP_409_CONFLICT,
+    ValidationChangedError: status.HTTP_409_CONFLICT,
+    CurrentVersionChangedError: status.HTTP_409_CONFLICT,
+    AlreadyLoadedError: status.HTTP_409_CONFLICT,
+    DatasetBusyError: status.HTTP_409_CONFLICT,
+    OriginalMissingError: status.HTTP_409_CONFLICT,
+    DraftBlockedError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    WarningsNotAcceptedError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    NothingToLoadError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    CommitCountMismatchError: status.HTTP_500_INTERNAL_SERVER_ERROR,
     LengthRequiredError: status.HTTP_411_LENGTH_REQUIRED,
     FileTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
     UnsupportedFileFormatError: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
@@ -146,7 +167,10 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
     An upload refused gets 411 (no size), 413 (too large) or 415 (not an
     ``.xlsx``); a draft busy elsewhere 409; object storage out of reach 503
-    (:data:`_STATUS_OF`). Every other deliberate domain error is a 400.
+    (:data:`_STATUS_OF`). A commit refused gets 409 when the draft or the
+    data changed under it, 422 when the draft itself cannot land, and 500 when
+    the rows landed are not the rows staged, which is a bug. Every other
+    deliberate domain error is a 400.
 
     Args:
         app: the application to attach handlers to.
@@ -281,10 +305,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     may_view = [Depends(requires(Permission.DASHBOARD_VIEW))]
     may_load = [Depends(requires(Permission.LOADS_WRITE))]
     app.include_router(kpis.router, dependencies=may_view)
-    app.include_router(uploads.router, dependencies=may_load)
-    app.include_router(runs.router, dependencies=may_load)
     app.include_router(datasets.router, dependencies=may_load)
     app.include_router(drafts.router, dependencies=may_load)
+    app.include_router(loads.router, dependencies=may_load)
     # Devices, by API key (Phase 3).
     app.include_router(ingest.router)
 

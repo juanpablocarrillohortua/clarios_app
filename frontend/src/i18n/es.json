@@ -67,7 +67,8 @@
       "templateFailed": "No se pudo descargar la plantilla. Intente de nuevo.",
       "loading": "Cargando los conjuntos de datos…",
       "failed": "No se pudo obtener la lista de conjuntos de datos.",
-      "none": "Todavía no hay conjuntos de datos para cargar."
+      "none": "Todavía no hay conjuntos de datos para cargar.",
+      "lastLoad": "Última carga: {{when}}"
     },
     "file": {
       "heading": "Archivo",
@@ -121,8 +122,7 @@
       "clean": "El archivo cumple todas las reglas.",
       "rowsRead": "Filas leídas",
       "rowsWithErrors": "Con errores",
-      "rowsWithWarnings": "Con advertencias",
-      "nextStep": "Confirmar la carga llegará en una próxima versión: por ahora nada se escribe en la base de datos."
+      "rowsWithWarnings": "Con advertencias"
     },
     "issues": {
       "heading": "Problemas encontrados",
@@ -467,6 +467,84 @@
         "fix": "Solución",
         "change": "Cambio"
       }
+    },
+    "tabs": {
+      "label": "Carga de datos",
+      "new": "Nueva carga",
+      "history": "Historial"
+    },
+    "confirm": {
+      "loading": "Preparando la confirmación…",
+      "failed": "No se pudo preparar la confirmación.",
+      "ready_one": "Listo para cargar: {{rows}} fila en {{dataset}}.",
+      "ready_other": "Listo para cargar: {{rows}} filas en {{dataset}}.",
+      "period": "Período del archivo: del {{from}} al {{to}}.",
+      "overlapping_one": "Ya hay una carga que cubre parte de este período:",
+      "overlapping_other": "Ya hay {{count}} cargas que cubren parte de este período:",
+      "overlappingLoad": "«{{file}}», del {{from}} al {{to}}, cargada el {{when}}",
+      "overlappingRule": "Las filas con la misma clave se reemplazan con las de este archivo; las que no estén en él se quedan como están.",
+      "current": "Comparado con la versión actual: «{{file}}», cargada el {{when}}.",
+      "firstVersion": "Es la primera versión de este catálogo: todas sus filas son nuevas.",
+      "added": "Agregadas",
+      "changed": "Cambiadas",
+      "removed": "Quitadas",
+      "unchanged": "Sin cambios",
+      "warningsTitle": "Advertencias que acepta al confirmar",
+      "warningLine_one": "{{rule}} en «{{column}}»: {{rows}} fila",
+      "warningLine_other": "{{rule}} en «{{column}}»: {{rows}} filas",
+      "warningFile_one": "{{rule}}: {{rows}} fila",
+      "warningFile_other": "{{rule}}: {{rows}} filas",
+      "accept_one": "Revisé la fila con advertencias y quiero cargar el archivo con ella.",
+      "accept_other": "Revisé las {{n}} filas con advertencias y quiero cargar el archivo con ellas.",
+      "acceptFirst": "Marque la casilla para confirmar con advertencias.",
+      "confirm": "Confirmar carga",
+      "confirming": "Confirmando…",
+      "writing_one": "Escribiendo {{rows}} fila en la base de datos…",
+      "writing_other": "Escribiendo {{rows}} filas en la base de datos…",
+      "noCancel": "La confirmación no se detiene a medias: termina en segundos, y repetirla es seguro.",
+      "alreadyLoaded": "Este archivo ya se cargó: no se carga dos veces.",
+      "seeLoad": "Ver la carga",
+      "check": "Comprobar",
+      "retry": "Intentar de nuevo",
+      "errors": {
+        "validationChanged": "El archivo se validó de nuevo y el resultado cambió: revíselo antes de confirmar.",
+        "currentVersionChanged": "Otra carga de este catálogo se confirmó mientras tanto: revise los cambios de nuevo.",
+        "datasetBusy": "Otra carga de este conjunto se está confirmando. Intente de nuevo en un momento.",
+        "draftBusy": "Este archivo se está confirmando o validando en otra pestaña. Compruebe en un momento.",
+        "originalMissing": "El archivo guardado ya no está disponible. Súbalo de nuevo.",
+        "unknown": "No se sabe si la carga se completó: la conexión se cortó antes de la respuesta.",
+        "failed": "No se pudo confirmar la carga."
+      }
+    },
+    "committed": {
+      "title": "Carga confirmada",
+      "rows_one": "{{rows}} fila escrita en la base de datos.",
+      "rows_other": "{{rows}} filas escritas en la base de datos.",
+      "when": "Confirmada el {{when}}.",
+      "id": "Identificador: {{id}}",
+      "figures": "El tablero mostrará estos datos cuando se actualicen las cifras, en una próxima versión.",
+      "detail": "Ver el detalle",
+      "history": "Ver el historial"
+    },
+    "difference": {
+      "show": "Ver los cambios",
+      "label": "Tipo de cambio",
+      "added": "Agregadas ({{n}})",
+      "changed": "Cambiadas ({{n}})",
+      "removed": "Quitadas ({{n}})",
+      "key": "Clave",
+      "row": "Fila",
+      "what": "Qué cambió",
+      "values": "Valores",
+      "change": "{{column}}: {{before}} → {{after}}",
+      "value": "{{column}}: {{value}}",
+      "empty": "vacío",
+      "none": "Ninguna fila con este cambio.",
+      "failed": "No se pudo obtener la lista de cambios.",
+      "removedRows": {
+        "kept": "Quitadas: dejan de cargarse, pero Silver conserva las que ya conoce.",
+        "dropped": "Quitadas: desaparecen de Silver en la próxima actualización de las cifras."
+      }
     }
   },
   "datasets": {
@@ -476,7 +554,8 @@
     },
     "lineas_produccion": {
       "name": "Líneas de producción",
-      "description": "Catálogo de las líneas de producción: hoja «Lineas Produccion» del libro EQUS BATT."
+      "description": "Catálogo de las líneas de producción: hoja «Lineas Produccion» del libro EQUS BATT.",
+      "removedRows": "Quitadas: dejan de estar en el catálogo, pero Silver no las borra. Una línea con recibos de producción queda sin descripción, almacén ni unidades por hora; una sin recibos conserva sus datos anteriores."
     },
     "qad_facturas": {
       "name": "Unidades facturadas",
@@ -536,5 +615,92 @@
       "title": "Sesión no aceptada",
       "text": "El servicio no aceptó su sesión. Inicie sesión de nuevo."
     }
+  },
+  "history": {
+    "intro": "Todo lo que se cargó en la base de datos, desde esta aplicación o desde la línea de comandos.",
+    "loading": "Cargando el historial…",
+    "failed": "No se pudo obtener el historial.",
+    "empty": "Todavía no hay cargas.",
+    "emptyAction": "Hacer la primera carga",
+    "noMatch": "Ninguna carga con estos filtros.",
+    "clearFilters": "Quitar filtros",
+    "range": "{{from}}–{{to}} de {{total}}",
+    "previous": "Anterior",
+    "next": "Siguiente",
+    "filters": {
+      "dataset": "Conjunto",
+      "anyDataset": "Todos los conjuntos",
+      "state": "Estado",
+      "anyState": "Todos",
+      "person": "Persona",
+      "anyPerson": "Todas",
+      "mine": "Mis cargas",
+      "origin": "Origen",
+      "anyOrigin": "Todos",
+      "more": "Más filtros",
+      "periodFrom": "Período desde",
+      "periodTo": "Período hasta",
+      "from": "Cargada desde",
+      "to": "Cargada hasta"
+    },
+    "columns": {
+      "when": "Fecha",
+      "dataset": "Conjunto",
+      "file": "Archivo",
+      "rows": "Filas",
+      "warnings": "Advertencias aceptadas",
+      "state": "Estado",
+      "person": "Persona",
+      "origin": "Origen"
+    },
+    "states": {
+      "pending": "Pendiente",
+      "running": "En curso",
+      "completed": "Completada",
+      "failed": "Fallida",
+      "cancelled": "Anulada"
+    },
+    "origins": {
+      "app": "Aplicación",
+      "cli": "Línea de comandos"
+    },
+    "commandLine": "Línea de comandos",
+    "sheets": "Hojas: {{names}}",
+    "noFile": "Sin archivo"
+  },
+  "load": {
+    "back": "Volver al historial",
+    "loading": "Cargando la carga…",
+    "missing": "Esta carga no existe o no es de su planta.",
+    "failed": "No se pudo obtener la carga.",
+    "rowsWritten": "Filas escritas",
+    "warningsAccepted": "Advertencias aceptadas",
+    "facts": {
+      "id": "Identificador",
+      "who": "Quién",
+      "when": "Cuándo",
+      "period": "Período",
+      "sheets": "Hojas",
+      "origin": "Origen",
+      "state": "Estado",
+      "file": "Archivo",
+      "hash": "Huella del archivo (SHA-256)"
+    },
+    "periodValue": "del {{from}} al {{to}}",
+    "none": "—",
+    "sheetRows_one": "{{name}}: {{rows}} fila",
+    "sheetRows_other": "{{name}}: {{rows}} filas",
+    "fileValue": "{{name}} · {{size}}",
+    "validationTitle": "Lo que encontró la validación",
+    "validationNone": "Ninguna regla encontró problemas.",
+    "acceptedTitle": "Advertencias aceptadas al confirmar",
+    "differenceTitle": "Frente a la versión que reemplazó",
+    "error": "Por qué falló: {{error}}",
+    "download": "Descargar archivo original",
+    "downloading": "Descargando… {{received}} de {{total}}",
+    "downloadFailed": "No se pudo descargar el archivo.",
+    "draft": "Ver el archivo subido",
+    "cliNote": "Cargada desde la línea de comandos: la aplicación no la validó.",
+    "countLine": "{{rule}} · {{severity}}{{column}}: {{rows}}"
   }
 }

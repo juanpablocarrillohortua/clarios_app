@@ -155,7 +155,9 @@ The ledger every Bronze row points at. The EQUS loader writes one row per load:
 it inserts the run as `running` before landing anything, then sets it to
 `completed` in the same transaction that lands the rows, or to `failed` after
 rolling them back. So a `completed` run has all its rows and a `failed` run has
-none.
+none. The web app's commit inserts and completes its run in the transaction
+that lands the rows: a commit that fails leaves no run at all, and its
+`started_at` equals its `finished_at`.
 
 | Column | Type | Null | Description |
 |---|---|---|---|
@@ -173,13 +175,29 @@ none.
 | `finished_at` | `TIMESTAMPTZ` | yes | Null while running. |
 | `row_count` | `BIGINT` | no | Rows written to Bronze. Never negative. |
 | `error` | `TEXT` | no | Failure message; empty on success. |
-| `parameters` | `JSONB` | no | Invocation parameters — what a retry replays. The EQUS loader stores `filename`, `content_hash`, `sheets` (name, dataset key and header row of each), `plant_code`, `force`, the period dates the caller gave (null when none), `uploaded_by`, and `info`: the whole *Info* sheet as a name-to-value object. |
+| `parameters` | `JSONB` | no | Invocation parameters — what a retry replays. The EQUS loader stores `filename`, `content_hash`, `sheets` (name, dataset key and header row of each), `plant_code`, `force`, the period dates the caller gave (null when none), `uploaded_by`, and `info`: the whole *Info* sheet as a name-to-value object. The web app's commit stores the same keys (`force` false, no period given) and the ones below. |
 
 **Indexes:** `(source_key, started_at DESC)`, `(plant_code, started_at DESC)`,
 `state`.
 
 **Constraints:** `state` and `source_key` restricted to the lists above;
 `window_start <= window_end` when both are present.
+
+**What the web app's commit adds to `parameters`** (`run_parameters` of
+`energy.domain.draft_commit`):
+
+| Key | Holds |
+|---|---|
+| `input_mode` | `upload`, the only mode ([ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)). A run without it came from the command line |
+| `dataset_key` | The dataset spec the file was checked against |
+| `draft_id`, `previous_draft_id` | The draft committed, and the draft it corrected (null when none) |
+| `spec_digest` | SHA-256 of the spec the check used |
+| `uploaded_by_name` | The person's display name; `uploaded_by` is their object ID. Never the sign-in name |
+| `validation` | `validated_at`; `digest`, the validation digest the person confirmed; `rows_read`, `rows_with_errors` (always 0), `rows_with_warnings`; `counts`, every count by `rule`, `severity`, `column_key` and `rows`; and `accepted`: null, or `{by, warnings}`, the person who accepted the warnings and the counts they accepted |
+| `difference` | For a catalogue only: `base_run_id`, the version it was compared with (null when there was none); `added`, `changed`, `removed`, `unchanged`; and `removed_rows`, what Silver did then with a removed row (`kept` or `dropped`) |
+
+The *Info* sheet, the search conditions and the period are read at validation,
+as the loader reads them, and kept on the draft until the commit.
 
 ### `bronze.raw_files`
 
@@ -198,8 +216,8 @@ bytes a plant sent.
 | `size_bytes` | `BIGINT` | no | Payload size. Must be positive. |
 | `plant_code` / `source_key` | `VARCHAR` | no | What it was uploaded for. `source_key` takes the same five values as on `ingestion_runs`. One workbook can feed several sources; this is the first one it was loaded for. |
 | `sheet_names` | `TEXT[]` | no | Every sheet found in the workbook, hidden ones included, whether or not it was landed. Empty by default. |
-| `uploaded_by` | `VARCHAR(200)` | no | Who submitted it. |
-| `uploaded_at` | `TIMESTAMPTZ` | no | Receipt time. |
+| `uploaded_by` | `VARCHAR(200)` | no | Who submitted it. For the web app, the person's object ID. |
+| `uploaded_at` | `TIMESTAMPTZ` | no | Receipt time. For the web app, when the commit catalogued the file, not when it was uploaded: the draft keeps that. |
 
 **Indexes:** `(source_key, uploaded_at DESC)`.
 
@@ -310,6 +328,15 @@ loader, in this order:
    rolls the rows back and sets the run to `failed`.
 
 The loader only inserts into landing tables and only updates `ingestion_runs`.
+
+**From the web app.** Confirming a draft (`POST /api/drafts/{draft_id}/commit`)
+does steps 2 to 5 with the loader's own statements, in one transaction that
+also updates staging: it catalogues the original unless `raw_files` has it,
+refuses a file whose sheet a completed run already landed, inserts the run,
+copies the staged rows with one `INSERT … SELECT`, checks that the counts
+agree, completes the run, removes the staged rows and marks the draft
+committed. Only `postgres_bronze_repo.py` and `postgres_load_committer.py`
+write Bronze, and a test keeps it so.
 
 **Any year, several files.** The loader does not know about fiscal years. It
 lands whatever dates an export holds; the fiscal year of a figure is assigned
@@ -1000,7 +1027,9 @@ on the schema and `SELECT` on every view, and no privilege on any other schema.
 
 Created by [`0007_create_staging_schema.py`](../migrations/versions/0007_create_staging_schema.py);
 reasons and corrections added by
-[`0008_add_reasons_and_corrections.py`](../migrations/versions/0008_add_reasons_and_corrections.py).
+[`0008_add_reasons_and_corrections.py`](../migrations/versions/0008_add_reasons_and_corrections.py);
+the commit added by
+[`0009_add_draft_commit.py`](../migrations/versions/0009_add_draft_commit.py).
 The API's `/api/drafts` routes write it ([api.md](api.md)); what a file is
 checked against is in [dataset-specs.md](dataset-specs.md#what-a-file-is-checked-against).
 
@@ -1020,7 +1049,7 @@ One upload of one `.xlsx` for one dataset spec.
 | `source_key` | `VARCHAR(64)` | no | The spec's Bronze source; one of the five EQUS keys. |
 | `plant_code` | `VARCHAR(32)` | no | `1515`. |
 | `input_mode` | `VARCHAR(10)` | no | `upload`, the only mode: data is entered and corrected in Excel ([ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)). |
-| `status` | `VARCHAR(20)` | no | `receiving` while the bytes arrive, `uploaded` once the original is archived, `validated` once checked, `failed` when the upload broke off or was refused. |
+| `status` | `VARCHAR(20)` | no | `receiving` while the bytes arrive, `uploaded` once the original is archived, `validated` once checked, `failed` when the upload broke off or was refused, `committed` once landed in Bronze. |
 | `filename` | `TEXT` | no | The name the person gave, cleaned: last path segment, NFC, no control characters, 1 to 255 characters. Data only: never a key or a path. |
 | `content_type` | `VARCHAR(150)` | no | What the browser declared. Not trusted: the bytes are checked. |
 | `declared_bytes` | `BIGINT` | no | The upload's `Content-Length`. |
@@ -1033,20 +1062,31 @@ One upload of one `.xlsx` for one dataset spec.
 | `sheet_name`, `header_row`, `rows_read`, `rows_with_errors`, `rows_with_warnings` | | yes | What the last check found. |
 | `spec_digest` | `CHAR(64)` | yes | SHA-256 of the spec the last check used; a correction is compared with its earlier draft only under the same one. |
 | `previous_draft_id` | `UUID` | yes | For a correction, the draft whose file it corrects. Not a foreign key: the earlier draft may be purged first, and the correction still says there was one. Never the draft itself. |
+| `sheet_names` | `TEXT[]` | yes | Every sheet of the workbook, read by the check; `raw_files.sheet_names` at the commit. |
+| `window_start`, `window_end` | `DATE` | yes | The first and last date of the dataset's period column, found by the check as the loader finds them. Null for a catalogue. |
+| `export_info`, `search_conditions` | `JSONB` | yes | The export's *Info* sheet as a name-to-value object, and its *Condiciones de búsqueda* rows, read by the check as the loader reads them. Empty for a workbook without them; null for a draft checked before revision 0009, which the commit checks again. |
+| `run_id`, `committed_at` | `UUID`, `TIMESTAMPTZ` | yes | The load in `bronze.ingestion_runs`, and when. Not a foreign key: staging points into Bronze by value only. |
 
 **Constraints:** the statuses, input modes and source keys above; the hash and
-digest formats; `uploaded` and `validated` drafts know their size, hash, bucket
-and key; a `validated` draft knows when and how many rows; the row counts are
-consistent; a draft does not correct itself.
+digest formats; `uploaded`, `validated` and `committed` drafts know their size,
+hash, bucket and key; a `validated` or `committed` draft knows when and how
+many rows; the row counts are consistent; a draft does not correct itself; a
+draft is `committed` exactly when it has a `run_id` and a `committed_at`; the
+window is ordered; `export_info` is an object and `search_conditions` an array.
 **Indexes:** `(created_by, created_at DESC)`, `expires_at`, `content_hash`,
-`previous_draft_id`.
+`previous_draft_id`, `run_id`.
+
+A committed draft keeps its issues and counts for 30 days, then is purged like
+any other. The downgrade of revision 0009 refuses while a committed draft
+exists.
 
 ### `staging.draft_rows`
 
 The rows of a checked file exactly as Bronze would land them, from the same
 rules (`energy.domain.landing`): `(draft_id, source_row)` as key,
 `content_hash` (SHA-256 of the canonical payload) and `payload` (JSONB object).
-Written by the check, for files the API checks itself (up to 5 MiB).
+Written by the check, for files the API checks itself (up to 5 MiB), and
+removed by the commit, in its transaction, once Bronze holds them.
 
 ### `staging.draft_issues`
 

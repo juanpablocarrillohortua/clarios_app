@@ -4,7 +4,8 @@
 // uploaded as a correction of the draft it came from, and the server says
 // which issues it cleared (ADR 0009: data is corrected in Excel).
 import type { AuthClient } from "../auth/authClient";
-import { type Api, ApiError } from "./client";
+import { type Api, ApiError, type Sent } from "./client";
+import type { DifferenceCounts, LoadDetail, LoadReference } from "./loads";
 import { type SendProgress, sendFile } from "./upload";
 
 export type Severity = "error" | "warning" | "info";
@@ -69,7 +70,7 @@ export interface Comparison {
 export interface Draft {
   draft_id: string;
   dataset_key: string;
-  status: "receiving" | "uploaded" | "validated" | "failed";
+  status: "receiving" | "uploaded" | "validated" | "committed" | "failed";
   filename: string;
   declared_bytes: number;
   size_bytes: number | null;
@@ -82,6 +83,9 @@ export interface Draft {
   /** The draft whose file this one corrects. */
   previous_draft_id: string | null;
   comparison: Comparison | null;
+  /** For a committed draft, the load that landed it. */
+  run_id?: string | null;
+  committed_at?: string | null;
 }
 
 export type Change = "new" | "remaining";
@@ -156,6 +160,101 @@ export function fetchCleared(
   signal?: AbortSignal,
 ): Promise<IssuesPage> {
   return api.get<IssuesPage>(`/drafts/${draftId}/cleared?offset=${offset}&limit=${limit}`, signal);
+}
+
+export type CommitBlock =
+  | "not_validated"
+  | "errors"
+  | "nothing_to_load"
+  | "already_loaded"
+  | "committed";
+
+export interface WarningCount {
+  rule: string;
+  column: string | null;
+  rows: number;
+  reasons: ReasonCount[];
+}
+
+/** What confirming a draft would write (GET /drafts/{id}/confirmation). */
+export interface Confirmation {
+  draft_id: string;
+  dataset_key: string;
+  kind: "snapshot" | "movement";
+  filename: string;
+  sheet: string;
+  can_confirm: boolean;
+  blocked_by: CommitBlock | null;
+  /** What a commit carries: the validation the person sees. */
+  validation_digest: string | null;
+  rows: number;
+  warnings: WarningCount[];
+  warnings_to_accept: boolean;
+  period: { start: string; end: string } | null;
+  overlapping_loads: LoadReference[];
+  current_version: LoadReference | null;
+  difference: DifferenceCounts | null;
+  already_loaded_run_id: string | null;
+  run_id: string | null;
+}
+
+export type RowChange = "added" | "changed" | "removed";
+
+export interface DifferenceRow {
+  change: RowChange;
+  key: (string | null)[];
+  row: number | null;
+  previous_row: number | null;
+  values: Record<string, string>;
+  columns: { column: string; before: string | null; after: string | null }[];
+}
+
+export interface DifferencePage {
+  total: number;
+  offset: number;
+  limit: number;
+  items: DifferenceRow[];
+}
+
+export function fetchConfirmation(
+  api: Api,
+  draftId: string,
+  signal?: AbortSignal,
+): Promise<Confirmation> {
+  return api.get<Confirmation>(`/drafts/${draftId}/confirmation`, signal);
+}
+
+export function fetchDifference(
+  api: Api,
+  draftId: string,
+  change: RowChange,
+  offset: number,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<DifferencePage> {
+  return api.get<DifferencePage>(
+    `/drafts/${draftId}/difference?change=${change}&offset=${offset}&limit=${limit}`,
+    signal,
+  );
+}
+
+/** What a person confirms: the validation they saw, and its warnings if any. */
+export interface CommitRequest {
+  validation_digest: string;
+  accept_warnings: boolean;
+  base_run_id: string | null;
+}
+
+/**
+ * Land a draft in Bronze. 201 for a new load, 200 for a draft committed
+ * before: asking again is safe, which is how a lost answer is checked.
+ */
+export function commitDraft(
+  api: Api,
+  draftId: string,
+  request: CommitRequest,
+): Promise<Sent<LoadDetail>> {
+  return api.postJson<LoadDetail>(`/drafts/${draftId}/commit`, request);
 }
 
 /** Where a file goes: a new draft of a dataset, or a correction of a draft. */

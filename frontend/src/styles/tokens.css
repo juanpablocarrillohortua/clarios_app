@@ -228,6 +228,9 @@
   /* An upload's bar follows the bytes sent: each step glides to the next,
      linearly, and a new step starts from where the bar is. */
   --ce-duration-progress: 200ms;
+  /* A wait whose length is not known (a commit) sweeps once per this long:
+     faster than the slow oscillations that unsettle, slower than a flicker. */
+  --ce-duration-sweep: 1400ms;
   /* A pressed control shrinks a little, on pointer-down. */
   --ce-press-scale: 0.97;
   /* How far a panel rises as it appears. */

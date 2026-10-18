@@ -30,7 +30,7 @@ GUIDE = Path(__file__).resolve().parents[2] / "docs" / "api.md"
 # The prefix Caddy removes before a request reaches the application.
 OUTSIDE_PREFIX = "/api"
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
-# An operation in a code span, for example `GET /api/runs/{run_id}`.
+# An operation in a code span, for example `GET /api/loads/{run_id}`.
 OPERATION = re.compile(rf"`(GET|POST|PUT|PATCH|DELETE) ({re.escape(OUTSIDE_PREFIX)}/[^`\s]*)`")
 
 

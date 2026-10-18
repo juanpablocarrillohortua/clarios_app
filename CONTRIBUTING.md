@@ -257,6 +257,32 @@ has the format and the steps.
 - `tests/unit/test_dataset_specs_committed.py` ties each spec to the Bronze
   loader's routes, the Silver SQL, the translation file and, when present, the
   real workbook.
+- **A snapshot says what Silver does with a removed row** (`silver.removed_rows`:
+  `kept` or `dropped`), and the same test checks it against the Silver SQL.
+  Give the dataset its own sentence for it, `datasets.<key>.removedRows` in
+  `es.json`, when the general one does not say enough.
+
+### Writing to Bronze
+
+Bronze is the evidence, so only two modules write it:
+`adapters/postgres_bronze_repo.py` (the command-line loader) and
+`adapters/postgres_load_committer.py` (the web app's commit).
+`tests/unit/test_load_service.py` scans `src/energy` and fails for any other
+module that inserts into, copies to, updates or deletes from a `bronze.`
+table.
+
+- **The commit shares the loader's SQL, not its methods.** The loader's
+  methods each commit by themselves; the commit must land the rows, complete
+  the run and update staging in one transaction, so it runs the loader's
+  statements (`SELECT_FILE`, `INSERT_FILE`, `INSERT_RUN`, `COMPLETE_RUN`) on
+  its own connection. Change a statement there and both paths change: the
+  integration test that loads one file both ways must still find the same
+  rows.
+- **A failed commit leaves nothing behind,** not even a failed run
+  ([ADR 0010](docs/adr/0010-a-draft-is-committed-once-in-one-transaction.md)).
+  Do not split it into several transactions.
+- **Staging never names a `bronze.` object** (`postgres_draft_repo.py`; a test
+  reads it), and Silver and Gold are never written from the app.
 
 ### Adding a validation rule
 

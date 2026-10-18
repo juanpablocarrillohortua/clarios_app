@@ -88,6 +88,20 @@ class DatasetOrigin(StrEnum):
     CATALOGUE = "catalogue"
 
 
+class RemovedRows(StrEnum):
+    """What the Silver build does with a row a snapshot's new version no longer has.
+
+    ``dropped``: the Silver table is emptied and filled again from the latest
+    version, so the row goes. ``kept``: the table is upserted and never
+    emptied, so the row stays. Which one a dataset is is read from the Silver
+    build itself; a unit test ties every spec to it. Only snapshots say it:
+    movements add up, and a row is never removed by a later load.
+    """
+
+    KEPT = "kept"
+    DROPPED = "dropped"
+
+
 class EntryMode(StrEnum):
     """How rows may be entered: only by uploading a workbook.
 
@@ -181,6 +195,8 @@ class DatasetSpec:
         period_column: for movements, the payload key of the column that dates
             each row; ``None`` for snapshots.
         columns: every column, in the workbook's order.
+        removed_rows: for snapshots, what Silver does with a row a new version
+            no longer has; ``None`` for movements.
     """
 
     key: str
@@ -194,6 +210,7 @@ class DatasetSpec:
     natural_key: tuple[str, ...]
     period_column: str | None
     columns: tuple[ColumnSpec, ...]
+    removed_rows: RemovedRows | None = None
 
     @property
     def headers(self) -> tuple[str, ...]:
@@ -263,7 +280,8 @@ _TOP_FIELDS: Final = frozenset(
 _TOP_REQUIRED: Final = _TOP_FIELDS - {"period_column"}
 _BRONZE_FIELDS: Final = frozenset({"source_key", "sheet", "dataset_key", "header_row"})
 _BRONZE_REQUIRED: Final = frozenset({"source_key", "sheet"})
-_SILVER_FIELDS: Final = frozenset({"table"})
+_SILVER_FIELDS: Final = frozenset({"table", "removed_rows"})
+_SILVER_REQUIRED: Final = frozenset({"table"})
 _COLUMN_FIELDS: Final = frozenset(
     {"header", "type", "required", "pattern", "allowed", "min", "max", "severity", "label"}
 )
@@ -459,16 +477,41 @@ def _parse_bronze(value: object, problems: _Problems) -> tuple[BronzeTarget, Lan
     return BronzeTarget(source.key, sheet, dataset_key, header_row), source
 
 
-def _parse_silver(value: object, problems: _Problems) -> str | None:
-    """Return the Silver table the dataset feeds."""
-    fields = _fields(value, "silver", _SILVER_FIELDS, _SILVER_FIELDS, problems)
+@dataclass(frozen=True, slots=True)
+class _Silver:
+    """The Silver section of a spec, as parsed."""
+
+    sound: bool
+    table: str | None = None
+    removed_rows: RemovedRows | None = None
+
+
+def _parse_silver(value: object, kind: DatasetKind | None, problems: _Problems) -> _Silver:
+    """Return the Silver table a dataset feeds, and what a snapshot's removed row does there."""
+    fields = _fields(value, "silver", _SILVER_FIELDS, _SILVER_REQUIRED, problems)
     if fields is None or "table" not in fields:
-        return None
+        return _Silver(sound=False)
     table = fields["table"]
-    if isinstance(table, str) and _SILVER_TABLE.fullmatch(table):
-        return table
-    problems.add("silver.table", f"{_describe(table)} is not a table such as silver.<name>")
-    return None
+    sound = isinstance(table, str) and _SILVER_TABLE.fullmatch(table) is not None
+    if not sound:
+        problems.add("silver.table", f"{_describe(table)} is not a table such as silver.<name>")
+    removed: RemovedRows | None = None
+    present = "removed_rows" in fields
+    if kind is DatasetKind.MOVEMENT and present:
+        problems.add("silver.removed_rows", "a movement removes no row; remove it")
+        sound = False
+    elif kind is DatasetKind.SNAPSHOT and not present:
+        problems.add(
+            "silver.removed_rows", "missing; a snapshot says what Silver does with a removed row"
+        )
+        sound = False
+    elif present:
+        chosen = _choice(fields["removed_rows"], RemovedRows, "silver.removed_rows", problems)
+        sound = sound and chosen is not None
+        removed = RemovedRows(chosen) if chosen else None
+    return _Silver(
+        sound=sound, table=table if isinstance(table, str) else None, removed_rows=removed
+    )
 
 
 def _parse_entry_modes(value: object, problems: _Problems) -> tuple[EntryMode, ...] | None:
@@ -766,14 +809,18 @@ def _parse_spec(raw: object, expected_key: str | None, problems: _Problems) -> D
         qad = source.source_system == SOURCE_SYSTEM_QAD
         origin = DatasetOrigin.EXPORT if qad else DatasetOrigin.CATALOGUE
     modes = _parse_entry_modes(fields["entry_modes"], problems) if "entry_modes" in fields else None
-    silver = _parse_silver(fields["silver"], problems) if "silver" in fields else None
+    dataset_kind = DatasetKind(kind) if kind else None
+    silver = (
+        _parse_silver(fields["silver"], dataset_kind, problems)
+        if "silver" in fields
+        else _Silver(sound=False)
+    )
     columns = _parse_columns(fields["columns"], problems) if "columns" in fields else None
     natural_key = (
         _parse_natural_key(fields["natural_key"], columns, problems)
         if "natural_key" in fields
         else None
     )
-    dataset_kind = DatasetKind(kind) if kind else None
     period = _parse_period(fields, dataset_kind, source, columns, problems)
     if (
         key is None
@@ -783,7 +830,8 @@ def _parse_spec(raw: object, expected_key: str | None, problems: _Problems) -> D
         or description is None
         or modes is None
         or bronze is None
-        or silver is None
+        or not silver.sound
+        or silver.table is None
         or columns is None
         or natural_key is None
         or not period.sound
@@ -797,10 +845,11 @@ def _parse_spec(raw: object, expected_key: str | None, problems: _Problems) -> D
         description=description,
         entry_modes=modes,
         bronze=bronze,
-        silver_table=silver,
+        silver_table=silver.table,
         natural_key=natural_key,
         period_column=period.column,
         columns=columns,
+        removed_rows=silver.removed_rows,
     )
 
 
@@ -867,6 +916,7 @@ __all__ = [
     "DatasetOrigin",
     "DatasetSpec",
     "EntryMode",
+    "RemovedRows",
     "Severity",
     "build_catalogue",
     "parse_dataset_spec",

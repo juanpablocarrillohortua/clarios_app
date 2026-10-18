@@ -51,7 +51,7 @@ In the code a role is never checked directly. Each endpoint asks for a
 | Permission | Granted to | Protects |
 |---|---|---|
 | `dashboard:view` | `viewer`, `operator`, `engineer`, `admin` | `/api/kpis/*`, the dashboard section |
-| `loads:write` | `operator`, `engineer`, `admin` | `/api/uploads/*`, `/api/runs/*`, the data-loading section |
+| `loads:write` | `operator`, `engineer`, `admin` | `/api/datasets/*`, `/api/drafts/*`, `/api/loads/*`, the data-loading section |
 
 The table is `GRANTS` in
 [`src/energy/api/security.py`](../src/energy/api/security.py), and it is the

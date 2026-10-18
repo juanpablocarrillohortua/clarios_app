@@ -69,9 +69,6 @@ export function DraftSummary({ validation }: { validation: DraftValidation }) {
             ))}
           </List>
         )}
-        <Text size="sm" c="dimmed">
-          {t("loads.result.nextStep")}
-        </Text>
       </Stack>
     </Panel>
   );

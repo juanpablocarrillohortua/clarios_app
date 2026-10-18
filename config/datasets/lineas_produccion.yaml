@@ -27,6 +27,9 @@ bronze:
 
 silver:
   table: silver.lineas_produccion
+  # The build upserts this table and never empties it: a line a new version
+  # leaves out stays in Silver. A test reads the build to keep this true.
+  removed_rows: kept
 
 natural_key: [Línea]
 

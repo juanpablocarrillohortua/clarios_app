@@ -153,7 +153,8 @@ class InMemoryDraftRepository:
                 and draft.created_by == owner
                 and draft.dataset_key == dataset_key
                 and draft.content_hash == content_hash
-                and draft.status in {DraftStatus.UPLOADED, DraftStatus.VALIDATED}
+                and draft.status
+                in {DraftStatus.UPLOADED, DraftStatus.VALIDATED, DraftStatus.COMMITTED}
                 and draft.expires_at > _now()
             ):
                 return draft
@@ -166,6 +167,8 @@ class InMemoryDraftRepository:
             raise UnknownDraftError("no draft of yours has that ID")
         if draft_id in self._validating:
             raise DraftBusyError("another validation of this draft is running")
+        if draft.status is DraftStatus.COMMITTED:
+            raise DraftBusyError("the draft was committed")
         if draft.status not in {DraftStatus.UPLOADED, DraftStatus.VALIDATED}:
             raise DraftBusyError("the draft's file has not arrived")
         self._validating.add(draft_id)

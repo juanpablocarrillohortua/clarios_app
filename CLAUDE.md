@@ -58,7 +58,10 @@ the issues list, `/api/drafts` and the "Carga de datos" page) is built, and
 waits for the owner's checks in a signed-in browser. Increment 6 (the reasons
 and Excel fix of every issue, the corrected file uploaded again and compared)
 is built, and passed the owner's checks in a signed-in browser on 2026-10-18;
-grid and form entry were dropped for every dataset, and increment 9 with them. The decisions are in
+grid and form entry were dropped for every dataset, and increment 9 with them.
+Increment 7 (the commit of a draft into Bronze, its confirmation with a
+catalogue's difference, `/api/loads`, the history and the detail of a load) is
+built, and waits for the owner's checks in a signed-in browser. The decisions are in
 [ADR 0004](docs/adr/0004-react-spa-entra-and-embedded-power-bi.md) (stack, Entra
 ID sign-in, embedded Power BI),
 [ADR 0005](docs/adr/0005-api-composition-root.md) (`api/deps.py` may import
@@ -70,7 +73,9 @@ Phase 4 starts) and
 [ADR 0008](docs/adr/0008-embedding-the-report-in-the-dashboard.md) (how the
 dashboard embeds the report) and
 [ADR 0009](docs/adr/0009-data-is-entered-and-corrected-in-excel.md) (data is
-entered and corrected in Excel: no grid and no form). [docs/sign-in.md](docs/sign-in.md) is
+entered and corrected in Excel: no grid and no form) and
+[ADR 0010](docs/adr/0010-a-draft-is-committed-once-in-one-transaction.md) (a
+draft is committed once, in one transaction, with the loader's own SQL). [docs/sign-in.md](docs/sign-in.md) is
 the guide to sign-in, and [docs/api.md](docs/api.md) the guide to the API: a
 part in plain words for readers who do not write code, and a technical
 reference with every endpoint. Read the plan before touching `frontend/`.
@@ -86,21 +91,21 @@ Definition-of-Done item is verified against a running stack.
 |---|---|
 | `make up` | **Exit 0 - all 7 services healthy** (api, caddy, dash, db, minio, prefect-server, prefect-worker) |
 | Port policy | Only caddy publishes (8080/8443); everything else internal. One opt-in exception: `reporting-bridge` (profile `reporting`, `make powerbi`) on 127.0.0.1:5433 |
-| `make db-upgrade` | **Exit 0** - Alembic at head `0008` against live TimescaleDB |
+| `make db-upgrade` | **Exit 0** - Alembic at head `0009` against live TimescaleDB (2026-10-18; the 44 tables of Bronze, Silver, Gold and reference identical before and after, staging's row counts unchanged) |
 | Schemas / tables | `bronze, gold, reference, reporting, silver, staging`; 47 tables (8 + 9 + 4 + 21 + 5), 2 materialized views, 15 views and 8 functions in `gold`, 12 views and 1 function in `reporting` |
 | Extensions | timescaledb **2.30.1**, pgcrypto 1.3 |
 | Hypertables | All 5 registered: `raw_readings, readings, kpi_hourly, kpi_daily, plant_daily_summary` |
 | Timescale policies | 3 compression + 1 retention job created (no warnings) |
 | Routes through Caddy | `/api/health` `/api/ready` `/api/docs` `/api/config` `/` `/redirect.html` `/dash/` `/prefect/api/health` `/minio/` all **HTTP 200**. `/` is the web app (any path without a file extension gets its `index.html`); `/auth/*` answers 404 by design (2026-10-12) |
-| Sign-in (2026-10-12) | Without a token `/api/me`, `/api/uploads`, `/api/runs` and `/api/kpis/summary` answer **401**; so do a made-up token, one that names no algorithm, and a well-formed one signed with another key. A signed-out headless browser is sent to Microsoft's sign-in page with the registered redirect page, the API's scope and PKCE, from `:8080` and from the dev server on `:5173`, and Microsoft shows no error. **Not done by a session:** signing in as a real user; that is the owner's check |
+| Sign-in (2026-10-12) | Without a token `/api/me`, `/api/uploads`, `/api/runs` (both removed in increment 7) and `/api/kpis/summary` answer **401**; so do a made-up token, one that names no algorithm, and a well-formed one signed with another key. A signed-out headless browser is sent to Microsoft's sign-in page with the registered redirect page, the API's scope and PKCE, from `:8080` and from the dev server on `:5173`, and Microsoft shows no error. **Not done by a session:** signing in as a real user; that is the owner's check |
 | `/api/ready` payload | `degraded` (connectivity+extensions healthy, Silver empty) - correct, returns 200 not 503 |
 | Placeholder endpoint | `/api/kpis/summary` -> **501** with `code=not_implemented` for a signed-in caller (in the tests); 401 without a token |
 | `X-Request-Id` | Present and propagated |
-| `make check` | **Exit 0**, the whole chain as one command, on the code of increment 6 (2026-10-18): format, lint, mypy strict (129 files), bandit, pip-audit, `frontend-check`, tests (30 minutes) |
-| `make frontend-check` | **Exit 0** (2026-10-18, inside `make check`) - Biome on 89 files, `tsc`, 332 Vitest tests in 15 files, production build of two pages (`preview.html` is not built), with the Power BI library in a file of its own (229 kB) |
+| `make check` | **Exit 0** on the code of increment 7 (2026-10-18): format, lint, mypy strict (134 files), bandit, pip-audit and `frontend-check` in one run; its tests were all skipped by a slow test container (265 skipped), so `make test` was run again alone on an idle machine (row below) |
+| `make frontend-check` | **Exit 0** (2026-10-18, increment 7) - Biome on 102 files, `tsc`, 368 Vitest tests in 17 files, production build of two pages (`preview.html` is not built), with the Power BI library in a file of its own (229 kB) |
 | Dashboard (2026-10-13) | With the two IDs empty, `GET /api/config` answers `"powerbi": null` and sign-in asks for the API's scope only. With them set, it carries the `powerbi` object, and a signed-out headless browser reaches Microsoft's sign-in page with both scopes and no error, from `:8080` and from the dev server. The built embedding module, run in headless Edge with made-up IDs and a text that is no token, loads Power BI's frame and receives its refusal. Caddy's headers are unchanged. **Not done by a session:** seeing the report as a signed-in user |
-| `make test` | **1,339 passed, 39 skipped** (30 minutes with the workbooks present, 2026-10-18, inside `make check`) |
-| Coverage | **95.95%** (threshold 70%) |
+| `make test` | **1,450 passed, 39 skipped** (38 minutes with the workbooks present, 2026-10-18, increment 7) |
+| Coverage | **95.57%** (threshold 70%) |
 | `make test-integration` | **118 passed** against real TimescaleDB and MinIO, with the workbooks present (2026-10-07; not re-run on its own since) |
 | `make powerbi` | **Exit 0** in the stack: the bridge healthy on 127.0.0.1:5433; the login reads the reporting views from Windows through it, is refused on gold/silver and with a wrong password; `make powerbi-down` closes the port without touching the db container |
 | No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer. Two deliberate exceptions: `docs/equs_calculation_explained.es.md`, the Spanish translation of the non-technical explanation (asked for on 2026-10-08), and `frontend/src/i18n/es.json`, the texts of the web app's interface (decided on 2026-10-12, ADR 0004) |
@@ -124,7 +129,12 @@ alone (a fixture whose bytes held the time, and the race described under
 file added (increment 6), it failed once the same day, on the API guide not
 yet naming the two new routes, and passed whole once it did: the `make
 check`, `make frontend-check`, `make test` and coverage rows are from that
-run.
+run. With the commit and the history added (increment 7), the rows of
+`make db-upgrade`, `make check`, `make frontend-check`, `make test` and
+coverage were renewed on 2026-10-18; `make up` and the routes were checked
+again that day (`/api/uploads` and `/api/runs` now 404, the new routes 401
+without a token). The by-hand commits through `:8080` against a scratch copy
+of the database were prepared but not run by a session.
 
 **Integration tests can be skipped silently.** They start a TimescaleDB container
 and wait 120 s for it. On 2026-10-06, with the machine busy, the container needed
@@ -342,8 +352,8 @@ test raising would fail the suite. Keep that distinction.
   - Until Phase 4 they stay untouched, answering 501, and their rows stay in
     the table of `docs/api.md`: the owner asked that nothing be built before
     the phase itself.
-  - What a load did, before the report is refreshed, is asked by run
-    (`/runs/{run_id}`), not by a KPI route.
+  - What a load did, before the report is refreshed, is read in its detail
+    (`/api/loads/{run_id}`, built in increment 7), not by a KPI route.
   - `dashboard:view` only makes the app show the dashboard section. Who sees
     the report is decided in Power BI, by access to the workspace.
   - A model on shared capacity may be refreshed eight times a day, scheduled
@@ -553,7 +563,8 @@ test raising would fail the suite. Keep that distinction.
   were copied from real calls made with made-up identifiers; keep them so.
 - **The API is not the only way into the database,** and no document may say
   so. Section 9 of `docs/api.md` lists every way in: the API, the command line
-  (which loads all data today), and Power BI through `reporting-bridge`. The
+  (which loads exports and runs every calculation), and Power BI through
+  `reporting-bridge`. The
   sign-in and the roles protect the first only. Add a row there when a new way
   in appears.
 - **Four things the API does that its docstrings do not say** (found on
@@ -855,6 +866,77 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
   select opens from the keyboard in tests (focus, ArrowDown, Enter); a click
   does not open it in jsdom.
 
+**Commit and history** (increment 7, built 2026-10-18; revision `0009`,
+[ADR 0010](docs/adr/0010-a-draft-is-committed-once-in-one-transaction.md)):
+
+- **One transaction, with the loader's SQL.** `adapters/postgres_load_committer.py`
+  runs `SELECT_FILE`, `INSERT_FILE`, `INSERT_RUN`, `COMPLETE_RUN`,
+  `LANDING_COLUMNS` and `TABLE_WITH_DATASET_KEY` of `postgres_bronze_repo.py`
+  (made public in increment 7, their text unchanged) on one connection, with
+  the staging update. Never call the `BronzeLandingRepository` methods from
+  it: each commits by itself. A test in `test_load_service.py` scans
+  `src/energy`: only those two adapters write a `bronze.` table.
+- **No failed run and no `committing` state.** Any failure rolls everything
+  back; the draft stays validated with its rows. The draft is locked
+  `FOR UPDATE NOWAIT` (a second request: 409 `draft_busy`); a committed draft
+  answers every later commit 200 with its load, whatever the body.
+- **One commit per dataset:** `pg_advisory_xact_lock(72155904,
+  hashtext(source:sheet:dataset_key))` under `lock_timeout` 10 s, then 409
+  `dataset_busy`. Separate from the Gold lock (7215590330), which the commit
+  never takes.
+- **What the person saw is what lands.** The body carries `validation_digest`
+  (`domain/draft_commit.py`: spec digest, sheet, header row, rows, counts),
+  `accept_warnings` and, for a catalogue, `base_run_id`. A stale draft
+  (another spec digest, or no facts: validated before `0009`) is validated
+  again first; any difference is a 409 and nothing is written.
+- **The current version is Silver's `LATEST_RUNS` rule:** the latest completed
+  run that landed the dataset (`manual_sheets` by `dataset_key`, the others by
+  `sheet_name`). The difference is SQL: natural key trimmed (`btrim`, `''` for
+  missing) plus its occurrence (`row_number`), a FULL JOIN, changed meaning
+  another `content_hash`.
+- **`silver.removed_rows`** (`kept` or `dropped`) is required for a snapshot
+  and refused for a movement; `test_dataset_specs_committed.py` makes it
+  `dropped` exactly when the Silver SQL has `DELETE FROM` or `TRUNCATE` of the
+  spec's table. The texts are `datasets.<key>.removedRows`, else
+  `loads.difference.removedRows.<value>`. What Silver should do with a line
+  taken out of the catalogue is a question for the plant, under increment 11
+  of the plan. **Do not change Silver for it without that answer.**
+- **The facts of a load are read at validation** (`ExportFacts`: sheet names,
+  the window from `DateSpan` through `landing.spanned`, the Info sheet, the
+  search conditions) and kept on the draft, so the commit reads no workbook.
+- **After the commit,** the staged rows are gone (deleted in the
+  transaction); the draft and its issues stay 30 days. The purge's
+  `landed(hash, bucket, key)` keeps an object only when `raw_files` points at
+  that very bucket and key.
+- **Known, and documented:** `raw_files.uploaded_at` is the commit's `now()`
+  (the shared statement); an app run's `started_at` equals its `finished_at`;
+  `parameters.validation.accepted` is `{by, warnings}`, the run's time being
+  the time of the acceptance.
+- **The history is Bronze's ledger,** command-line loads included.
+  `LoadService._named` names a CLI load by its dataset when exactly one spec
+  has its sheet. `GET /api/datasets` now reads the database for `last_load`,
+  so a test of it binds an in-memory ledger.
+- **`GET /api/loads/{run_id}/original`** streams through the API: `_verified`
+  holds the last chunk back until the hash matches, so a damaged file arrives
+  short. `Content-Disposition` carries `filename*` (RFC 6266).
+- **In the app:** the commit is guarded by a ref and the disabled button;
+  there is no "Cancelar"; a lost answer offers "Comprobar", which posts the
+  same commit again. The history's filters live in the address; its dates
+  are native `type="date"` inputs (`@mantine/dates` is not installed).
+  `loads/LoadsTabs.tsx` is the section's sub-navigation (`aria-current`).
+- **Tests:** `tests/fixtures/loads.py` holds `InMemoryBronze` (`add_cli_load`
+  plants a command-line load), `InMemoryLoadCommitter` (`held_drafts`,
+  `held_datasets`, and the `after_rows` hook that fails after the rows) and
+  `InMemoryLoadLedger`. `InMemoryBronze.stamp()` makes its times strictly
+  increase: Windows' clock moves in steps of about 15 ms, and two runs once
+  had the same time. The test token verifier gives every token one subject,
+  so "someone else's load" is a planted CLI load.
+  `tests/integration/test_commit_end_to_end.py` proves the transaction
+  against PostgreSQL and MinIO, a killed connection included.
+- **Try commits on a scratch database,** never the development one: a
+  committed synthetic catalogue becomes the current `lineas_produccion` at the
+  next Silver build, and nothing voids a load until increment 11.
+
 **EQUS Bronze loader** (built 2026-10-07):
 
 - Layout follows the hexagon: payload rules in `domain/landing.py` and
@@ -988,8 +1070,9 @@ All deliberate; each is explained where it lives.
    app's sign-in (2026-10-12): the permission table, `Principal.has_role`,
    `require_roles` and the mapping from a token to a principal. Device API keys
    and filtering by plant are still Phase 3 placeholders. The `uploads` and
-   `runs` routers no longer take the Phase 1 stand-in API key: people present
-   a token. `ingest` keeps it, for devices.
+   `runs` placeholders, which people reached with a token, were removed in
+   increment 7: `/api/drafts` and `/api/loads` replace them. `ingest` keeps the
+   stand-in API key, for devices.
 
 ---
 
@@ -1017,8 +1100,10 @@ to 2 are done, 3 (the dashboard page, with the embedded Power BI report) is
 built and waits for the owner's browser checks, 4 (the dataset specs) is
 built, 5 (staging, upload and the checks of a file) is built and waits for
 the owner's checks signed in, and 6 (the reasons and the corrected file) is
-built and passed them on 2026-10-18. Increment 9 (form and grid entry) was removed on 2026-10-18 (ADR 0009);
-its number is kept. Increment 7 is the commit and the history.
+built and passed them on 2026-10-18. Increment 7 (the commit and the history)
+is built and waits for the owner's checks signed in. Increment 9 (form and
+grid entry) was removed on 2026-10-18 (ADR 0009); its number is kept.
+Increment 8 is the checks against existing data.
 
 When implementing a placeholder: read its docstring first (it is the spec), keep
 and update the docstring, remove the `Implemented in: Phase N` line, and un-skip

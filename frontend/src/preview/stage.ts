@@ -18,9 +18,30 @@
 //   rulesChanged      the rules changed and the earlier file could not follow
 //   previousGone      the earlier file is no longer kept
 //
+// and, for the confirmation (increment 7), starting on a validated draft
+// without errors:
+//
+//   catalogue         a new version of a catalogue: rows added, changed, removed
+//   movement          an export of a period another load already covers, with
+//                     a warning to accept
+//   committed         a draft already confirmed
+//
+// The history (/loads/history) and a load's detail answer in every scenario;
+// `historyEmpty` makes the history empty.
+//
 // The data are made up; no real workbook is behind them.
 import type { Datasets } from "../api/datasets";
-import type { Comparison, Draft, Issue, IssuesPage, Reason, RuleCount } from "../api/drafts";
+import type {
+  Comparison,
+  Confirmation,
+  DifferencePage,
+  Draft,
+  Issue,
+  IssuesPage,
+  Reason,
+  RuleCount,
+} from "../api/drafts";
+import type { LoadDetail, LoadSummary } from "../api/loads";
 import type { Me } from "../api/me";
 import type { AuthClient } from "../auth/authClient";
 
@@ -201,7 +222,27 @@ function manyIssues(): Issue[] {
   }));
 }
 
-const issues = scenario === "many" ? manyIssues() : scenario === "clean" ? [] : brokenIssues;
+// The export ready to confirm has three warnings, as its validation says.
+const textDamaged: Issue[] = [2, 7, 11].map((row) => ({
+  row,
+  column: "F",
+  column_key: "Número Artículo",
+  rule: "cell.text_damaged",
+  severity: "warning",
+  value: "2.31E+08",
+  params: {},
+  reasons: [because("code.scientific_notation"), because("default.cell.text_damaged")],
+  change: null,
+}));
+
+function issuesOf(): Issue[] {
+  if (scenario === "many") return manyIssues();
+  if (scenario === "movement") return textDamaged;
+  if (["clean", "catalogue", "committed"].includes(scenario)) return [];
+  return brokenIssues;
+}
+
+const issues = issuesOf();
 
 // The corrected file: two problems left as they were, one new, the rest gone.
 const left = new Set([4, 9]);
@@ -290,7 +331,248 @@ function validated(list: Issue[] = issues, base: Draft = uploaded): Draft {
   };
 }
 
-let current: Draft = correcting ? validated() : uploaded;
+const confirming = ["catalogue", "movement", "committed"].includes(scenario);
+const RUN_ID = "00000000-0000-4000-8000-000000000007";
+const CLI_RUN_ID = "00000000-0000-4000-8000-000000000008";
+const COMMIT_MS = 1500;
+
+/** A draft without errors, ready to confirm: a catalogue, or an export with a warning. */
+function confirmable(): Draft {
+  const movement = scenario === "movement";
+  return {
+    ...uploaded,
+    dataset_key: movement ? "qad_facturas" : "lineas_produccion",
+    filename: movement ? "Facturas octubre.xlsx" : "Líneas de producción.xlsx",
+    status: scenario === "committed" ? "committed" : "validated",
+    run_id: scenario === "committed" ? RUN_ID : null,
+    committed_at: scenario === "committed" ? "2026-10-18T10:05:00Z" : null,
+    validation: {
+      validated_at: "2026-10-18T10:00:06Z",
+      sheet: movement ? "Datos" : "Lineas Produccion",
+      header_row: 1,
+      rows_read: movement ? 14_458 : 64,
+      rows_with_errors: 0,
+      rows_with_warnings: movement ? 3 : 0,
+      blocking: false,
+      counts: movement
+        ? [
+            {
+              rule: "cell.text_damaged",
+              severity: "warning",
+              column: "Número Artículo",
+              rows: 3,
+              listed: 3,
+              reasons: [{ reason: "code.scientific_notation", rows: 3 }],
+            },
+          ]
+        : [],
+    },
+  };
+}
+
+function confirmationOf(draft: Draft): Confirmation {
+  const movement = draft.dataset_key === "qad_facturas";
+  return {
+    draft_id: draft.draft_id,
+    dataset_key: draft.dataset_key,
+    kind: movement ? "movement" : "snapshot",
+    filename: draft.filename,
+    sheet: movement ? "Datos" : "Lineas Produccion",
+    can_confirm: draft.status === "validated",
+    blocked_by: draft.status === "committed" ? "committed" : null,
+    validation_digest: "d".repeat(64),
+    rows: draft.validation?.rows_read ?? 0,
+    warnings: movement
+      ? [
+          {
+            rule: "cell.text_damaged",
+            column: "Número Artículo",
+            rows: 3,
+            reasons: [{ reason: "code.scientific_notation", rows: 3 }],
+          },
+        ]
+      : [],
+    warnings_to_accept: movement,
+    period: movement ? { start: "2025-10-01", end: "2025-10-31" } : null,
+    overlapping_loads: movement
+      ? [
+          {
+            run_id: CLI_RUN_ID,
+            origin: "cli",
+            finished_at: "2026-10-07T08:00:00Z",
+            filename: "Calculo de equivalente - Unidades facturadas.xlsx",
+            rows: 14_100,
+            uploaded_by_name: null,
+            window_start: "2025-10-01",
+            window_end: "2025-10-15",
+          },
+        ]
+      : [],
+    current_version: movement
+      ? null
+      : {
+          run_id: CLI_RUN_ID,
+          origin: "cli",
+          finished_at: "2026-10-07T08:00:00Z",
+          filename: "EQUS BATT.xlsx",
+          rows: 64,
+          uploaded_by_name: null,
+          window_start: null,
+          window_end: null,
+        },
+    difference: movement
+      ? null
+      : {
+          base_run_id: CLI_RUN_ID,
+          added: 2,
+          changed: 3,
+          removed: 1,
+          unchanged: 59,
+          removed_rows: "kept",
+        },
+    already_loaded_run_id: null,
+    run_id: draft.run_id ?? null,
+  };
+}
+
+function differenceOf(change: string): DifferencePage {
+  const rows: Record<string, DifferencePage["items"]> = {
+    added: [
+      {
+        change: "added",
+        key: ["PLACA03"],
+        row: 66,
+        previous_row: null,
+        values: { Línea: "PLACA03", Almac: "1010", Descripción: "Placas 3" },
+        columns: [],
+      },
+      {
+        change: "added",
+        key: ["PLACA04"],
+        row: 67,
+        previous_row: null,
+        values: { Línea: "PLACA04", Almac: "1010", Descripción: "Placas 4" },
+        columns: [],
+      },
+    ],
+    changed: [
+      {
+        change: "changed",
+        key: ["FAFORM01"],
+        row: 2,
+        previous_row: 2,
+        values: {},
+        columns: [{ column: "Descripción", before: "Formación 1", after: "Formación uno" }],
+      },
+      {
+        change: "changed",
+        key: ["ENSAM02"],
+        row: 3,
+        previous_row: 3,
+        values: {},
+        columns: [
+          { column: "Planificación de Unidades por Hora", before: "80", after: "85" },
+          { column: "Programador", before: null, after: "Turno B" },
+        ],
+      },
+      {
+        change: "changed",
+        key: ["MONT03"],
+        row: 4,
+        previous_row: 4,
+        values: {},
+        columns: [{ column: "Almac", before: "1010", after: "1515" }],
+      },
+    ],
+    removed: [
+      {
+        change: "removed",
+        key: ["MONT04"],
+        row: null,
+        previous_row: 5,
+        values: { Línea: "MONT04", Almac: "1010", Descripción: "Montaje 4" },
+        columns: [],
+      },
+    ],
+  };
+  const items = rows[change] ?? [];
+  return { total: items.length, offset: 0, limit: 50, items };
+}
+
+const loads: LoadSummary[] = [
+  {
+    run_id: RUN_ID,
+    origin: "app",
+    state: "completed",
+    source_key: "manual_sheets",
+    dataset_key: "lineas_produccion",
+    sheets: [{ name: "Lineas Produccion", dataset_key: "lineas_produccion", rows: null }],
+    filename: "Líneas de producción.xlsx",
+    rows: 64,
+    started_at: "2026-10-18T10:05:00Z",
+    finished_at: "2026-10-18T10:05:00Z",
+    window_start: null,
+    window_end: null,
+    uploaded_by_name: "Persona de prueba",
+    mine: true,
+    warnings_accepted: 0,
+    error: "",
+  },
+  {
+    run_id: CLI_RUN_ID,
+    origin: "cli",
+    state: "completed",
+    source_key: "qad_facturas",
+    dataset_key: "qad_facturas",
+    sheets: [{ name: "Datos", dataset_key: null, rows: null }],
+    filename: "Calculo de equivalente - Unidades facturadas.xlsx",
+    rows: 14_458,
+    started_at: "2026-10-07T08:00:00Z",
+    finished_at: "2026-10-07T08:00:40Z",
+    window_start: "2024-10-01",
+    window_end: "2025-09-30",
+    uploaded_by_name: null,
+    mine: false,
+    warnings_accepted: 0,
+    error: "",
+  },
+];
+
+function detailOf(summary: LoadSummary): LoadDetail {
+  const app = summary.origin === "app";
+  return {
+    ...summary,
+    sheets: summary.sheets.map((sheet) => ({ ...sheet, rows: summary.rows })),
+    plant_code: "1515",
+    flow_name: summary.filename?.replace(/\.xlsx$/, "") ?? "",
+    original: summary.filename
+      ? { filename: summary.filename, size_bytes: 18_432, content_hash: "a".repeat(64) }
+      : null,
+    validation: app
+      ? {
+          validated_at: "2026-10-18T10:00:06Z",
+          rows_read: summary.rows,
+          rows_with_warnings: 0,
+          counts: [],
+          accepted: null,
+        }
+      : null,
+    difference: app
+      ? {
+          base_run_id: CLI_RUN_ID,
+          added: 2,
+          changed: 3,
+          removed: 1,
+          unchanged: 59,
+          removed_rows: "kept",
+        }
+      : null,
+    draft_id: app ? DRAFT_ID : null,
+    draft_available: app,
+  };
+}
+
+let current: Draft = confirming ? confirmable() : correcting ? validated() : uploaded;
 let correction: Draft | null = null;
 
 function comparisonOf(): Comparison {
@@ -401,6 +683,41 @@ export async function previewFetch(input: RequestInfo | URL, init?: RequestInit)
   if (path === `/api/drafts/${CORRECTION_ID}/issues`) return json(page(url, correctionIssues));
   if (path === `/api/drafts/${CORRECTION_ID}/cleared`) {
     return json(page(url, clearedIssues));
+  }
+  if (path === `/api/drafts/${DRAFT_ID}/confirmation`) return json(confirmationOf(current));
+  if (path === `/api/drafts/${DRAFT_ID}/difference`) {
+    return json(differenceOf(url.searchParams.get("change") ?? "added"));
+  }
+  if (path === `/api/drafts/${DRAFT_ID}/commit` && init?.method === "POST") {
+    await wait(COMMIT_MS);
+    current = {
+      ...current,
+      status: "committed",
+      run_id: RUN_ID,
+      committed_at: new Date().toISOString(),
+    };
+    return json(detailOf(loads[0] as LoadSummary), 201);
+  }
+  if (path === "/api/loads") {
+    const mine = url.searchParams.get("user") === "me";
+    const items = scenario === "historyEmpty" ? [] : loads.filter((load) => !mine || load.mine);
+    return json({
+      total: items.length,
+      offset: 0,
+      limit: 25,
+      items,
+      people: [{ subject: me.subject, name: me.name }],
+    });
+  }
+  const load = loads.find((candidate) => path === `/api/loads/${candidate.run_id}`);
+  if (load) return json(detailOf(load));
+  if (path.startsWith("/api/loads/") && path.endsWith("/original")) {
+    return new Response(new Blob(["PK"]), {
+      headers: {
+        "Content-Length": "2",
+        "Content-Disposition": 'attachment; filename="lineas.xlsx"',
+      },
+    });
   }
   return json({ code: "not_found" }, 404);
 }

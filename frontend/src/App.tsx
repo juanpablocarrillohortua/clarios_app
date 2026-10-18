@@ -10,6 +10,8 @@ import { Navigate, Route, Routes } from "react-router";
 import type { CreateAuthClient } from "./auth/authClient";
 import { RequirePermission } from "./auth/RequirePermission";
 import { Session, useSession } from "./auth/Session";
+import { HistoryPage } from "./history/HistoryPage";
+import { LoadDetailPage } from "./history/LoadDetailPage";
 import { Shell } from "./layout/Shell";
 import { DraftPage } from "./loads/DraftPage";
 import { LoadsPage } from "./loads/LoadsPage";
@@ -72,6 +74,22 @@ export function App({ createAuthClient, loadEmbedReport }: AppProps) {
                 element={
                   <RequirePermission permission="loads:write">
                     <DraftPage />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path={paths.history}
+                element={
+                  <RequirePermission permission="loads:write">
+                    <HistoryPage />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path={paths.load}
+                element={
+                  <RequirePermission permission="loads:write">
+                    <LoadDetailPage />
                   </RequirePermission>
                 }
               />

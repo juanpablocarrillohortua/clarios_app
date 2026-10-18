@@ -23,6 +23,7 @@ import pytest
 from energy.adapters.calamine_workbook import CalamineWorkbookReader
 from energy.adapters.equs_silver_sql import BUILD_STEPS
 from energy.adapters.yaml_dataset_specs import load_dataset_specs
+from energy.domain.dataset_spec import DatasetKind, RemovedRows
 from energy.domain.landing import LANDING_SOURCES, SheetSpec, cell_text
 from energy.pipelines.flows.equs_bronze_load import ROUTES, WorkbookRoute
 
@@ -99,6 +100,21 @@ def test_the_silver_reads_of_the_pilots_are_known(catalogue: DatasetCatalogue) -
 def test_every_silver_table_is_one_the_build_writes(catalogue: DatasetCatalogue) -> None:
     for spec in catalogue:
         assert f"INSERT INTO {spec.silver_table}" in SILVER_SQL, spec.key
+
+
+def test_what_a_snapshot_says_of_a_removed_row_is_what_the_build_does(
+    catalogue: DatasetCatalogue,
+) -> None:
+    # A table the build empties before filling it drops a row a new version
+    # leaves out; one it only upserts keeps it. The confirmation tells people
+    # which, so the spec must say what the build does.
+    for spec in catalogue:
+        if spec.kind is not DatasetKind.SNAPSHOT:
+            assert spec.removed_rows is None, spec.key
+            continue
+        emptied = re.search(rf"(DELETE FROM|TRUNCATE) {re.escape(spec.silver_table)}\b", SILVER_SQL)
+        expected = RemovedRows.DROPPED if emptied else RemovedRows.KEPT
+        assert spec.removed_rows is expected, spec.key
 
 
 def test_every_label_is_a_text_of_the_web_app(catalogue: DatasetCatalogue, repo_root: Path) -> None:

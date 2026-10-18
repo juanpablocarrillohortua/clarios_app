@@ -50,9 +50,9 @@ assignees: []
 
 A wrong figure is almost always traceable, so please include what you can:
 
-- **Run id** (from `/api/runs`, or the `run_id` column on the Gold row):
+- **Run id** (from the history of loads in the app, `/api/loads`, or the `run_id` column on the Gold row):
 - **Coverage** reported alongside the value:
-- **Quarantined rows** for that run (`/api/runs/{run_id}/quarantine`):
+- **Quarantined rows** for that run (`silver.quarantine`, by `run_id`):
 - **Sources** that supplied the period, and whether the consolidation audit
   records a conflict:
 

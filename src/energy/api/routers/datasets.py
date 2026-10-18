@@ -10,7 +10,8 @@ the API at start.
 
 - ``GET /datasets`` lists every spec, for the web app to build its loading
   pages from, with the size limits of an uploaded file, so the browser
-  refuses a file too large before it sends a byte;
+  refuses a file too large before it sends a byte, and when each dataset was
+  last loaded (increment 7);
 - ``GET /datasets/{dataset_key}/template`` returns the empty workbook a user
   fills in: the dataset's sheet, with exactly the spec's headers.
 
@@ -20,9 +21,12 @@ router: specs serve loading data, which is an operator's work.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, Response, status
 
-from energy.api.deps import DatasetCatalogueDep, TemplateWriterDep
+from energy.api.deps import DatasetCatalogueDep, LoadServiceDep, PrincipalDep, TemplateWriterDep
+from energy.api.routers.loads import load_reference
 from energy.api.schemas.responses import (
     DatasetColumn,
     DatasetDescription,
@@ -32,6 +36,9 @@ from energy.api.schemas.responses import (
 )
 from energy.domain.dataset_spec import ColumnSpec, DatasetSpec
 from energy.domain.drafts import CHECK_IN_REQUEST_MAX_BYTES, MAX_FILE_BYTES
+
+if TYPE_CHECKING:
+    from energy.ports.load_committer import LoadReference
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -52,7 +59,7 @@ def _column(column: ColumnSpec) -> DatasetColumn:
     )
 
 
-def _dataset(spec: DatasetSpec) -> DatasetDescription:
+def _dataset(spec: DatasetSpec, last_load: LoadReference | None = None) -> DatasetDescription:
     """Describe one dataset for the web app. Bronze and Silver stay out of it."""
     return DatasetDescription(
         key=spec.key,
@@ -66,6 +73,7 @@ def _dataset(spec: DatasetSpec) -> DatasetDescription:
         natural_key=list(spec.natural_key),
         period_column=spec.period_column,
         columns=[_column(column) for column in spec.columns],
+        last_load=load_reference(last_load) if last_load is not None else None,
     )
 
 
@@ -74,17 +82,22 @@ def _dataset(spec: DatasetSpec) -> DatasetDescription:
     summary="Every dataset spec",
     status_code=status.HTTP_200_OK,
 )
-async def list_datasets(catalogue: DatasetCatalogueDep) -> DatasetsResponse:
-    """Return every dataset spec, sorted by key, and how large a file may be.
+def list_datasets(
+    catalogue: DatasetCatalogueDep, principal: PrincipalDep, loads: LoadServiceDep
+) -> DatasetsResponse:
+    """Return every dataset spec, sorted by key, how large a file may be, and the last loads.
 
     Args:
         catalogue: the specs the API was built with.
+        principal: the caller, whose plants the last loads are read for.
+        loads: the load service.
 
     Returns:
         A :class:`~energy.api.schemas.responses.DatasetsResponse`.
     """
+    last = loads.last_loads(principal.plant_scope)
     return DatasetsResponse(
-        datasets=[_dataset(spec) for spec in catalogue],
+        datasets=[_dataset(spec, last.get(spec.key)) for spec in catalogue],
         limits=UploadLimits(
             max_file_bytes=MAX_FILE_BYTES,
             validated_in_request_bytes=CHECK_IN_REQUEST_MAX_BYTES,

@@ -175,7 +175,8 @@ describe("a validated file", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("2600")).toBeInTheDocument();
     expect(screen.getByText("2501")).toBeInTheDocument();
-    expect(screen.getByText(es.loads.result.nextStep)).toBeInTheDocument();
+    // Errors block the load: nothing offers to confirm it.
+    expect(screen.queryByRole("button", { name: es.loads.confirm.confirm })).toBeNull();
     expect(
       screen.getByText(
         i18n.t("loads.issues.capped", {

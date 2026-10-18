@@ -40,7 +40,7 @@ def made_up(header_row: int = 1, allowed: list[str] | None = None) -> DatasetSpe
                 "dataset_key": "example",
                 "header_row": header_row,
             },
-            "silver": {"table": "silver.example"},
+            "silver": {"table": "silver.example", "removed_rows": "kept"},
             "natural_key": ["Código"],
             "columns": [
                 {"header": "Código", "type": "text", "required": True},

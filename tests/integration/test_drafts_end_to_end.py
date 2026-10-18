@@ -416,7 +416,7 @@ class TestDraftsInTheDatabase:
             service.receive(opened, Body(corrected)).draft.draft_id, OWNER
         )
 
-        service.purge(landed=lambda _hash: False, only=earlier.draft_id)
+        service.purge(landed=lambda *_: False, only=earlier.draft_id)
         comparison = service.comparison(service.get(correction.draft_id, OWNER), OWNER)
 
         assert comparison is not None
@@ -440,7 +440,7 @@ class TestDraftsInTheDatabase:
                 {"d": draft.draft_id},
             )
 
-        outcome = service.purge(landed=lambda _hash: False)
+        outcome = service.purge(landed=lambda *_: False)
 
         assert outcome.drafts >= 1
         assert draft.object_key is not None

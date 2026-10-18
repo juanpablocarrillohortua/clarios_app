@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from tests.fixtures.drafts import InMemoryDraftRepository
+from tests.fixtures.loads import InMemoryBronze, build_load_service
 
 from energy.adapters.calamine_workbook import CalamineWorkbookReader
 from energy.domain.exceptions import DatasetSpecError
@@ -19,11 +21,41 @@ from energy.domain.landing import header_keys
 # builds the app and freezes the settings before a test can set them.
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
+    from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@pytest.fixture(autouse=True)
+def bronze(app: FastAPI, tmp_path: Path) -> Iterator[InMemoryBronze]:
+    """Bind the load service to an in-memory Bronze, which says when each dataset was loaded."""
+    from energy.adapters.local_storage import LocalObjectStorage  # noqa: PLC0415
+    from energy.adapters.zip_package import ZipPackageInspector  # noqa: PLC0415
+    from energy.api.deps import get_load_service  # noqa: PLC0415
+    from energy.services.draft_service import DraftService  # noqa: PLC0415
+
+    repository = InMemoryDraftRepository()
+    storage = LocalObjectStorage(tmp_path / "archive")
+    catalogue = app.state.dataset_catalogue
+    drafts = DraftService(
+        repository,
+        storage,
+        CalamineWorkbookReader(),
+        ZipPackageInspector(),
+        catalogue,
+        "bronze-raw",
+    )
+    shared = InMemoryBronze()
+    service, _committer, _ledger = build_load_service(
+        drafts, repository, storage, catalogue, shared
+    )
+    app.dependency_overrides[get_load_service] = lambda: service
+    yield shared
+    app.dependency_overrides.pop(get_load_service, None)
 
 
 def test_without_a_token_the_specs_are_not_served(client: TestClient, token_verifier: Any) -> None:
@@ -57,6 +89,7 @@ def test_a_catalogue_is_described_for_the_web_app(client: TestClient, auth_heade
         "header_row": 1,
         "natural_key": ["Línea"],
         "period_column": None,
+        "last_load": None,
     }
     assert lines["columns"][0] == {
         "header": "Línea",
@@ -84,6 +117,24 @@ def test_an_export_carries_every_header_and_its_period(
     assert len(invoices["columns"]) == 49
     second_warehouse = invoices["columns"][18]
     assert (second_warehouse["header"], second_warehouse["key"]) == ("Almac", "Almac #2")
+
+
+def test_each_dataset_says_when_it_was_last_loaded(
+    client: TestClient, auth_headers: Any, bronze: InMemoryBronze
+) -> None:
+    from energy.ports.load_committer import DatasetTarget  # noqa: PLC0415
+
+    lines = DatasetTarget("manual_sheets", "Lineas Produccion", "lineas_produccion")
+    bronze.add_cli_load(lines, [{"Línea": "FAFORM01"}], content_hash="a" * 64)
+    latest = bronze.add_cli_load(lines, [{"Línea": "FAFORM01"}, {"Línea": "ENSAM02"}])
+    bronze.add_cli_load(lines, [{"Línea": "X"}], content_hash="b" * 64, state="failed")
+
+    datasets = client.get("/datasets", headers=auth_headers("operator")).json()["datasets"]
+
+    last = datasets[0]["last_load"]
+    assert (last["run_id"], last["origin"], last["rows"]) == (str(latest), "cli", 2)
+    assert last["filename"] == "EQUS BATT.xlsx"
+    assert datasets[1]["last_load"] is None
 
 
 @pytest.mark.parametrize("key", ["lineas_produccion", "qad_facturas"])

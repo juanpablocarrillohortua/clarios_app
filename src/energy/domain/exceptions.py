@@ -298,10 +298,100 @@ class DraftBusyError(RepositoryError):
     code = "draft_busy"
 
 
+class UnknownLoadError(EntityNotFoundError):
+    """Raised when no load of the caller's plants has that run ID. The API answers 404."""
+
+    code = "unknown_load"
+
+
+class CommitCountMismatchError(RepositoryError):
+    """Raised when a commit lands a different number of rows than were staged.
+
+    The commit is rolled back. It means a bug, not a user's mistake: the API
+    answers 500.
+    """
+
+    code = "commit_count_mismatch"
+
+
 class DatabaseUnavailableError(RepositoryError):
     """Raised when the database cannot be reached or a required extension is missing."""
 
     code = "database_unavailable"
+
+
+# -----------------------------------------------------------------------------
+# Committing a draft (increment 7)
+# -----------------------------------------------------------------------------
+class CommitRefusedError(EnergyError):
+    """Base class for the reasons a draft is not committed.
+
+    Each subclass has an HTTP status of its own in the API. Nothing was
+    written when one is raised.
+    """
+
+    code = "commit_refused"
+
+
+class NotValidatedError(CommitRefusedError):
+    """Raised when a draft has not been validated, so it cannot be committed. 409."""
+
+    code = "not_validated"
+
+
+class DraftBlockedError(CommitRefusedError):
+    """Raised when a draft has errors, which block the load. 422."""
+
+    code = "draft_blocked"
+
+
+class WarningsNotAcceptedError(CommitRefusedError):
+    """Raised when a draft has warnings its owner did not accept. 422."""
+
+    code = "warnings_not_accepted"
+
+
+class NothingToLoadError(CommitRefusedError):
+    """Raised when a draft has no row to load. 422.
+
+    An empty snapshot would leave the previous version current, which is not
+    what anyone confirming it means.
+    """
+
+    code = "nothing_to_load"
+
+
+class ValidationChangedError(CommitRefusedError):
+    """Raised when a draft's validation is not the one its owner confirmed. 409."""
+
+    code = "validation_changed"
+
+
+class CurrentVersionChangedError(CommitRefusedError):
+    """Raised when another load became a catalogue's current version meanwhile. 409."""
+
+    code = "current_version_changed"
+
+
+class AlreadyLoadedError(CommitRefusedError):
+    """Raised when a completed run already landed the same file for the same dataset. 409.
+
+    ``details`` names that run (``run_id``).
+    """
+
+    code = "already_loaded"
+
+
+class DatasetBusyError(CommitRefusedError):
+    """Raised when another commit of the same dataset held its lock too long. 409."""
+
+    code = "dataset_busy"
+
+
+class OriginalMissingError(CommitRefusedError):
+    """Raised when a draft's archived original is gone, so Bronze would point at nothing. 409."""
+
+    code = "original_missing"
 
 
 # -----------------------------------------------------------------------------
@@ -377,14 +467,20 @@ class LockTimeoutError(PipelineError):
 
 __all__ = [
     "AccessError",
+    "AlreadyLoadedError",
     "AuthenticationError",
     "CloseRefusedError",
+    "CommitCountMismatchError",
+    "CommitRefusedError",
     "ConfigurationError",
     "ContentHashMismatchError",
+    "CurrentVersionChangedError",
     "DataQualityError",
     "DatabaseUnavailableError",
+    "DatasetBusyError",
     "DatasetSpecError",
     "DomainRuleError",
+    "DraftBlockedError",
     "DraftBusyError",
     "DuplicateReadingError",
     "EmptyFileError",
@@ -401,6 +497,9 @@ __all__ = [
     "LockTimeoutError",
     "NaiveDatetimeError",
     "NegativeEnergyError",
+    "NotValidatedError",
+    "NothingToLoadError",
+    "OriginalMissingError",
     "PermissionDeniedError",
     "PipelineError",
     "QuarantinedRowsError",
@@ -412,8 +511,11 @@ __all__ = [
     "UnknownDatasetError",
     "UnknownDraftError",
     "UnknownKPIError",
+    "UnknownLoadError",
     "UnknownSourceError",
     "UnsupportedFileFormatError",
     "UploadAbortedError",
+    "ValidationChangedError",
+    "WarningsNotAcceptedError",
     "WatermarkError",
 ]

@@ -1,7 +1,11 @@
 # 7. Figures reach people through Power BI, and the API serves none
 
 - **Status:** Accepted. The code changes it calls for wait for the start of
-  Phase 4 ("What Phase 4 does first", below)
+  Phase 4 ("What Phase 4 does first", below). Decision 4 was carried out by
+  increment 7 of the web app (2026-10-18): the `uploads` and `runs`
+  placeholders were removed, and what a load did is read at
+  `/api/loads/{run_id}`, with the rows of each sheet and the period it
+  covered ([ADR 0010](0010-a-draft-is-committed-once-in-one-transaction.md))
 - **Date:** 2026-10-13
 - **Deciders:** Platform team
 

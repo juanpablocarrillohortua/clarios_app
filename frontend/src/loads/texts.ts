@@ -24,6 +24,22 @@ export function named(t: TFunction, key: string, fallback: string): string {
   return i18n.exists(key) ? lookup(t)(key) : fallback;
 }
 
+/**
+ * What Silver does with a row a catalogue's new version leaves out: the
+ * dataset's own sentence when es.json has one, otherwise the general one of
+ * what the server says the build does (``kept`` or ``dropped``).
+ */
+export function removedRowsText(
+  t: TFunction,
+  datasetKey: string,
+  removedRows: "kept" | "dropped",
+): string {
+  const own = `datasets.${datasetKey}.removedRows`;
+  return i18n.exists(own)
+    ? lookup(t)(own)
+    : lookup(t)(`loads.difference.removedRows.${removedRows}`);
+}
+
 /** The short name of a rule, for a filter or a table cell. */
 export function ruleName(t: TFunction, rule: string): string {
   const key = `loads.rules.${rule}.name`;

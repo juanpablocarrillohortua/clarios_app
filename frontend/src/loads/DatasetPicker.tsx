@@ -8,7 +8,9 @@ import { useTranslation } from "react-i18next";
 
 import type { Api } from "../api/client";
 import { type Dataset, downloadTemplate } from "../api/datasets";
+import { saveFile } from "../components/saveFile";
 import classes from "../styles/app.module.css";
+import { formatWhen } from "./dates";
 import { named } from "./texts";
 
 interface DatasetPickerProps {
@@ -18,18 +20,6 @@ interface DatasetPickerProps {
   onChoose: (dataset: Dataset) => void;
   /** No other dataset may be chosen while a file is on its way. */
   disabled: boolean;
-}
-
-/** Hand a file the API sent to the browser, to be saved. */
-function save(blob: Blob, filename: string) {
-  const address = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = address;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(address);
 }
 
 export function DatasetPicker({ api, datasets, chosen, onChoose, disabled }: DatasetPickerProps) {
@@ -42,7 +32,7 @@ export function DatasetPicker({ api, datasets, chosen, onChoose, disabled }: Dat
     setDownloadFailed(false);
     try {
       const file = await downloadTemplate(api, dataset.key);
-      save(file.blob, file.filename ?? `${dataset.key}.xlsx`);
+      saveFile(file.blob, file.filename ?? `${dataset.key}.xlsx`);
     } catch {
       setDownloadFailed(true);
     } finally {
@@ -90,6 +80,13 @@ export function DatasetPicker({ api, datasets, chosen, onChoose, disabled }: Dat
                       count: dataset.columns.length,
                     })}
                   </Text>
+                  {dataset.last_load?.finished_at && (
+                    <Text size="xs" c="dimmed">
+                      {t("loads.dataset.lastLoad", {
+                        when: formatWhen(dataset.last_load.finished_at),
+                      })}
+                    </Text>
+                  )}
                 </Stack>
               </Group>
             </Radio.Card>

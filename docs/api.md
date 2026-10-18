@@ -6,8 +6,8 @@ devices will send their readings to it too. It is written in Python with
 FastAPI.
 
 It is not the only way to the data. Power BI reads its figures through a
-separate, read-only path that does not pass through the API, and the data is
-loaded today by commands on the server.
+separate, read-only path that does not pass through the API, and commands on
+the server load exports and calculate the figures.
 [Part 1](#the-other-way-to-the-data-power-bi) explains that in plain words and
 [section 9](#9-what-does-not-go-through-the-api) in detail.
 
@@ -46,7 +46,7 @@ uses:
 | Way in | Used by | May |
 |---|---|---|
 | **The API** | The web app, and later the plant's devices | Read and write, as far as the role of the signed-in person allows |
-| **Commands on the server** | An engineer | Load the exports, calculate the figures, close a month. All data gets in this way today; loading from the web app is being built |
+| **Commands on the server** | An engineer | Load the exports, calculate the figures, close a month. The web app loads a file through the API too, one at a time; the calculations are commands only |
 | **The reporting views** | Power BI | Read prepared figures, and nothing else. See [The other way to the data](#the-other-way-to-the-data-power-bi) |
 
 The rest of this part is about the API. Sign-in and roles, described below,
@@ -114,7 +114,7 @@ to Microsoft with that account is usually not asked for the password again.
 | Role | May |
 |---|---|
 | `viewer` | See the dashboard |
-| `operator` | The above, and load data, see the history of loads, and read the dataset specs and download their templates. A file someone uploads is theirs alone: nobody else sees it, whatever their role |
+| `operator` | The above, and load data, see the history of every load (whoever made it, in the app or by a command), and read the dataset specs and download their templates. A file someone uploads is theirs alone until it is loaded: nobody else sees it, whatever their role |
 | `engineer`, `admin` | The same as `operator` today; more arrives with later features |
 | No role | Sign in, and nothing else. The app shows a page saying so |
 
@@ -137,6 +137,13 @@ An upload has refusals of its own: a file over 300 MB (413), a file that is not
 an `.xlsx` (415), a request that does not say the file's size (411). The app
 checks the first two before it sends anything, so a person meets them only
 when something else sends the file.
+
+Confirming a load has refusals of its own. 409 means that something changed
+since the summary was shown: the file was checked again and the result
+differs, another version of the catalogue was loaded meanwhile, or the same
+file was already loaded. 422 means that the file cannot be loaded as it is: it
+has errors, its warnings were not accepted, or it holds no rows. Nothing is
+written in either case, and the app says what to do.
 
 The app hides what you may not open, so you rarely meet these. The API refuses
 by itself all the same, whatever the app shows.
@@ -207,12 +214,12 @@ flowchart LR
 | **Works** | The health checks: is the API running, and can it reach the database? |
 | **Works** | The settings the app reads when it starts: where users sign in, and which report the dashboard shows |
 | **Works** | The kinds of data the app knows how to load ("dataset specs"), and an empty template of each to download. Two so far: production lines and invoice lines. Built on 2026-10-17 |
-| **Works** | Uploading a file of up to 300 MB from the web app, and checking a file of up to 5 MB against its dataset's spec: every problem, with its row, column and rule. The file is kept; nothing reaches the database's evidence (Bronze) yet. Built on 2026-10-17; seeing it as a signed-in user is still to be checked in a browser |
+| **Works** | Uploading a file of up to 300 MB from the web app, and checking a file of up to 5 MB against its dataset's spec: every problem, with its row, column and rule. The file is kept; nothing reaches the database's evidence (Bronze) until the person confirms it. Built on 2026-10-17; seeing it as a signed-in user is still to be checked in a browser |
 | **Works** | Every problem says why it probably happened and what to do about it in Excel. The corrected file is uploaded again from the same page, and the page says which problems it cleared, which remain and which are new. Data is never typed or edited in the app: it is entered and corrected in Excel. Built on 2026-10-18; seeing it as a signed-in user is still to be checked in a browser |
 | **Works, outside the API** | Loading the exports and calculating the figures, by commands on the server |
 | **Works, outside the API** | Power BI reading the equivalent batteries through the reporting views |
-| **Planned** | Confirming an upload, so that it lands in the database, and the list of past loads. Checking files over 5 MB |
-| **Defined, not built** | The history of processing runs |
+| **Works** | Confirming a checked file, so that it lands in the database's evidence exactly once. A summary comes first: the rows, the period of an export, the warnings to accept and, for a catalogue, what changes from the version in force. Then the history of every load, the app's and the command line's, and each load in detail, with its original file to download. Built on 2026-10-18; seeing it as a signed-in user is still to be checked in a browser |
+| **Planned** | Checking files over 5 MB. Updating the figures after a load: until then Silver, Gold and the report are rebuilt by commands. Undoing a load, with a reason |
 | **Defined, not built** | Readings sent by the plant's devices |
 | **Built, outside the API** | The Power BI report shown inside the web app's dashboard. Built on 2026-10-13; seeing it as a signed-in user is still to be checked in a browser |
 | **Planned** | Energy indicators (KPIs), shown in that same report |
@@ -239,6 +246,13 @@ is allowed to make it. Who may call it is already enforced.
   written to the log.
 - **Power BI can only read, and only the reporting views.** Its login cannot
   change data, and the raw, clean and calculated tables refuse it.
+- **A file lands once, whole or not at all.** Confirming writes every row and
+  the record of the load together, or nothing. Pressing the button twice, or
+  confirming again after an answer was lost, never loads a file twice.
+- **A load says where it came from.** Its record names who confirmed it, when,
+  from which file, which warnings they accepted and, for a catalogue, how it
+  differed from the version before. The original file is kept unchanged and
+  can be downloaded from the load's page.
 
 One limit: three other screens on the same address (the earlier charts page,
 the pipeline console and the file-store console) are **not** behind this
@@ -261,6 +275,9 @@ the platform runs on a shared server.
 | **Reporting view** | A saved calculation in the database that shows figures ready to read. Power BI reads the twelve of them and nothing else |
 | **Gateway** | A Microsoft program on the server that fetches data for the report published online, so that no door of the server has to open to the internet |
 | **Status code** | The number in every answer: 200 is success, the 400s are a problem with the request, the 500s a problem on the server |
+| **Draft** | An uploaded file and what its check found, before it is loaded. Only the person who uploaded it sees it |
+| **Load** | One file written into the database's evidence, with its record: who, when, from which file, how many rows. The history lists them |
+| **Bronze** | The database's evidence: every row exactly as it arrived, never changed afterwards. The clean (Silver) and calculated (Gold) data are built from it |
 
 ---
 
@@ -316,20 +333,20 @@ refused, and how the app and Entra ID take part.
 | `GET /api/kpis` | `dashboard:view` | Placeholder. To be removed in Phase 4 | One KPI as a time series for one plant |
 | `GET /api/kpis/summary` | `dashboard:view` | Placeholder. To be removed in Phase 4 | The latest value of every KPI |
 | `GET /api/kpis/{plant_code}/coverage` | `dashboard:view` | Placeholder. To be removed in Phase 4 | How much of a period rests on reliable readings |
-| `POST /api/uploads` | `loads:write` | Placeholder, Phase 3 | 202 with the ID of the run to follow |
-| `GET /api/uploads` | `loads:write` | Placeholder, Phase 3 | Past uploads and how each ended |
-| `GET /api/runs` | `loads:write` | Placeholder, Phase 3 | Recent pipeline runs |
-| `GET /api/runs/{run_id}` | `loads:write` | Placeholder, Phase 3 | One run in detail |
-| `GET /api/runs/{run_id}/quarantine` | `loads:write` | Placeholder, Phase 3 | The rows a run rejected, and why |
-| `POST /api/runs/{run_id}/retry` | `loads:write` | Placeholder, Phase 3 | 202 with the ID of the new run |
-| `GET /api/datasets` | `loads:write` | Built | Every dataset spec: its kind, where it comes from, how rows are entered (by upload, the only way: [ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)), its sheet, natural key, period column and columns; and `limits`, the largest file accepted and the largest validated now |
+| `GET /api/datasets` | `loads:write` | Built | Every dataset spec: its kind, where it comes from, how rows are entered (by upload, the only way: [ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)), its sheet, natural key, period column and columns, and `last_load`, its latest completed load; and `limits`, the largest file accepted and the largest validated now |
 | `GET /api/datasets/{dataset_key}/template` | `loads:write` | Built | The dataset's empty `.xlsx` template, named `<dataset_key>.xlsx`: its sheet, with exactly the spec's headers. 404 with `code` `unknown_dataset` for a key no spec has |
-| `POST /api/drafts` | `loads:write` | Built | Takes one `.xlsx` as the raw body (query `dataset_key`, headers `Content-Length` and `X-File-Name`), streams it to object storage and answers 201 with the new draft and its `Location`; 200 with the earlier draft when the same person sends the same bytes for the same dataset again. 411, 413, 415 and 400 refuse it before or while it arrives |
-| `GET /api/drafts/{draft_id}` | `loads:write`, the draft's owner only | Built | The draft, and what its last validation found: rows read, rows with errors and with warnings, whether it can be loaded, and how often each rule broke in each column, by first reason. For a correction, `previous_draft_id` and `comparison`: how many issues it cleared, kept and added. 404 `unknown_draft` for anyone else's |
-| `POST /api/drafts/{draft_id}/validate` | `loads:write`, the draft's owner only | Built | Checks the file against its dataset spec, replacing earlier results, and answers the draft. 409 `draft_busy` while it is arriving or being validated; 501 `not_implemented` for a file over 5 MiB |
+| `POST /api/drafts` | `loads:write` | Built | Takes one `.xlsx` as the raw body (query `dataset_key`, headers `Content-Length` and `X-File-Name`), streams it to object storage and answers 201 with the new draft and its `Location`; 200 with the earlier draft, committed or not, when the same person sends the same bytes for the same dataset again. 411, 413, 415 and 400 refuse it before or while it arrives |
+| `GET /api/drafts/{draft_id}` | `loads:write`, the draft's owner only | Built | The draft, and what its last validation found: rows read, rows with errors and with warnings, whether it can be loaded, and how often each rule broke in each column, by first reason. For a correction, `previous_draft_id` and `comparison`: how many issues it cleared, kept and added. Once committed, `status` `committed` with its load's `run_id` and `committed_at`. 404 `unknown_draft` for anyone else's |
+| `POST /api/drafts/{draft_id}/validate` | `loads:write`, the draft's owner only | Built | Checks the file against its dataset spec, replacing earlier results, and answers the draft. 409 `draft_busy` while it is arriving or being validated, and once it is committed; 501 `not_implemented` for a file over 5 MiB |
 | `GET /api/drafts/{draft_id}/issues` | `loads:write`, the draft's owner only | Built | A page of the issues found (`offset`, `limit` up to 500), filtered by `severity`, `rule`, `column`, first `reason` and, for a correction, `change` (`new` or `remaining`): each with its row, column, rule, severity, value, the values its sentence needs, and its likely `reasons`, most likely first |
 | `POST /api/drafts/{draft_id}/corrections` | `loads:write`, the draft's owner only | Built | Takes the corrected `.xlsx` exactly as `POST /api/drafts` takes a file, for the dataset of that draft, and answers 201 with the new draft, linked to it by `previous_draft_id`; 200 with an existing draft for the same bytes again (the draft itself, when nothing changed). 404 `unknown_draft` for anyone else's, 409 `draft_busy` for a draft whose own file never arrived, and the refusals of an upload |
 | `GET /api/drafts/{draft_id}/cleared` | `loads:write`, the draft's owner only | Built | For a correction, a page of the issues of the earlier file it no longer has (`offset`, `limit` up to 500), each with the value it had. 404 for a draft that is no correction, or one that cannot be compared |
+| `GET /api/drafts/{draft_id}/confirmation` | `loads:write`, the draft's owner only | Built | What confirming would write: `can_confirm` or `blocked_by`; the `validation_digest` to send back; the rows; the `warnings`, and whether they must be accepted; for an export, its `period` and the loads that already cover part of it; for a catalogue, its `current_version`, the `difference` from it and `removed_rows`, what Silver does with a row the new version leaves out. A stale draft is validated again first. 404 `unknown_draft` for anyone else's |
+| `GET /api/drafts/{draft_id}/difference` | `loads:write`, the draft's owner only | Built | For a catalogue, a page of the rows of one kind of `change` (`added`, `changed` or `removed`; `offset`, `limit` up to 500), by natural key: an added or removed row with its values, a changed one with each changed column before and after. 404 for a draft that is not a validated catalogue |
+| `POST /api/drafts/{draft_id}/commit` | `loads:write`, the draft's owner only | Built | Lands the draft in Bronze in one transaction (body: `validation_digest`, `accept_warnings`, `base_run_id`) and answers 201 with the load and its `Location`; 200 with the same load for a draft already committed. 409 when something changed since the confirmation, 422 when the draft cannot land (section 7) |
+| `GET /api/loads` | `loads:write` | Built | A page of every load of the caller's plants, from the app or the command line: filtered by `dataset`, `state`, `user` (`me` or a subject), `origin` (`app` or `cli`), `period_from` and `period_to`, `from` and `to`; sorted by `started_at` or `rows`, `order` `desc` or `asc`; `offset`, `limit` up to 100. `people` names everyone who loaded, for the filter |
+| `GET /api/loads/{run_id}` | `loads:write` | Built | One load: what it wrote and each sheet's rows, the original file, its validation and the warnings accepted, a catalogue's difference, and `draft_available`, whether the caller can still open its draft. 404 `unknown_load` |
+| `GET /api/loads/{run_id}/original` | `loads:write` | Built | The file the load came from, streamed from object storage under the name it was uploaded with, its bytes checked against its hash on the way. 404 `unknown_load` when Bronze catalogues no file for the load |
 | `POST /api/ingest/readings` | Devices. Not enforced yet | Placeholder, Phase 3 | The accepted and rejected counts of a batch |
 | `GET /api/ingest/watermark/{plant_code}/{source_key}` | Devices. Not enforced yet | Placeholder, Phase 3 | The newest timestamp held for a plant and source |
 
@@ -644,6 +661,231 @@ comparison (two of five counts shown)
   file again under the current one (`previous_revalidated`); when that cannot
   be done, `state` is `rules_changed` and nothing is matched.
 
+`GET /api/drafts/{draft_id}/confirmation` of a synthetic catalogue of four
+lines (`lines_catalogue_changed` of `tests/fixtures/workbooks.py`), whose
+version in force came from the command line
+
+```json
+{
+  "draft_id": "235929cc-2aa9-4865-b65f-6369da23f413",
+  "dataset_key": "lineas_produccion",
+  "kind": "snapshot",
+  "filename": "Líneas octubre.xlsx",
+  "sheet": "Lineas Produccion",
+  "can_confirm": true,
+  "blocked_by": null,
+  "validation_digest": "320ef54d4f97d920b67815eaf463314dbaa24c3fcd74b64856bd199f976139f6",
+  "rows": 4,
+  "warnings": [],
+  "warnings_to_accept": false,
+  "period": null,
+  "overlapping_loads": [],
+  "current_version": {
+    "run_id": "d8c2deb4-24bb-4993-9f49-a27bacbd9e7f",
+    "origin": "cli",
+    "finished_at": "2026-10-18T16:25:42.504310Z",
+    "filename": "EQUS BATT.xlsx",
+    "rows": 4,
+    "uploaded_by_name": null,
+    "window_start": null,
+    "window_end": null
+  },
+  "difference": {
+    "base_run_id": "d8c2deb4-24bb-4993-9f49-a27bacbd9e7f",
+    "added": 1,
+    "changed": 1,
+    "removed": 1,
+    "unchanged": 2,
+    "removed_rows": "kept"
+  },
+  "already_loaded_run_id": null,
+  "run_id": null
+}
+```
+
+`GET /api/drafts/{draft_id}/difference`, with `change=changed`
+
+```json
+{
+  "total": 1,
+  "offset": 0,
+  "limit": 100,
+  "items": [
+    {"change": "changed", "key": ["FAFORM01"], "row": 2, "previous_row": 2, "values": {},
+     "columns": [{"column": "Descripción", "before": "Formación 1", "after": "Formación uno"}]}
+  ]
+}
+```
+
+`POST /api/drafts/{draft_id}/commit`, with the body
+`{"validation_digest": "320ef54d…", "accept_warnings": false, "base_run_id": "d8c2deb4-…"}`:
+201, with `Location: /api/loads/f93d5576-88d1-42fc-a472-542f971993e8`. The same
+request again answers 200 with the same body.
+
+```json
+{
+  "run_id": "f93d5576-88d1-42fc-a472-542f971993e8",
+  "origin": "app",
+  "state": "completed",
+  "source_key": "manual_sheets",
+  "dataset_key": "lineas_produccion",
+  "sheets": [{"name": "Lineas Produccion", "dataset_key": "lineas_produccion", "rows": 4}],
+  "filename": "Líneas octubre.xlsx",
+  "rows": 4,
+  "started_at": "2026-10-18T16:25:42.736584Z",
+  "finished_at": "2026-10-18T16:25:42.736584Z",
+  "window_start": null,
+  "window_end": null,
+  "uploaded_by_name": "Test Operator",
+  "mine": true,
+  "warnings_accepted": 0,
+  "error": "",
+  "plant_code": "1515",
+  "flow_name": "Líneas octubre",
+  "original": {
+    "filename": "Líneas octubre.xlsx",
+    "size_bytes": 5236,
+    "content_hash": "b31c12f611b57ebba06077d4cdb82bb95cfcf7e81acf1283a4e7c9bbc6f163b6"
+  },
+  "validation": {
+    "validated_at": "2026-10-18T16:25:42.708571Z",
+    "rows_read": 4,
+    "rows_with_warnings": 0,
+    "counts": [],
+    "accepted": null
+  },
+  "difference": {
+    "base_run_id": "d8c2deb4-24bb-4993-9f49-a27bacbd9e7f",
+    "added": 1, "changed": 1, "removed": 1, "unchanged": 2, "removed_rows": "kept"
+  },
+  "draft_id": "235929cc-2aa9-4865-b65f-6369da23f413",
+  "draft_available": true
+}
+```
+
+`GET /api/drafts/{draft_id}/confirmation` of a synthetic invoices export
+(`invoices_good`): an export has a period, and no version to compare with
+
+```json
+{
+  "draft_id": "486ca7a3-a627-499f-8698-ffca42911ccc",
+  "dataset_key": "qad_facturas",
+  "kind": "movement",
+  "filename": "Facturas octubre.xlsx",
+  "sheet": "Datos",
+  "can_confirm": true,
+  "blocked_by": null,
+  "validation_digest": "79429848cf8e670ff07ccc154e9f6b78e44c7279d0cb530b5fb8e05c0c052ed4",
+  "rows": 4,
+  "warnings": [],
+  "warnings_to_accept": false,
+  "period": {"start": "2025-10-03", "end": "2025-10-31"},
+  "overlapping_loads": [],
+  "current_version": null,
+  "difference": null,
+  "already_loaded_run_id": null,
+  "run_id": null
+}
+```
+
+`GET /api/loads`, with `limit=2`: the load of the app, and the one of the command line
+it replaced (`sheets[].rows` is filled in the detail only)
+
+```json
+{
+  "total": 2,
+  "offset": 0,
+  "limit": 2,
+  "items": [
+    {"run_id": "f93d5576-88d1-42fc-a472-542f971993e8", "origin": "app", "state": "completed",
+     "source_key": "manual_sheets", "dataset_key": "lineas_produccion",
+     "sheets": [{"name": "Lineas Produccion", "dataset_key": "lineas_produccion", "rows": null}],
+     "filename": "Líneas octubre.xlsx", "rows": 4,
+     "started_at": "2026-10-18T16:25:42.736584Z", "finished_at": "2026-10-18T16:25:42.736584Z",
+     "window_start": null, "window_end": null, "uploaded_by_name": "Test Operator",
+     "mine": true, "warnings_accepted": 0, "error": ""},
+    {"run_id": "d8c2deb4-24bb-4993-9f49-a27bacbd9e7f", "origin": "cli", "state": "completed",
+     "source_key": "manual_sheets", "dataset_key": "lineas_produccion",
+     "sheets": [{"name": "Lineas Produccion", "dataset_key": "lineas_produccion", "rows": null}],
+     "filename": "EQUS BATT.xlsx", "rows": 4,
+     "started_at": "2026-10-18T16:25:42.504310Z", "finished_at": "2026-10-18T16:25:42.504310Z",
+     "window_start": null, "window_end": null, "uploaded_by_name": null,
+     "mine": false, "warnings_accepted": 0, "error": ""}
+  ],
+  "people": [{"subject": "33333333-3333-4333-8333-333333333333", "name": "Test Operator"}]
+}
+```
+
+`POST /api/drafts/{draft_id}/commit` with a digest that is not the draft's: 409
+
+```json
+{
+  "code": "validation_changed",
+  "message": "the draft's validation is not the one confirmed",
+  "details": {"draft_id": "486ca7a3-a627-499f-8698-ffca42911ccc"}
+}
+```
+
+- **The digest ties the commit to what the person saw.** `validation_digest`
+  is a SHA-256 of the spec's digest, the sheet, the header row, the rows and
+  every count of the validation. The commit sends it back. If the draft was
+  validated again in between and the result differs, the answer is 409
+  `validation_changed`, and nothing is written.
+- **Warnings are accepted, never skipped.** When `warnings_to_accept` is true
+  the commit needs `"accept_warnings": true`, or it answers 422
+  `warnings_not_accepted`. The client sends only that flag: which warnings were
+  accepted is the server's own list for that digest, recorded on the load
+  (`validation.accepted` of the detail) with the person who confirmed.
+- **A catalogue is compared with the version Silver would read now:** the
+  rows of the latest completed load of that dataset, whichever way it came.
+  Rows pair by their natural key, trimmed of spaces as Silver trims it, and
+  rows sharing a key pair in row order. A changed row is one whose values
+  differ. The commit sends `base_run_id`, the version it was compared with; if
+  another load became current meanwhile, the answer is 409
+  `current_version_changed`.
+- **`removed_rows` is what Silver does with a row the new version leaves
+  out,** as the dataset's spec states it: `kept` (Silver keeps what it already
+  knows) or `dropped` (it removes the row at its next build). The app's
+  sentence is `datasets.<key>.removedRows` of `es.json`, or
+  `loads.difference.removedRows.<value>`. The load records it, so its detail
+  still says what applied after the rule changes.
+- **One transaction, at most once.** The commit locks the draft, takes a lock
+  per dataset, catalogues the file in `bronze.raw_files` unless it is already
+  there, opens the run, copies the staged rows into the landing table, checks
+  that every count agrees, completes the run, removes the staged rows and marks
+  the draft committed, all in one PostgreSQL transaction. A failure at any
+  step leaves Bronze exactly as it was, without even a failed run, and the
+  draft validated with its rows: confirm again. A committed draft answers
+  every later commit with 200 and its load; a second request while the first
+  is running gets 409 `draft_busy`.
+- **The command line's statements land the rows.** The commit runs the SQL of
+  the Bronze loader (`postgres_bronze_repo.py`) inside its own transaction, so
+  a file loaded either way lands the same rows with the same hashes.
+- **The same file twice is refused** with 409 `already_loaded`, whose
+  `details.run_id` names the load, as the command line skips a file it already
+  loaded. A different file of a period already loaded is allowed: the
+  confirmation lists the loads it overlaps (`overlapping_loads`), and Silver
+  keeps the newest copy of each row.
+- **A stale draft is validated again** before its confirmation and its commit:
+  one validated under another version of its spec, or before the commit's
+  facts (sheets, period, the export's Info sheet) were kept, which revision
+  `0009` added.
+- **What a load records.** The run's `parameters` hold the command line's own
+  keys, plus `input_mode` (`upload`), `dataset_key`, `draft_id`,
+  `previous_draft_id`, `spec_digest`, `uploaded_by_name`, `validation` and,
+  for a catalogue, `difference`. [The data dictionary](data_dictionary.md)
+  lists them. Names in answers are display names, never sign-in names.
+- **The history is Bronze's ledger:** every run of the caller's plants, the
+  command line's included (`origin` `cli`), named by its dataset when one spec
+  has its sheet. `mine` marks the caller's own. A load's draft opens only for
+  its owner, while it lives (`draft_available`).
+- **The original goes through the API,** never by an address of object
+  storage, with `Content-Disposition` carrying its name in UTF-8 and
+  `X-Content-Type-Options: nosniff`. Its bytes are hashed as they go, and the
+  last piece is held back until the hash matches: a file that does not match
+  stops short of its length, so the browser reports a broken download rather
+  than keeping it.
+
 ### 3. The three parties
 
 ```mermaid
@@ -694,20 +936,20 @@ records why.
 
 ### 4. The path of one request
 
-`GET /api/uploads` from a signed-in operator, step by step:
+`GET /api/loads` from a signed-in operator, step by step:
 
 | # | Where | What happens |
 |---|---|---|
-| 1 | Caddy | Receives `/api/uploads`, removes `/api`, forwards to `api:8000` |
+| 1 | Caddy | Receives `/api/loads`, removes `/api`, forwards to `api:8000` |
 | 2 | `CORSMiddleware` | Nothing for the app, which is served from the same address (section 8) |
 | 3 | `RequestContextMiddleware.dispatch` | Takes the request ID from `X-Request-ID`, or makes one, and binds it to every log line of this request |
-| 4 | The router | `uploads` was mounted in `main.py` with `dependencies=[Depends(requires(Permission.LOADS_WRITE))]`, so the next four steps run before the handler |
+| 4 | The router | `loads` was mounted in `main.py` with `dependencies=[Depends(requires(Permission.LOADS_WRITE))]`, so the next four steps run before the handler |
 | 5 | `deps._bearer` | Reads `Authorization: Bearer …`. Gives `None` when the header is missing or is not a Bearer one. It never answers by itself |
 | 6 | `deps.get_token_verifier` | Gives the process's `EntraTokenVerifier`, or `None` when `ENTRA_TENANT_ID` and `ENTRA_CLIENT_ID` are not both set |
 | 7 | `deps.get_principal` | No token: 401. No verifier: 503. Otherwise `verifier.verify(token)` (section 5), then `security.principal_from_token` (section 6). Leaves the caller's identifier on the request for the access log |
 | 8 | `deps.requires(…)` | `security.require_permission`: 403 when no role of the caller grants the permission |
 | 9 | FastAPI | Checks the parameters against the handler's signature: 422 when one is missing or malformed |
-| 10 | The handler | Runs. A placeholder raises `NotImplementedError` |
+| 10 | The handler | Runs: `deps.get_load_service` gives the service, and `LoadService.loads` reads one page of Bronze's ledger through the `LoadLedger` port. A placeholder raises `NotImplementedError` instead |
 | 11 | The exception handlers of `main.py` | Turn each error into its answer (section 7) |
 | 12 | `RequestContextMiddleware` | Adds `X-Request-ID` to the answer and writes one access log line |
 
@@ -794,7 +1036,7 @@ permissions              what the caller may do
 | Permission | Granted to | Protects |
 |---|---|---|
 | `dashboard:view` | `viewer`, `operator`, `engineer`, `admin` | The dashboard section of the app, and `/api/kpis/*` until Phase 4 removes it |
-| `loads:write` | `operator`, `engineer`, `admin` | `/api/uploads/*`, `/api/runs/*`, the data-loading section of the app |
+| `loads:write` | `operator`, `engineer`, `admin` | `/api/datasets/*`, `/api/drafts/*`, `/api/loads/*`, the data-loading section of the app |
 
 - **`dashboard:view` is navigation, not the protection of a figure.** It makes
   the app show the dashboard section. Who sees the report is decided in Power
@@ -832,17 +1074,20 @@ developer; the app shows its own texts and reads only the status and the
 
 | Status | `code` | When | Body |
 |---|---|---|---|
-| 200, 201, 202 | | Success. 201: a draft was created, and `Location` names it. 202 means "accepted, follow the run" | The endpoint's model |
+| 200, 201, 202 | | Success. 201: a draft was created or committed, and `Location` names the draft or the load. 202 is the readings route's "accepted" | The endpoint's model |
 | 400 | The error's own, for example `invalid_time_window`, `invalid_filename` or `incomplete_upload` | A rule of the domain refused the request: any `EnergyError` without a row of its own | Envelope |
 | 401 | `unauthenticated` | No token, or a token that failed a check of section 5 | Envelope, with a fixed message and empty `details` |
 | 403 | `forbidden` | A valid token without the permission the route needs | Envelope; `details.permission` names it |
-| 404 | `entity_not_found`, or `unknown_dataset` and `unknown_draft` | A lookup by identifier found nothing. A draft of someone else answers the same, and so does the cleared list of a draft that is no correction to compare | Envelope |
-| 409 | `draft_busy` | A draft still arriving, failed, or being validated by another request; or a correction of a draft whose own file never arrived | Envelope |
+| 404 | `entity_not_found`, or `unknown_dataset`, `unknown_draft` and `unknown_load` | A lookup by identifier found nothing. A draft of someone else answers the same, and so does the cleared list of a draft that is no correction to compare, or the difference of one that is no validated catalogue | Envelope |
+| 409 | `draft_busy` | A draft still arriving, failed, or being validated or committed by another request; a validation of a committed draft; or a correction of a draft whose own file never arrived | Envelope |
+| 409 | `not_validated`, `validation_changed`, `current_version_changed`, `already_loaded`, `dataset_busy`, `original_missing` | A commit refused because something changed since the confirmation: the draft is not validated (or is over 5 MiB), its validation differs from the digest sent, another load became the catalogue's current version, a completed load has the same file (`details.run_id`), another commit of the dataset held its lock for 10 seconds, or the archived original is gone. Nothing was written | Envelope |
 | 411 | `length_required` | An upload without `Content-Length` | Envelope |
 | 413 | `file_too_large` | An upload over 300 MiB: announced by `Content-Length`, or counted as it arrives | Envelope. Caddy refuses a body over its limit itself, before the API: 413 with an empty body, or a cut connection |
 | 415 | `unsupported_file_format`, `empty_file` | An upload whose name, declared type or first bytes are not an `.xlsx`, or that is empty | Envelope |
 | 404 | | No such path | FastAPI's own: `{"detail": "Not Found"}` |
 | 422 | | A parameter or the body failed validation | FastAPI's own: `{"detail": [ … ]}`, one entry per problem |
+| 422 | `draft_blocked`, `warnings_not_accepted`, `nothing_to_load` | A commit refused because the draft cannot land as it is: it has errors, its warnings were not accepted, or it has no rows. Nothing was written | Envelope |
+| 500 | `commit_count_mismatch` | The rows a commit landed are not the rows staged. It is a bug, and the transaction was rolled back | Envelope |
 | 500 | | An error nobody foresaw. The log line `request failed` has the traceback and the request ID | Plain text, without the `X-Request-ID` header |
 | 501 | `not_implemented` | A placeholder endpoint, or a feature not built for this input (the validation of a draft over 5 MiB). The message names the phase or increment | Envelope |
 | 503 | `source_unavailable` | Object storage could not be reached, or refused to store a file | Envelope |
@@ -853,7 +1098,8 @@ developer; the app shows its own texts and reads only the status and the
 Three things to know before parsing an error:
 
 - **Two shapes exist.** Validation errors (422) and unknown paths (404) come
-  from FastAPI and use `detail`, not the envelope. A client must handle both.
+  from FastAPI and use `detail`, not the envelope. A client must handle both:
+  a 422 with `code` is a commit refused, one with `detail` a malformed request.
 - **The request ID is in a header, not in the body.** Every answer carries
   `X-Request-ID`, except an unforeseen 500. The model `ErrorResponse` has a
   `request_id` field that no handler fills.
@@ -886,9 +1132,10 @@ docker compose logs api | grep <request id>
 
 | File | Does |
 |---|---|
-| [`frontend/src/api/client.ts`](../frontend/src/api/client.ts) | `createApi(auth)`: `get(path)`, `post(path)` and `download(path)` ask the sign-in client for a token, call `/api` + `path` with `Authorization: Bearer`, and throw `ApiError(status, code)` for an answer that is not a success. `download` returns the file and the name the API gave it |
+| [`frontend/src/api/client.ts`](../frontend/src/api/client.ts) | `createApi(auth)`: `get(path)`, `post(path)`, `postJson(path, body)` and `download(path)` ask the sign-in client for a token, call `/api` + `path` with `Authorization: Bearer`, and throw `ApiError(status, code, details)` for an answer that is not a success. `postJson` also returns the status, so a caller tells 201 from 200. `download` returns the file and the name the API gave it (`filename*` first), reporting the bytes received |
 | [`frontend/src/api/datasets.ts`](../frontend/src/api/datasets.ts) | `fetchDatasets(api)`: `GET /api/datasets`, the specs and the upload `limits`. `downloadTemplate(api, key)` |
-| [`frontend/src/api/drafts.ts`](../frontend/src/api/drafts.ts) | `uploadDraft(auth, target, ...)`: `POST /api/drafts`, or `POST /api/drafts/{draft_id}/corrections` for a corrected file, through `upload.ts`, with a token asked for just before sending. `fetchDraft`, `validateDraft`, `fetchIssues` and `fetchCleared` for the others |
+| [`frontend/src/api/drafts.ts`](../frontend/src/api/drafts.ts) | `uploadDraft(auth, target, ...)`: `POST /api/drafts`, or `POST /api/drafts/{draft_id}/corrections` for a corrected file, through `upload.ts`, with a token asked for just before sending. `fetchDraft`, `validateDraft`, `fetchIssues` and `fetchCleared` for the others; `fetchConfirmation`, `fetchDifference` and `commitDraft` for the confirmation |
+| [`frontend/src/api/loads.ts`](../frontend/src/api/loads.ts) | `fetchLoads(api, filters)`, `fetchLoad(api, runId)` and `downloadOriginal(api, runId, onProgress)`: the history, one load, and its original file |
 | [`frontend/src/api/upload.ts`](../frontend/src/api/upload.ts) | The only file that uses `XMLHttpRequest`, because `fetch` reports no upload progress. It sends the file as the raw body with its name percent-encoded in `X-File-Name`, and stops on an `AbortSignal` |
 | [`frontend/src/api/config.ts`](../frontend/src/api/config.ts) | `fetchClientConfig()`: `GET /api/config`, without a token. Its answer also names the report of the dashboard |
 | [`frontend/src/api/me.ts`](../frontend/src/api/me.ts) | `fetchMe(api)`: `GET /api/me`, with the token |
@@ -937,6 +1184,16 @@ API helper, and the answer of `/api/me`.
   anywhere on the page, to `POST /api/drafts/{draft_id}/corrections`. The page
   then moves to the new draft, validates it once, and shows its `comparison`
   first. The cleared issues are asked for only when the person opens them.
+- **A validated draft without errors shows its confirmation,** with one
+  button, "Confirmar carga". A ref and the disabled button make a double
+  click send one request. When the answer is lost the page says that it does
+  not know whether the load landed, and "Comprobar" sends the same commit
+  again: 200 means it had. A refusal of section 7 refreshes what changed and
+  says what to do.
+- **The history keeps its filters in the address** (`/loads/history?…`), so a
+  filtered list can be reloaded or shared. Each load opens at
+  `/loads/history/<run_id>`; its original downloads through the API with the
+  token, never by a link to object storage.
 - **The dashboard asks the API for nothing more.** Once it knows which report
   to show, it talks to Entra ID and to Power BI (section 9, "The report inside
   the web app").
@@ -956,10 +1213,12 @@ sections 3 to 6 protect that one only. These are all of them:
 Of the other containers, `dash` also receives the database's address, and its
 holding page asks nothing of it. The Prefect containers do not receive it.
 
-**All data gets in through the second row today.** The loaders, the Silver
-build, the Gold refresh and the monthly close are commands. The endpoints that
-will let the web app load data are the placeholders of section 2, and the
-increments of [the frontend plan](frontend-plan.md) build them.
+**Data gets in through the first two rows.** The web app loads one file at a
+time through the API: a person uploads it, it is checked, and confirming it
+lands it in Bronze (`POST /api/drafts/{draft_id}/commit`). The command line
+loads folders of exports, and runs the Silver build, the Gold refresh and the
+monthly close, which the API does not. Both land rows with the same
+statements, and the history of loads (`GET /api/loads`) lists both.
 
 #### The Power BI path
 
@@ -1063,7 +1322,8 @@ Neither of these is built. The first is a decision of
 - **Phase 4, the energy KPIs.** They reach people as new views of schema
   `reporting`, each row with its `coverage`, shown in the same report. The API
   serves no analytical figure: its three KPI endpoints are removed. What a load
-  did, before the report is refreshed, is asked by run (`/api/runs/…`).
+  did, before the report is refreshed, is read in its detail
+  (`/api/loads/{run_id}`), built in increment 7.
 - **Increment 10, updating the figures.** After a load, a job rebuilds Silver,
   refreshes Gold, and then asks Power BI to refresh the model. That will be the
   first time the platform itself calls Power BI. On shared capacity, where the
@@ -1162,7 +1422,35 @@ curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/drafts/$COR
 ```
 Remove a draft and its original at once with
 `energy drafts purge --draft-id $DRAFT`; `energy drafts purge --dry-run` says
-what the purge of expired drafts would remove.
+what the purge of expired drafts would remove. It never removes an original
+that Bronze catalogues, so a committed draft's file stays.
+
+**Confirming a load.** A commit writes Bronze for good: nothing undoes a load
+until increment 11, and a synthetic catalogue committed into the development
+database becomes the version the next Silver build reads. Try it on a scratch
+copy of the database and a scratch bucket. The script writes
+`lineas_catalogo.xlsx` and `lineas_catalogo_cambiada.xlsx`, two versions of a
+lines catalogue (`lineas_catalogo_cambiada.expected.tsv`: one line added, one
+changed, one removed, two unchanged), and `facturas_buena.xlsx`, a sound
+invoices export of October 2025 (`facturas_buena.expected.tsv`). Upload and
+validate one as above, then:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/drafts/$DRAFT/confirmation
+curl -s -i -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json"   -d '{"validation_digest": "<validation_digest>", "base_run_id": "<current_version.run_id>"}'   http://localhost:8080/api/drafts/$DRAFT/commit
+```
+
+The answer is 201, with the load's address in `Location`; the same command
+again answers 200 with the same load. For an export, or a catalogue without a
+current version, leave `base_run_id` out; with warnings, add
+`"accept_warnings": true`. Then:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/loads?user=me"
+RUN=<the run_id of the load>
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/loads/$RUN
+curl -s -H "Authorization: Bearer $TOKEN" -OJ http://localhost:8080/api/loads/$RUN/original
+```
 
 **A malformed spec stops the API.** Check the specs without starting anything:
 `energy datasets check`, or `energy datasets check --config-dir <folder>` for a
@@ -1189,7 +1477,12 @@ ticket, a chat or this repository.
 | `tests/unit/test_draft_reasons.py`, `test_draft_comparison.py` | Every defect of the plan's section 5 through a real workbook, with its first reason; what each detector must not say; every reason's texts in `es.json`; counts by reason past the list's cap; the comparison's arithmetic and the spec's digest |
 | `tests/unit/test_drafts.py`, `test_draft_rules.py`, `test_zip_package.py`, `test_draft_service.py`, `test_caddyfile.py` | The limits and the upload guard; each rule, with the Silver build's own number and the sentences of `es.json`; the archive's limits and a lying archive; the use cases, including a client that goes away and the purge; the Caddyfile's limits against the API's |
 | `tests/integration/test_drafts_end_to_end.py` | Against PostgreSQL and MinIO: every planted issue found, with its reason; the original archived under its hash; a correction compared in SQL to the exact counts, with every table of Bronze, Silver and Gold unchanged and the earlier original untouched; a correction outliving the purge of its earlier draft; and a 96 MiB upload through the API under a memory bound |
-| `frontend/src/loads/*.test.tsx`, `frontend/src/api/upload.test.ts` | The loading pages: datasets, template, the checks before sending, progress, cancel, every refusal, the validation and the issues list, with a stand-in for `XMLHttpRequest` |
+| `tests/unit/test_draft_commit.py` | The validation digest, why a draft cannot be committed, the warnings to accept, and the run's `parameters`, key by key |
+| `tests/unit/test_load_service.py` | The commit, the confirmation, the difference, the history and the detail with in-memory stand-ins: every refusal, the 200 of a repeat, revalidation, a failure after the rows leaving everything as it was; and a scan that only the two Bronze adapters write Bronze |
+| `tests/unit/test_api_loads.py` | The confirmation, difference, commit and loads routes: 201 with `Location` and 200, each refusal's status and code, accepted warnings recorded, filters, 422 and 404 for bad values, names by display name only, the original's headers and bytes, and a file that does not match its hash never arriving whole |
+| `tests/integration/test_commit_end_to_end.py` | Against PostgreSQL and MinIO: every field a commit writes; the counts with a repeated row; two commits of one draft at once and two catalogue versions at once; a failure after the rows land and a database connection killed mid-commit, with Bronze, Silver and Gold unchanged; the command line and the commit landing the same rows; revalidation; the purge; the history |
+| `frontend/src/loads/*.test.tsx`, `frontend/src/api/upload.test.ts` | The loading pages: datasets, template, the checks before sending, progress, cancel, every refusal, the validation and the issues list, with a stand-in for `XMLHttpRequest`; the confirmation, a double click sending one request, a lost answer, each refusal, and the committed draft |
+| `frontend/src/history/HistoryPage.test.tsx` | The history and a load's detail: both origins, table and cards, filters in the address and sent to the API, empty and failing states, pages, the original downloaded with the token |
 | `frontend/src/pages/DashboardPage.test.tsx`, `frontend/src/powerbi/*.test.ts` | The dashboard: the report shown, its token replaced, and each message, with stand-ins for sign-in and for Power BI. One file runs Microsoft's embedding library itself, in a test browser that loads nothing |
 
 - **Tests never reach Entra ID.** The fixture `token_verifier` replaces the
@@ -1231,7 +1524,21 @@ ticket, a chat or this repository.
   a valid number, and a code that lost its leading zeros in a column without
   a pattern may be a real code. They wait for the checks against existing
   data (increment 8).
-- **Nothing reaches Bronze from a draft yet.** Confirming a load is increment 7.
+- **A load cannot be undone from the app.** Voiding one, with a reason, is
+  increment 11. Until then a load stays, and the next Silver build reads it.
+- **A load does not update the figures.** Silver, Gold and the report are
+  rebuilt by commands until increment 10 does it after a load.
+- **An overlapping period is a notice, not a rule.** The checks against data
+  already loaded are increment 8.
+- **A catalogue's removed lines stay in Silver.** For `lineas_produccion`, a
+  line with production receipts that a new version leaves out loses its
+  description, warehouse and units per hour; one without keeps its last
+  values. What Silver should do is a question for the plant.
+- **A commit is one transaction,** which grows with the rows. A file of 5 MiB
+  holds about 20,000 rows of the receipts export; larger files (increment 12)
+  may make the commit a job.
+- **The original downloads into the browser's memory.** A file of 300 MB may
+  be too much for a phone.
 - **No figure comes from the API.** The KPI endpoints are placeholders that
   Phase 4 removes
   ([ADR 0007](adr/0007-figures-reach-people-through-power-bi.md)). A figure is

@@ -70,9 +70,19 @@ interface CorrectionUploadProps {
   limits: UploadLimits;
   /** A file is being dragged over the page. */
   dragging: boolean;
+  /**
+   * Whether this is the page's primary action. Not when the draft can be
+   * confirmed: "Confirmar carga" is then, and one pink button is enough.
+   */
+  primary?: boolean;
 }
 
-export function CorrectionUpload({ correction, limits, dragging }: CorrectionUploadProps) {
+export function CorrectionUpload({
+  correction,
+  limits,
+  dragging,
+  primary = true,
+}: CorrectionUploadProps) {
   const { t } = useTranslation();
   const input = useRef<HTMLInputElement>(null);
   const { file, problem, same, upload, choose } = correction;
@@ -109,7 +119,9 @@ export function CorrectionUpload({ correction, limits, dragging }: CorrectionUpl
           event.currentTarget.value = "";
         }}
       />
-      <Button onClick={() => input.current?.click()}>{t("loads.correction.upload")}</Button>
+      <Button variant={primary ? "filled" : "default"} onClick={() => input.current?.click()}>
+        {t("loads.correction.upload")}
+      </Button>
       <Text size="sm" c="dimmed">
         {dragging ? t("loads.correction.dropping") : t("loads.correction.hint")}
       </Text>

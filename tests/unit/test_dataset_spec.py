@@ -18,6 +18,7 @@ from energy.domain.dataset_spec import (
     DatasetKind,
     DatasetOrigin,
     EntryMode,
+    RemovedRows,
     Severity,
     build_catalogue,
     parse_dataset_spec,
@@ -42,7 +43,7 @@ def catalogue_spec() -> dict[str, Any]:
         "description": "datasets.example.description",
         "entry_modes": ["upload"],
         "bronze": {"source_key": "manual_sheets", "sheet": "Hoja1", "dataset_key": "example"},
-        "silver": {"table": "silver.example"},
+        "silver": {"table": "silver.example", "removed_rows": "kept"},
         "natural_key": ["Código"],
         "columns": [
             {"header": "Código", "type": "text", "required": True, "pattern": "^[A-Z]{2}$"},
@@ -122,6 +123,31 @@ def test_an_export_comes_from_qad_and_is_dated() -> None:
     assert spec.kind is DatasetKind.MOVEMENT
     assert spec.period_column == "Fecha Efectiva"
     assert spec.bronze.dataset_key is None
+
+
+def test_a_catalogue_says_what_silver_does_with_a_removed_row() -> None:
+    spec = parse_dataset_spec(catalogue_spec(), ORIGIN)
+
+    assert spec.removed_rows is RemovedRows.KEPT
+    assert parse_dataset_spec(export_spec(), ORIGIN).removed_rows is None
+
+
+@pytest.mark.parametrize(
+    ("make", "to", "problem"),
+    [
+        (
+            catalogue_spec,
+            REMOVE,
+            "silver.removed_rows: missing; a snapshot says what Silver does with a removed row",
+        ),
+        (catalogue_spec, "deleted", "silver.removed_rows: 'deleted' is not one of kept, dropped"),
+        (export_spec, "kept", "silver.removed_rows: a movement removes no row; remove it"),
+    ],
+)
+def test_only_a_snapshot_says_what_happens_to_a_removed_row(
+    make: Callable[[], dict[str, Any]], to: object, problem: str
+) -> None:
+    assert problems_of(changed(make, "silver", "removed_rows", to=to)) == (f"{ORIGIN}: {problem}",)
 
 
 def test_a_repeated_header_is_keyed_as_bronze_keys_it() -> None:

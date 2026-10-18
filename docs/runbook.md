@@ -181,11 +181,11 @@ GROUP BY quality;
 ### Diagnosis path
 
 ```bash
-# 1. Did the pipeline run?
-curl -fsS "localhost:${CADDY_HTTP_PORT:-8080}/api/runs?limit=10" | jq
+# 1. Did the pipeline run? (a token of an operator or above, in a shell variable)
+curl -fsS -H "Authorization: Bearer $TOKEN" "localhost:${CADDY_HTTP_PORT:-8080}/api/loads?limit=10" | jq
 
 # 2. If a run failed, what happened?
-curl -fsS "localhost:${CADDY_HTTP_PORT:-8080}/api/runs/<run_id>" | jq '.error, .tasks'
+curl -fsS -H "Authorization: Bearer $TOKEN" "localhost:${CADDY_HTTP_PORT:-8080}/api/loads/<run_id>" | jq '.state, .error'
 
 # 3. If it succeeded but wrote nothing, is the source delivering?
 curl -fsS "localhost:${CADDY_HTTP_PORT:-8080}/api/ingest/watermark/MTY-01/mty01_historian_main" | jq
@@ -230,14 +230,14 @@ Open the Prefect UI at `http://localhost:${CADDY_HTTP_PORT:-8080}/prefect/`.
 
 ### Retrying a failed run
 
-```bash
-curl -fsS -X POST "localhost:${CADDY_HTTP_PORT:-8080}/api/runs/<run_id>/retry" \
-  -H "X-API-Key: ${API_KEY}"
-```
+There is no retry endpoint: its placeholder was removed with increment 7 of the
+web app ([ADR 0010](adr/0010-a-draft-is-committed-once-in-one-transaction.md)).
 
-Only *failed* runs can be retried. Re-running a successful one is refused
-deliberately: the Gold replacement it performs is indistinguishable from a
-correction and would obscure the audit trail.
+- A failed load of the command line is run again with the same command. It
+  skips the sheets a completed run already landed from that file.
+- A failed commit of the web app leaves no run at all, and the person confirms
+  the draft again from its page.
+- A flow run is run again for its window, as in "Re-running a period" above.
 
 ---
 
@@ -358,8 +358,12 @@ SELECT drop_chunks('bronze.raw_readings', older_than => INTERVAL '1 year');
 A rising quarantine rate means a source changed format. The rows are kept
 deliberately — they are the evidence needed to fix the source.
 
-```bash
-curl -fsS "localhost:${CADDY_HTTP_PORT:-8080}/api/runs/<run_id>/quarantine" | jq
+```sql
+-- What did one run reject?
+SELECT rule, reason, raw_payload, quarantined_at
+FROM silver.quarantine
+WHERE run_id = '<run_id>'
+ORDER BY quarantined_at;
 ```
 
 ```sql

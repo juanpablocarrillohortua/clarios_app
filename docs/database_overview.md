@@ -158,6 +158,38 @@ under its exact name: to update one, replace the file. Any workbook in the
 folder that the loader does not recognise is listed at the end of its output as
 not loaded.
 
+### Loading a file from the web app
+
+A person uploads a file, the app checks it in staging (section 6b), and
+confirming it lands it in Bronze. The commit does steps 2 to 6 above with the
+loader's own statements, in one transaction together with the staging update.
+
+```mermaid
+flowchart TD
+    D["A validated draft without errors<br/>staging.drafts, its rows in draft_rows"]
+    D --> K["1. Lock the draft, and the dataset"]
+    K --> V{"2. A catalogue: is the version it was<br/>compared with still the current one?"}
+    V -- "no" --> N["Refuse: the page shows the new difference"]
+    V -- "yes" --> F["3. Catalogue the original in raw_files,<br/>unless it is there; refuse a file<br/>whose sheet a completed run landed"]
+    F --> R["4. Open a run, copy the staged rows<br/>into the landing table, check the counts,<br/>close the run as completed"]
+    R --> S["5. Remove the staged rows,<br/>mark the draft committed"]
+    R -- "anything fails" --> X["Undo all of it: no run, no row;<br/>the draft stays validated"]
+```
+
+- **Unlike the loader, a failed commit leaves no run.** The whole commit is one
+  transaction, so nothing of it remains, and the person confirms again.
+- **A draft lands once.** Confirming it again, after a lost answer or from a
+  second tab, returns the first load.
+- **The rows are the loader's rows.** The same rules built the staged payloads
+  and the same statements land them, so a file landed either way gives the
+  same rows with the same hashes.
+- **The run records more than the loader's do.** Its `parameters` add the
+  person's name, the draft, the spec, the validation with the warnings
+  accepted and, for a catalogue, its difference from the version before. The
+  [data dictionary](data_dictionary.md#bronzeingestion_runs) lists every key.
+- **The original is not copied.** It was archived at upload under the loader's
+  key; the commit only catalogues it.
+
 ### The tables
 
 ```mermaid
@@ -732,13 +764,16 @@ measures: [powerbi.md](powerbi.md).
 
 Created by [`0007_create_staging_schema.py`](../migrations/versions/0007_create_staging_schema.py);
 reasons and corrections added by
-[`0008_add_reasons_and_corrections.py`](../migrations/versions/0008_add_reasons_and_corrections.py).
+[`0008_add_reasons_and_corrections.py`](../migrations/versions/0008_add_reasons_and_corrections.py);
+the commit added by
+[`0009_add_draft_commit.py`](../migrations/versions/0009_add_draft_commit.py).
 
 A person loading data through the web app uploads a file for one dataset
 ([dataset specs](dataset-specs.md)). The file becomes a **draft**: its original is
 archived in object storage at once, under the key the Bronze loader uses, and the
-draft waits here while it is checked. Nothing reaches Bronze until a later
-increment confirms a load, so the layers are untouched by an upload.
+draft waits here while it is checked. Nothing reaches Bronze until the person
+confirms the load (section 3, "Loading a file from the web app"), so the
+layers are untouched by an upload and by its checks.
 
 Every problem found carries its likely reasons and what to do in Excel. A file
 with problems is fixed in Excel and uploaded again as a **correction**: a draft
@@ -756,7 +791,7 @@ erDiagram
     drafts {
         uuid draft_id PK
         text dataset_key
-        text status "receiving, uploaded, validated, failed"
+        text status "receiving, uploaded, validated, failed, committed"
         text filename
         char content_hash "of the original"
         text object_key "where it is archived"
@@ -764,6 +799,9 @@ erDiagram
         timestamptz expires_at "30 days after the last work"
         uuid previous_draft_id "the draft it corrects"
         char spec_digest "the spec it was checked against"
+        uuid run_id "its load, once committed"
+        date window_start "the period its rows cover"
+        jsonb export_info "the export's Info sheet"
     }
     draft_rows {
         int source_row "the Excel row"
@@ -797,8 +835,8 @@ erDiagram
 
 | Table | Holds |
 |---|---|
-| `drafts` | One upload: which dataset, which file, whose, where its original is archived, what its last check found and against which spec, and the draft it corrects, if any |
-| `draft_rows` | The rows of the file exactly as Bronze would land them, so a confirmed load lands what was checked |
+| `drafts` | One upload: which dataset, which file, whose, where its original is archived, what its last check found and against which spec, and the draft it corrects, if any. The check also keeps what the load will record: the workbook's sheets, the period its rows cover, and the export's Info sheet and search conditions. Once committed, its load |
+| `draft_rows` | The rows of the file exactly as Bronze would land them, so a confirmed load lands what was checked. The commit removes them: Bronze then holds them |
 | `draft_issues` | The first 1,000 problems of each rule in each column, with row, column, the value found, its likely reasons, and its row's identity |
 | `draft_rule_counts` | How many rows broke each rule in each column, every one of them |
 | `draft_reason_counts` | The same rows by their first reason |
@@ -815,6 +853,9 @@ erDiagram
   share rule, column and `match_key`: the row's natural key, ignoring case,
   spaces and accents, with its occurrence among rows of the same key; or the
   row number when the key is incomplete.
+- **A committed draft stays 30 days,** with its issues and counts, so the
+  load's detail can link to it. Its original is never purged: Bronze
+  catalogues it.
 - **Power BI's login cannot see this schema.**
 
 ---
@@ -854,7 +895,8 @@ flowchart LR
     m6["0006<br/>reporting<br/>12 views for Power BI,<br/>role reporting_reader"]
     m7["0007<br/>staging<br/>4 tables: uploads<br/>while they are checked"]
     m8["0008<br/>staging<br/>reasons, corrections,<br/>1 table"]
-    m1 --> m2 --> m3 --> m4 --> m5 --> m6 --> m7 --> m8
+    m9["0009<br/>staging<br/>the commit: committed drafts,<br/>what a load records"]
+    m1 --> m2 --> m3 --> m4 --> m5 --> m6 --> m7 --> m8 --> m9
 ```
 
 Revisions 0002, 0003 and 0004 were rewritten in place while the EQUS layers were
@@ -862,7 +904,7 @@ built. A database migrated before a rewrite is brought up to date by going down 
 the revision before the rewritten one and up again: for the Gold rewrite,
 `make db-downgrade` until `alembic current` says `0003`, then `make db-upgrade`.
 That leaves Bronze and Silver as they are, but it drops `gold`, closed months
-included. Revisions 0006, 0007 and 0008 were added as new files, so `make db-upgrade`
+included. Revisions 0006 to 0009 were added as new files, so `make db-upgrade`
 applies them to any database already at the revision before.
 
 ---

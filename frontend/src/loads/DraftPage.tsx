@@ -10,9 +10,13 @@
 // correction of this draft (increment 6, ADR 0009): by the one primary button,
 // or by dropping the file anywhere on the page. The page then moves to the new
 // draft, which says first what the correction cleared, kept and added.
+//
+// A draft without errors is confirmed from here too (increment 7): the
+// confirmation says what would land, and "Confirmar carga" lands it. A
+// committed draft then says so first, and keeps its issues to read.
 import { Anchor, Box, Button, Group, Stack, Text, Title } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type DragEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 
@@ -24,12 +28,15 @@ import { Panel } from "../components/Panel";
 import { paths } from "../paths";
 import classes from "../styles/app.module.css";
 import { ClearedList } from "./ClearedList";
+import { CommittedPanel } from "./CommittedPanel";
 import { ComparisonSummary } from "./ComparisonSummary";
+import { ConfirmPanel } from "./ConfirmPanel";
 import { CorrectionUpload, useCorrection } from "./CorrectionUpload";
 import { DraftSummary } from "./DraftSummary";
 import { formatBytes } from "./formatBytes";
 import { IssuesList } from "./IssuesList";
 import { LoadsHeading, useDatasets } from "./LoadsPage";
+import { LoadsTabs } from "./LoadsTabs";
 import { named } from "./texts";
 
 function isStatus(error: unknown, status: number): boolean {
@@ -58,6 +65,14 @@ export function DraftPage() {
       void queryClient.invalidateQueries({ queryKey: ["draft-issues", draftId] });
     },
   });
+
+  // Landed: the draft is committed now, and the history and each dataset's
+  // last load have changed.
+  const onCommitted = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["draft", draftId] });
+    void queryClient.invalidateQueries({ queryKey: ["loads"] });
+    void queryClient.invalidateQueries({ queryKey: ["datasets"] });
+  }, [draftId, queryClient]);
 
   // Arriving from an upload: validate once. React's strict mode runs effects
   // twice, so a ref, not the mutation's state, keeps it to one request. It
@@ -165,15 +180,30 @@ export function DraftPage() {
         </Stack>
       </Panel>
     );
+  } else if (data?.status === "committed" && data.validation) {
+    body = (
+      <Stack gap="lg">
+        <CommittedPanel draft={data} />
+        <DraftSummary validation={data.validation} />
+        <IssuesList draftId={data.draft_id} validation={data.validation} comparing={false} />
+      </Stack>
+    );
   } else if (data?.status === "validated" && data.validation) {
     const comparison = data.comparison;
     const comparing = comparison?.state === "ready";
+    const confirmable = !data.validation.blocking;
     body = (
       <Stack gap="lg">
         {comparison && <ComparisonSummary comparison={comparison} />}
         <DraftSummary validation={data.validation} />
+        {confirmable && <ConfirmPanel draft={data} dataset={dataset} onCommitted={onCommitted} />}
         {hasIssues && limits && (
-          <CorrectionUpload correction={correction} limits={limits} dragging={dragging} />
+          <CorrectionUpload
+            correction={correction}
+            limits={limits}
+            dragging={dragging}
+            primary={!confirmable}
+          />
         )}
         <IssuesList draftId={data.draft_id} validation={data.validation} comparing={comparing} />
         {comparing && comparison && (
@@ -203,7 +233,8 @@ export function DraftPage() {
       <Stack gap="lg">
         <Stack gap={4}>
           <LoadsHeading />
-          <Group justify="space-between" align="baseline" wrap="wrap" gap="xs">
+          <LoadsTabs />
+          <Group justify="space-between" align="baseline" wrap="wrap" gap="xs" mt="xs">
             <Text fw={600}>
               {dataset ? named(t, dataset.label, dataset.key) : (data?.dataset_key ?? "")}
             </Text>

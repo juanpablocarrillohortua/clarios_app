@@ -21,9 +21,11 @@ from uuid import uuid4
 import pytest
 from tests.fixtures.drafts import InMemoryDraftRepository
 from tests.fixtures.workbooks import (
+    INVOICES_INFO,
     LINES_HEADERS,
     LINES_SHEET,
     build_workbook,
+    invoices_good,
     lines_broken,
     lines_defects,
     lines_defects_corrected,
@@ -48,7 +50,7 @@ from energy.domain.exceptions import (
     UnsupportedFileFormatError,
     UploadAbortedError,
 )
-from energy.domain.landing import landing_rows
+from energy.domain.landing import PERIOD_KEY, DateSpan, landing_rows
 from energy.ports.draft_repository import IssueFilter
 from energy.services.draft_service import DraftService
 
@@ -313,6 +315,45 @@ class TestValidate:
         sheet = CalamineWorkbookReader().open_workbook(data).sheet(LINES_SHEET)
         assert repository.rows[draft.draft_id] == list(landing_rows(sheet.rows))
 
+    def test_validation_keeps_what_an_export_says_about_itself(
+        self, service: DraftService, catalogue: DatasetCatalogue
+    ) -> None:
+        data, expected = invoices_good(catalogue.get("qad_facturas"))
+        draft = upload(service, data, dataset_key="qad_facturas")
+
+        facts = service.validate(draft.draft_id, OWNER).validation.facts  # type: ignore[union-attr]
+
+        assert facts is not None
+        assert list(facts.sheet_names) == expected["sheet_names"]
+        assert (str(facts.window_start), str(facts.window_end)) == (
+            expected["window_start"],
+            expected["window_end"],
+        )
+        assert dict(facts.export_info) == INVOICES_INFO
+        assert len(facts.search_conditions) == expected["conditions"]
+
+    def test_the_period_is_read_as_the_command_line_reads_it(
+        self, service: DraftService, catalogue: DatasetCatalogue
+    ) -> None:
+        data, _expected = invoices_good(catalogue.get("qad_facturas"))
+        draft = upload(service, data, dataset_key="qad_facturas")
+        span = DateSpan(PERIOD_KEY)
+        sheet = CalamineWorkbookReader().open_workbook(data).sheet("Datos")
+        list(landing_rows(sheet.rows, span=span))
+
+        facts = service.validate(draft.draft_id, OWNER).validation.facts  # type: ignore[union-attr]
+
+        assert facts is not None
+        assert (facts.window_start, facts.window_end) == span.bounds()
+
+    def test_a_catalogue_has_no_period(self, service: DraftService) -> None:
+        draft = upload(service, lines_good())
+
+        facts = service.validate(draft.draft_id, OWNER).validation.facts  # type: ignore[union-attr]
+
+        assert facts is not None
+        assert (facts.window_start, facts.window_end, dict(facts.export_info)) == (None, None, {})
+
     def test_a_sound_file_is_not_blocking(self, service: DraftService) -> None:
         draft = upload(service, lines_good())
 
@@ -432,7 +473,7 @@ class TestPurge:
         draft = upload(service, lines_good())
         repository.expire(draft.draft_id)
 
-        outcome = service.purge(landed=lambda _hash: False)
+        outcome = service.purge(landed=lambda *_: False)
 
         assert (outcome.drafts, outcome.objects) == (1, 1)
         assert repository.drafts == {}
@@ -451,7 +492,12 @@ class TestPurge:
         landed = upload(service, only)
         repository.expire(landed.draft_id)
 
-        outcome = service.purge(landed=lambda content_hash: content_hash == landed.content_hash)
+        outcome = service.purge(
+            landed=lambda content_hash, bucket, key: (
+                (content_hash, bucket, key)
+                == (landed.content_hash, landed.bucket, landed.object_key)
+            )
+        )
 
         assert (outcome.drafts, outcome.objects) == (2, 0)
         assert len(list(storage.list_objects(BUCKET))) == 2
@@ -462,7 +508,7 @@ class TestPurge:
         draft = upload(service, lines_good())
         repository.expire(draft.draft_id)
 
-        outcome = service.purge(landed=lambda _hash: False, dry_run=True)
+        outcome = service.purge(landed=lambda *_: False, dry_run=True)
 
         assert (outcome.drafts, outcome.objects) == (1, 1)
         assert draft.draft_id in repository.drafts
@@ -474,7 +520,7 @@ class TestPurge:
         data, _manifest = lines_broken()
         gone = upload(service, data)
 
-        outcome = service.purge(landed=lambda _hash: False, only=gone.draft_id)
+        outcome = service.purge(landed=lambda *_: False, only=gone.draft_id)
 
         assert outcome.drafts == 1
         assert list(repository.drafts) == [kept.draft_id]
@@ -485,7 +531,7 @@ class TestPurge:
         storage.put(BUCKET, f"incoming/{uuid4()}", b"PK\x03\x04half", "x/test")
         later = make_service(clock=lambda: datetime.now(UTC) + timedelta(days=2))
 
-        outcome = later.purge(landed=lambda _hash: False)
+        outcome = later.purge(landed=lambda *_: False)
 
         assert outcome.incoming == 1
         assert list(storage.list_objects(BUCKET, "incoming/")) == []

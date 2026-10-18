@@ -51,7 +51,7 @@ in the stack for the Phase 5 energy charts but stops being the app's front door.
 | Area | State | Where |
 |---|---|---|
 | Dash | A holding page only; layouts, callbacks and charts are Phase 5 placeholders | `src/energy/dashboards/` |
-| API | FastAPI with health endpoints built. The upload and run endpoints are placeholders whose contract is already written (202 plus a run id, duplicate detection by file hash) | `src/energy/api/routers/uploads.py`, `runs.py` |
+| API | FastAPI with health endpoints built. The upload and run endpoints are placeholders whose contract is already written (202 plus a run id, duplicate detection by file hash) | `src/energy/api/routers/uploads.py`, `runs.py` (removed in increment 7) |
 | Authentication | A placeholder: roles `viewer`, `operator`, `engineer`, `admin`, `device` are defined, nothing is enforced | `src/energy/api/security.py`, `api/deps.py` |
 | Bronze loader | Built and tested: archives the file, registers it, opens a run, lands every sheet in one transaction | `src/energy/services/bronze_loader.py`, `ports/bronze_landing.py` |
 | Power BI | Power BI Desktop reads schema `reporting` through an opt-in local port. Nothing is published to the Power BI Service | `docs/powerbi.md` |
@@ -150,7 +150,7 @@ flowchart TB
         CADDY["Caddy<br/>static files and /api"]
         API["FastAPI<br/>datasets, drafts, runs, me"]
         VAL["Validation service<br/>rules and failure reasons"]
-        WORKER["Prefect worker<br/>large validations, commit,<br/>Silver build, Gold refresh"]
+        WORKER["Prefect worker<br/>large validations,<br/>Silver build, Gold refresh"]
         STG[("staging<br/>drafts, rows, issues")]
         MINIO[("Object storage<br/>original files")]
         BRZ[("bronze<br/>ingestion_runs, raw_files,<br/>landing tables")]
@@ -183,9 +183,10 @@ flowchart TB
   (ADR 0009).
 - **API** (`src/energy/api/`). New routers: `datasets` (the specs), `drafts`
   (upload, validate, correct, commit), `me` (who is signed in and what they may
-  do) and `config` (the settings the app needs before sign-in). The `uploads`
-  and `runs` placeholders are implemented for history and status. The `kpis`
-  placeholders are not: no page of this plan calls them, and Phase 4 removes
+  do), `config` (the settings the app needs before sign-in) and `loads` (the
+  history, each load and its original). `loads` replaced the `uploads` and
+  `runs` placeholders, which increment 7 removed. The `kpis` placeholders are
+  not implemented either: no page of this plan calls them, and Phase 4 removes
   them (see "One source for figures" below).
 - **Validation layer.** Pure rules and reason detectors in `domain/`, a
   `ValidationService` in `services/`, and lookups against existing data through
@@ -194,12 +195,14 @@ flowchart TB
   user is fixing it. It is a working area, not a medallion layer, and is purged
   after a retention period. Nothing reaches Bronze from here until the user
   confirms.
-- **Bronze write path.** The existing port `BronzeLandingRepository.land()`
-  takes rows from any source, so a confirmed draft lands exactly as a workbook
-  does: one run, one transaction. Details are in section 6.
+- **Bronze write path.** A confirmed draft lands through the Bronze loader's
+  own statements, run by a committer of its own in one transaction with the
+  staging update: one run, and the rows a workbook would land. Details are in
+  section 6.
 - **Jobs.** Files of up to 5 MB are validated inside the request. Larger files are validated by a Prefect flow in
-  the worker, and the page polls for progress. The commit and the Silver and
-  Gold refresh are also flows. The same service code runs in both cases. The
+  the worker, and the page polls for progress. The Silver and Gold refresh
+  will be a flow too (increment 10). The commit runs in the request, in one
+  transaction; increment 12 measures it on large files. The same service code runs in both cases. The
   5 MB line comes from the memory a workbook needs (see "Files up to 300 MB" in
   section 6).
 
@@ -265,9 +268,10 @@ its own and asks the API for no figure.
   No page of this plan calls them. Serving the same figures there and in the
   report would give them two levels of freshness and two access models. Phase
   4 removes them and delivers the energy KPIs as `reporting` views instead.
-- **What a load did is asked by run.** The one thing the report cannot show is
-  the effect of a load before its next refresh. The wizard holds a run ID, so
-  that feedback belongs to `/api/runs/{run_id}`.
+- **What a load did is read in its detail.** The one thing the report cannot
+  show is the effect of a load before its next refresh. The confirmation
+  answers with the load, so that feedback belongs to `/api/loads/{run_id}`
+  (built in increment 7).
 - **A figure is as fresh as the last refresh.** On shared capacity, where the
   workspace is, Microsoft allows a model eight refreshes a day, counting the
   scheduled ones and those started through the REST API together. The refresh
@@ -286,8 +290,8 @@ its own and asks the API for no figure.
 | Sign in | Everyone | Redirects to Entra ID |
 | Dashboard | viewer and above | The embedded report, full width, with a link to open it in Power BI. The "data as of" line is a card of the report itself (section 10) |
 | Data loading: new load | operator and above | The wizard below |
-| Data loading: history | operator and above | Every load: who, when, dataset type, input mode, file name, rows, state, warnings accepted. Opens the detail of a load |
-| Load detail | operator and above | The confirmation summary, the issues found, a download of the original file. `engineer` can void the load |
+| Data loading: history | operator and above | Every load, the app's and the command line's: when, dataset, file name, rows, warnings accepted, state, and who, or "Línea de comandos". Filters by dataset, state, person, origin, period and date, kept in the address. Opens the detail of a load. Built in increment 7 |
+| Load detail | operator and above | What was loaded, from which file, by whom and when; the period; each sheet's rows; the validation's counts and the warnings accepted; a catalogue's difference; a download of the original file; and a link to its draft, with the issues found, while the draft lives and for its owner. Built in increment 7. `engineer` can void the load (increment 11) |
 
 ### The loading wizard
 
@@ -306,11 +310,16 @@ its own and asks the API for no figure.
    corrected file is a draft of its own, linked to the earlier one, and the
    page says first what was cleared, what remains and what is new. The app
    never edits a cell (increment 6, decided 2026-10-18).
-5. **Confirm.** A summary shows what will be written: rows accepted, rows
-   rejected, warnings, and for a catalogue the difference from the current
-   version (rows added, changed, removed). Warnings must be ticked to proceed.
-6. **Done.** The page shows the load ID, the rows written, and a button to
-   update the figures (Silver build and Gold refresh), with its progress.
+5. **Confirm.** A summary shows what will be written: the rows; for an
+   export, its period and the loads that already cover part of it; the
+   warnings; and for a catalogue the difference from the current version
+   (rows added, changed, removed, each change listed with its before and
+   after) and what Silver does with a removed row. Warnings must be ticked to
+   proceed. A file with errors cannot be confirmed: it is corrected first
+   (step 4). Built in increment 7.
+6. **Done.** The page shows the load ID and the rows written, with links to
+   the load's detail and the history. The button to update the figures
+   (Silver build and Gold refresh), with its progress, is increment 10.
 
 Two rules shape the loading of a file:
 
@@ -477,41 +486,64 @@ row could pass in the app and arrive empty in Silver. Two measures:
 2. Its rows are parsed once into `staging.draft_rows`, as payloads built by the
    existing rules. The app never edits them: a corrected file is a new upload
    and a new draft (increment 6, ADR 0009).
-3. On confirm, the commit:
-   1. opens a run in `bronze.ingestion_runs`; its rows point at the original,
-      the only file there is, since every load is an upload (ADR 0009);
-   2. lands the staged rows through `BronzeLandingRepository.land()`, which
-      inserts the rows and completes the run in one transaction.
+3. On confirm, the commit runs in one PostgreSQL transaction (increment 7,
+   [ADR 0010](adr/0010-a-draft-is-committed-once-in-one-transaction.md)):
+   1. it locks the draft, and takes an advisory lock for the dataset;
+   2. for a catalogue, it checks that the version the person compared with is
+      still the current one;
+   3. it registers the original in `bronze.raw_files`, unless that file is
+      there already, and refuses a file whose sheet a completed run landed;
+   4. it opens a run in `bronze.ingestion_runs`, copies the staged rows into
+      the landing table with one `INSERT … SELECT`, checks that the counts
+      agree, and completes the run; the rows point at the original, the only
+      file there is, since every load is an upload (ADR 0009);
+   5. it removes the staged rows and marks the draft committed.
 
-If the commit fails, no row is landed and the run is marked `failed`, exactly as
-the loader behaves today.
+   It runs the Bronze loader's own statements (`postgres_bronze_repo.py`), not
+   `BronzeLandingRepository.land()`: that method commits by itself, so it
+   cannot share a transaction with the staging update.
+
+If the commit fails, at any step, the transaction rolls back: no row is
+landed, no run is left behind, not even a failed one, and the draft stays
+validated with its rows. The person confirms again. The loader records a
+failed run instead; the commit does not need to, because nothing of it
+remains (decided with increment 7, 2026-10-18).
 
 ### Load metadata
 
-No new Bronze column is needed.
+No new Bronze column is needed: increment 7's revision `0009` changes
+`staging` only.
 
 | Required | Stored in |
 |---|---|
 | Batch or load ID | `ingestion_runs.run_id`, carried by every row as `ingestion_run_id` |
-| Uploaded by | `raw_files.uploaded_by` and `ingestion_runs.parameters.uploaded_by` |
-| Timestamp | `raw_files.uploaded_at`, `ingestion_runs.started_at` / `finished_at`, and `ingested_at` on each row |
+| Uploaded by | `raw_files.uploaded_by` and `ingestion_runs.parameters.uploaded_by`, the person's object ID; `parameters.uploaded_by_name`, their display name. Never the sign-in name |
+| Timestamp | `raw_files.uploaded_at` (when the commit catalogued the file), `ingestion_runs.started_at` / `finished_at` (both the commit's time), and `ingested_at` on each row |
+| Period | `ingestion_runs.window_start` / `window_end`: the first and last date of the period column, found at validation as the loader finds them |
+| The export's own facts | `qad_program`, `qad_exploration`, `qad_user`, `queried_at` and `search_conditions` of `ingestion_runs`, from the export's "Info" and "Condiciones de búsqueda" sheets, read at validation as the loader reads them |
 | Original file name | `raw_files.filename` |
 | Dataset type | `ingestion_runs.source_key`, plus `sheet_name` or `dataset_key` on each row |
 | Source | Always a file since 2026-10-18 (ADR 0009); key `input_mode` in `ingestion_runs.parameters` records `upload` |
-| Validation result and accepted warnings | New key `validation` in `parameters`: counts, and who accepted which warnings |
-| Link to the draft and to the original file | New keys `draft_id` and `original_content_hash` in `parameters` |
+| Validation result and accepted warnings | New key `validation` in `parameters`: the digest, the counts by rule and column, and `accepted`, the warnings the person in `uploaded_by` accepted |
+| Difference from the current version | New key `difference` in `parameters`, for a catalogue: the run compared with, the counts, and `removed_rows` |
+| Link to the draft and to the original file | New keys `draft_id`, `previous_draft_id` and `spec_digest` in `parameters`. The original is the command line's own key `content_hash`, and `raw_file_id` on each row. `original_content_hash` was planned and dropped with increment 7: every load is an upload, so it would repeat `content_hash` |
 
 ### Idempotency
 
-- **A draft commits once.** The draft moves through fixed states (uploaded,
-  validated, committing, committed), and its run ID is unique. A double click or
-  a retried request returns the first result.
-- **A file is known by its hash.** `raw_files.content_hash` is unique, and the
-  loader already skips sheets a completed run has landed from the same file.
-- **Rows are known by their hash.** Validation reports rows that are already in
-  Bronze before anything is written.
-- **One commit per dataset at a time**, by an advisory lock, as refresh and
-  close already do.
+- **A draft commits once.** Its states are uploaded, validated and committed.
+  There is no `committing`: the commit is one transaction, and no other one
+  can see it half done. The draft's row is locked during the commit (`FOR
+  UPDATE NOWAIT`), so a second request at that moment answers 409
+  `draft_busy`, and any later one 200 with the first load.
+- **A file is known by its hash.** `raw_files.content_hash` is unique. The
+  loader skips sheets a completed run has landed from the same file, and the
+  commit refuses such a file (409 `already_loaded`).
+- **Rows are known by their hash.** Reporting rows that are already in Bronze
+  before anything is written is increment 8. Until then the confirmation of an
+  export lists the loads that already cover part of its period, as a notice.
+- **One commit per dataset at a time**, by an advisory lock of its own, as
+  refresh and close have theirs. A commit waits for it 10 seconds, then
+  answers 409 `dataset_busy`.
 
 ### Snapshots and movements
 
@@ -523,7 +555,13 @@ entry means.
 - **Snapshots** (structures, catalogues) are replaced whole: Silver reads only
   the latest completed load of each sheet. A load of one row would become the
   entire catalogue. So a snapshot's file is always the full table, and the
-  confirmation shows the difference from the current version.
+  confirmation shows the difference from the current version: the latest
+  completed load of the dataset, which is what the Silver build reads. The
+  commit is refused if another load became current meanwhile.
+- **What Silver does with a row a new version leaves out** differs by table,
+  so each snapshot's spec states it (`silver.removed_rows`, `kept` or
+  `dropped`), and the confirmation says it. `silver.lineas_produccion` keeps
+  every line it has seen; see increment 11 in section 8.
 
 ### Rollback
 
@@ -666,11 +704,11 @@ Each increment is small enough to review and has one test of "done".
 | 4 | **Dataset specs.** YAML for two pilots, one catalogue (`lineas_produccion`) and one export (`qad_facturas`); `GET /api/datasets`; template download. **Built 2026-10-17:** the two specs carry every header of their workbooks (10 and 49), checked against the workbooks themselves; a malformed spec stops the API at start, every mistake named with its file and path, and `energy datasets check` reads them the same way; every template is read back by the Bronze reader in a test. No page shows them yet: that is the first step of the wizard, with increment 5 | Specs load at startup and fail loudly when malformed; the downloaded template has exactly the headers of the spec |
 | 5 | **Staging, upload and schema checks.** Migration for `staging`; a streaming upload endpoint with the 300 MB limit enforced by the browser, Caddy and the API; streaming variants of the storage and reader ports; file and schema rules; the issues list. A file over 5 MB is archived but answers "not built yet" to validation until increment 12. **Built 2026-10-17:** revision `0007` and `/api/drafts`; the file rules (zip limits included), the schema rules and the cell rules of the specs, every issue with its row, column and rule; the loading page and the issues list. A test finds every planted defect of a made-up broken file, the original at its hashed key, and Bronze unchanged; a 96 MiB upload passes through the API under a 64 MiB memory bound. Through Caddy, a 300 MiB file uploaded in 43 s while the api container used at most 47 MiB more than at rest, and less towards the end than at the start; a 301 MiB file was refused with 413 on its declared size. Seeing the pages as a signed-in user is the owner's check | A deliberately broken file shows every failure with row, column and rule; the original is archived; Bronze is unchanged; a 300 MB file uploads through Caddy with progress while the API's memory stays flat, and a larger one is refused with a clear message |
 | 6 | **Reasons and re-upload.** Reason detectors; the corrected file uploaded again and compared. The grid spike and cell editing were dropped on 2026-10-18: data is corrected in Excel ([ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)). **Built 2026-10-18:** revision `0008`; 34 reasons (18 from detectors, 16 that are each rule's own) and the warning rule `cell.text_damaged`, every one with its why and Excel fix in Spanish; `POST /api/drafts/{draft_id}/corrections` and `GET /api/drafts/{draft_id}/cleared`; the comparison by rule, column and row identity; the page's reasons, "Subir archivo corregido", the comparison verdict and "Copiar para Excel". Tests find every planted defect with its reason, and the exact cleared, remaining and new issues of a corrected file, against PostgreSQL and MinIO, with Bronze, Silver and Gold unchanged and the earlier original untouched. Through Caddy with a real token, the same: the 19 planted defects with their reasons, 14 cleared, 5 remaining and 1 new, both originals intact and the three layers unchanged. The owner's checks in a signed-in browser passed on 2026-10-18 | Each defect of the table in section 5 yields its reason and an Excel fix; fixing the file in Excel and uploading it again clears the fixed issues, and the page shows what was cleared, what remains and what is new |
-| 7 | **Commit and history.** The write path of section 6; the confirmation summary, with a catalogue's difference from the current version; the history and detail pages | A validated draft lands with all the metadata of section 6; a double submit creates one run; the row counts match |
-| 8 | **Checks against existing data.** Duplicates, key conflicts, references, ranges, periods, closed months; acknowledging warnings | Each rule has a test on the synthetic data of `tests/integration/test_equs_gold_rules.py`; a load with warnings cannot be written until they are accepted, and the acceptance is stored |
+| 7 | **Commit and history.** The write path of section 6; the confirmation summary, with a catalogue's difference from the current version; the history and detail pages. **Built 2026-10-18** ([ADR 0010](adr/0010-a-draft-is-committed-once-in-one-transaction.md)): revision `0009`, which changes `staging` only (the committed state, the load's ID, and the facts of the export kept at validation); the commit, its confirmation and the difference of a catalogue under `/api/drafts`; `/api/loads`, with each load and its original; the six placeholders of `uploads` and `runs` removed; warnings accepted at the confirmation; the confirm panel, the history and the detail. Against PostgreSQL and MinIO, tests prove every field a commit writes, the counts with a repeated row, one run from two simultaneous commits of a draft, a 409 for the second of two catalogue versions confirmed at once, the command line and the commit landing the same rows, and Bronze, Silver and Gold unchanged by a commit that fails after its rows land or whose connection is killed. Seeing the pages as a signed-in user is the owner's check | A validated draft lands with all the metadata of section 6; a double submit creates one run; the row counts match |
+| 8 | **Checks against existing data.** Duplicates, key conflicts, references, ranges, periods, closed months. Acknowledging warnings was built with increment 7; the warnings of these checks go through it | Each rule has a test on the synthetic data of `tests/integration/test_equs_gold_rules.py`; a load with these warnings cannot be written until they are accepted, and the acceptance is stored |
 | 9 | **Removed (2026-10-18, [ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)).** It was form and grid entry. Every dataset is uploaded: the form and the grid are gone, a catalogue's difference from the current version is part of increment 7's confirmation, and conversion cost's spec and template join increment 12. The number is kept so the others do not move | — |
 | 10 | **Update the figures.** The job for Silver and Gold with its progress; the Power BI dataset refresh | After a load, the dashboard shows the new data with no command line |
-| 11 | **Rollback.** Voiding a load; the Silver rule for movements | A voided load no longer affects Silver or the live Gold figures after a refresh; its Bronze rows remain; closed months are unchanged |
+| 11 | **Rollback.** Voiding a load; the Silver rule for movements. Also to decide with the plant: what Silver does with a line a new version of the lines catalogue leaves out. Today `silver.lineas_produccion` keeps it, and empties the description, warehouse and units per hour of one with production receipts, which loses its description in the reports; the confirmation of increment 7 says so. Keeping its last values and marking it no longer listed is a Silver change, here or in a small increment of its own | A voided load no longer affects Silver or the live Gold figures after a refresh; its Bronze rows remain; closed months are unchanged |
 | 12 | **Remaining datasets and large files.** Specs for every type of section 5, including a template for conversion cost; validation as a job in the worker, with progress and a memory limit (the worker runs the stock Prefect image today and must run this project's); CSV if still wanted | Every dataset type has a spec and tests; the 33 MB receipts file validates within 1 minute and a generated 300 MB workbook within 10 minutes, inside the worker's memory limit and with progress shown; the measured figures replace the estimates of section 6 |
 | 13 | **Hardening.** End-to-end tests in a browser; accessibility; the runbook and user guide | The end-to-end suite passes against `make up`, and the guide covers each flow |
 

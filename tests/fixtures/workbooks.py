@@ -383,6 +383,102 @@ def invoices_defects(spec: DatasetSpec) -> tuple[bytes, list[Explained]]:
     return build_workbook({INVOICES_SHEET: rows}), manifest
 
 
+def lines_catalogue() -> bytes:
+    """Return a production-lines catalogue of four sound lines: a current version."""
+    return build_workbook(
+        {
+            LINES_SHEET: [
+                LINES_HEADERS,
+                _lines_row(A="FAFORM01", C="Formación 1"),
+                _lines_row(A="ENSAM02", C="Ensamble 2"),
+                _lines_row(A="MONT04", C="Montaje 4"),
+                _lines_row(A="PLACA05", C="Placas 5"),
+            ]
+        }
+    )
+
+
+def lines_catalogue_changed() -> tuple[bytes, dict[str, int]]:
+    """Return a new version of :func:`lines_catalogue`, and how it differs.
+
+    FAFORM01's description changes, ENSAM02 and PLACA05 stay as they were,
+    MONT04 is left out and PLACA03 is new.
+    """
+    rows = [
+        LINES_HEADERS,
+        _lines_row(A="FAFORM01", C="Formación uno"),
+        _lines_row(A="ENSAM02", C="Ensamble 2"),
+        _lines_row(A="PLACA03", C="Placas 3"),
+        _lines_row(A="PLACA05", C="Placas 5"),
+    ]
+    expected = {"added": 1, "changed": 1, "removed": 1, "unchanged": 2}
+    return build_workbook({LINES_SHEET: rows}), expected
+
+
+#: What the "Info" sheet of :func:`invoices_good` says about its made-up query.
+INVOICES_INFO: Final = {
+    "Programa Exploración": "PRUEBA-01",
+    "Nombre Exploración": "Facturas de prueba",
+    "ID del Usuario": "usuario.prueba",
+    "Fecha de consulta": "05/11/2025 10:15:00",
+}
+
+
+def invoices_good(spec: DatasetSpec) -> tuple[bytes, dict[str, Any]]:
+    """Return a sound invoices export of October 2025, and what a load records of it.
+
+    It carries a QAD export's two side sheets, "Info" and "Condiciones de
+    búsqueda", as the real exports do, so a commit and the command-line loader
+    can be compared on every field of the run. One invoice line is repeated
+    exactly: Bronze keeps both copies.
+
+    Args:
+        spec: the ``qad_facturas`` spec, whose headers the file carries.
+    """
+    position = {column.key: index for index, column in enumerate(spec.columns)}
+
+    def row(line: int, day: int) -> list[Any]:
+        values: dict[str, Any] = {
+            "Almac": "1010",
+            "Núm Fact": "F-0100",
+            "Orden": "OV-100",
+            "Línea": line,
+            "Línea de productos": "1200",
+            "Número Artículo": "TEST-ITEM",
+            "Cantidad fac": 10 * line,
+            "Moneda": "COP",
+            "Fecha Efectiva": datetime(2025, 10, day),  # noqa: DTZ001 - Excel cells carry no time zone
+        }
+        cells: list[Any] = [""] * len(spec.columns)
+        for key, value in values.items():
+            cells[position[key]] = value
+        return cells
+
+    rows = [list(spec.headers), row(1, 3), row(2, 17), row(3, 31), row(3, 31)]
+    workbook = build_workbook(
+        {
+            INVOICES_SHEET: rows,
+            "Condiciones de búsqueda": [
+                ["Campo", "Operador", "Valor"],
+                ["Fecha Efectiva", ">=", "01/10/2025"],
+                ["Fecha Efectiva", "<=", "31/10/2025"],
+            ],
+            "Info": [
+                ["Nombre", "Valor"],
+                *([name, value] for name, value in INVOICES_INFO.items()),
+            ],
+        }
+    )
+    expected = {
+        "rows": 4,
+        "window_start": "2025-10-03",
+        "window_end": "2025-10-31",
+        "sheet_names": [INVOICES_SHEET, "Condiciones de búsqueda", "Info"],
+        "conditions": 2,
+    }
+    return workbook, expected
+
+
 def write_padded_workbook(path: Path, size: int, spec: DatasetSpec) -> None:
     """Write a valid ``.xlsx`` of exactly ``size`` bytes, padded with random bytes.
 
@@ -427,6 +523,7 @@ def write_padded_workbook(path: Path, size: int, spec: DatasetSpec) -> None:
 
 __all__ = [
     "FILLER_ENTRY",
+    "INVOICES_INFO",
     "INVOICES_SHEET",
     "LINES_HEADERS",
     "LINES_SHEET",
@@ -436,7 +533,10 @@ __all__ = [
     "build_workbook",
     "invoices_broken",
     "invoices_defects",
+    "invoices_good",
     "lines_broken",
+    "lines_catalogue",
+    "lines_catalogue_changed",
     "lines_defects",
     "lines_defects_corrected",
     "lines_good",

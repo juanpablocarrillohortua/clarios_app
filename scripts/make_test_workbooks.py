@@ -16,7 +16,16 @@ Every file is made up: no real data. They are the files of
 * ``defectos_lineas_corregido.xlsx`` - ``defectos_lineas`` after some of the
   fixes the app suggests, to upload as its correction.
   ``defectos_lineas_corregido.expected.tsv`` says how many issues the
-  comparison must call cleared, remaining and new.
+  comparison must call cleared, remaining and new;
+* ``lineas_catalogo.xlsx`` and ``lineas_catalogo_cambiada.xlsx`` - two
+  versions of a production-lines catalogue, for the confirmation of a
+  catalogue: confirm the first, then the second shows one line added, one
+  changed, one removed and two unchanged
+  (``lineas_catalogo_cambiada.expected.tsv``);
+* ``facturas_buena.xlsx`` - a sound invoices export of October 2025, with the
+  "Info" and "Condiciones de búsqueda" sheets of a QAD export and one row
+  repeated exactly: four rows land. ``facturas_buena.expected.tsv`` says what
+  its load records (rows, period, sheets).
 
 With ``--large`` it also writes valid ``.xlsx`` packages padded with random
 bytes to an exact size, written a megabyte at a time:
@@ -36,6 +45,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -45,7 +55,10 @@ from tests.fixtures.workbooks import (  # noqa: E402
     Planted,
     invoices_broken,
     invoices_defects,
+    invoices_good,
     lines_broken,
+    lines_catalogue,
+    lines_catalogue_changed,
     lines_defects,
     lines_defects_corrected,
     lines_good,
@@ -54,6 +67,9 @@ from tests.fixtures.workbooks import (  # noqa: E402
 
 from energy.adapters.yaml_dataset_specs import load_dataset_specs  # noqa: E402
 from energy.domain.drafts import MIB  # noqa: E402
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 def _manifest(path: Path, planted: list[Planted]) -> None:
@@ -66,6 +82,14 @@ def _explained(path: Path, explained: list[Explained]) -> None:
     lines = ["row\tcolumn\trule\treason"]
     lines += [
         f"{row or ''}\t{column or ''}\t{rule}\t{reason}" for row, column, rule, reason in explained
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _expected(path: Path, expected: Mapping[str, object]) -> None:
+    lines = [
+        f"{name}\t{', '.join(map(str, value)) if isinstance(value, list) else value}"
+        for name, value in expected.items()
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -95,8 +119,14 @@ def main() -> None:
     _explained(folder / "defectos_facturas.manifest.tsv", explained)
     data, expected = lines_defects_corrected()
     (folder / "defectos_lineas_corregido.xlsx").write_bytes(data)
-    counts = "".join(f"{name}\t{count}\n" for name, count in expected.items())
-    (folder / "defectos_lineas_corregido.expected.tsv").write_text(counts, encoding="utf-8")
+    _expected(folder / "defectos_lineas_corregido.expected.tsv", expected)
+    (folder / "lineas_catalogo.xlsx").write_bytes(lines_catalogue())
+    data, expected = lines_catalogue_changed()
+    (folder / "lineas_catalogo_cambiada.xlsx").write_bytes(data)
+    _expected(folder / "lineas_catalogo_cambiada.expected.tsv", expected)
+    data, recorded = invoices_good(catalogue.get("qad_facturas"))
+    (folder / "facturas_buena.xlsx").write_bytes(data)
+    _expected(folder / "facturas_buena.expected.tsv", recorded)
 
     if arguments.large:
         invoices = catalogue.get("qad_facturas")

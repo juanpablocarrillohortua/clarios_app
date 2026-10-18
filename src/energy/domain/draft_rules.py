@@ -80,13 +80,14 @@ from energy.domain.landing import (
     header_keys,
     sha256_hex,
     sheet_payloads,
+    spanned,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping, Sequence
 
     from energy.domain.dataset_spec import ColumnSpec, DatasetSpec
-    from energy.domain.landing import CellValue, SheetRow
+    from energy.domain.landing import CellValue, DateSpan, SheetRow
 
 #: The number the Silver build accepts (``pg_temp.eq_num`` in
 #: ``energy.adapters.equs_silver_sql``). A unit test keeps the two equal.
@@ -594,6 +595,7 @@ def check_sheet(
     collector: IssueCollector,
     first_row: int = 1,
     first_column: int = 0,
+    span: DateSpan | None = None,
 ) -> Iterator[LandingRow]:
     """Check the rows of the spec's sheet, yielding them as Bronze would land them.
 
@@ -607,6 +609,8 @@ def check_sheet(
         collector: where the issues go.
         first_row: Excel row number of the first row in ``rows``.
         first_column: 0-based index of the first column of every row.
+        span: when given, it is shown the cell of its column in every kept
+            row, as the command-line loader shows it (:func:`landing.spanned`).
 
     Yields:
         One landing row per kept row, in sheet order.
@@ -637,7 +641,8 @@ def check_sheet(
     key_columns = _key_columns(spec, columns)
     seen: dict[str, int] = {}
     rows_read = 0
-    for kept in sheet_payloads(chain([header], remaining), header_row, first_column, header_row):
+    kept_rows = sheet_payloads(chain([header], remaining), header_row, first_column, header_row)
+    for kept in spanned(kept_rows, span):
         rows_read += 1
         collector.add_row(_check_row(columns, kept, row_identity(key_columns, kept, seen)))
         for key in kept.payload:

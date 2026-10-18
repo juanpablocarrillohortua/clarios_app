@@ -53,6 +53,7 @@ bronze:
 
 silver:
   table: silver.lineas_produccion # the Silver table the rows feed
+  removed_rows: kept              # snapshots only: kept or dropped
 
 natural_key: [Línea]              # payload keys of required columns
 # period_column: Fecha Efectiva   # movements only
@@ -76,6 +77,7 @@ columns:
 | `bronze.dataset_key` | for `manual_sheets` | Lowercase snake_case. Refused for the other sources, which take none |
 | `bronze.header_row` | no | From 1; 1 when absent |
 | `silver.table` | yes | `silver.<name>`, a table the Silver build writes. Several datasets may feed one table |
+| `silver.removed_rows` | snapshots only | What the Silver build does with a row a new version leaves out: `kept` (the table is upserted, so the row stays) or `dropped` (the table is emptied and filled again). Refused for a movement, which removes no row. The confirmation of a load says it, and the load records it |
 | `natural_key` | yes | Payload keys of required columns, none twice |
 | `period_column` | movements only | The payload key of a required date column. For a source that is dated, it must be that source's own column (`Fecha Efectiva`) |
 | `columns` | yes | Every column, in the workbook's order |
@@ -114,6 +116,20 @@ period column name keys (`Almac #2`), not headers.
 generated from the spec. `tests/unit/test_dataset_specs_committed.py` ties the
 two: every key the Silver SQL reads from a dataset's rows must be a key of its
 spec. A spec that drops or renames a column Silver reads fails that test.
+
+**`silver.removed_rows` is tied to the Silver SQL the same way.** The same test
+says `dropped` exactly when the spec's Silver table appears after `DELETE FROM`
+or `TRUNCATE` in `src/energy/adapters/equs_silver_sql.py`. A spec cannot claim
+what the build does not do, and a change to the build fails the test until the
+spec says it.
+
+For `lineas_produccion` it is `kept`, and the web app explains what that means
+for the lines (`datasets.lineas_produccion.removedRows` in `es.json`): a line
+taken out of the catalogue stays in Silver; one that production receipts name
+loses its description, warehouse and units per hour, and one they do not name
+keeps its last values. Whether a removed line should rather be kept as it was
+and marked no longer listed is a question for the plant (increment 11 of
+[the frontend plan](frontend-plan.md#8-build-roadmap)).
 
 ## The template
 
@@ -216,8 +232,9 @@ the row and the column; the web app turns the ID into a sentence
 - **The list keeps the first 1,000 issues of each rule in each column; the
   counts keep every row.** A file broken on every row is reported exactly,
   without a million lines.
-- **An error blocks the load, a warning will have to be accepted** (increment
-  8), and an issue for information changes nothing.
+- **An error blocks the load, a warning must be accepted** before the load is
+  confirmed (built with increment 7), and an issue for information changes
+  nothing.
 - **A file over 5 MiB is not checked yet.** It is kept, and its check is the
   worker's job (increment 12).
 

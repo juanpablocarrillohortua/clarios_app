@@ -22,6 +22,7 @@ import classes from "../styles/app.module.css";
 import { DatasetPicker } from "./DatasetPicker";
 import { FilePicker } from "./FilePicker";
 import { formatBytes } from "./formatBytes";
+import { LoadsTabs } from "./LoadsTabs";
 import { UploadProgress } from "./UploadProgress";
 import { type UploadStop, useUpload } from "./useUpload";
 
@@ -104,7 +105,10 @@ export function LoadsPage() {
       <Stack gap="lg">
         <Stack gap={4}>
           <LoadsHeading />
-          <Text className={classes.secondary}>{t("loads.intro")}</Text>
+          <LoadsTabs />
+          <Text className={classes.secondary} mt="xs">
+            {t("loads.intro")}
+          </Text>
         </Stack>
 
         {datasets.isPending && (

@@ -32,7 +32,7 @@ Depends on:
 from __future__ import annotations
 
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -48,7 +48,8 @@ from energy.domain.exceptions import (
 )
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from collections.abc import Mapping
+    from datetime import date, datetime
     from uuid import UUID
 
     from energy.domain.draft_rules import RuleCount
@@ -86,14 +87,41 @@ class DraftStatus(StrEnum):
     """Where a draft stands.
 
     ``receiving`` while its bytes arrive; ``uploaded`` once the original is
-    archived; ``validated`` once its rows were checked; ``failed`` when the
-    upload broke off or was refused.
+    archived; ``validated`` once its rows were checked; ``committed`` once its
+    rows landed in Bronze (increment 7); ``failed`` when the upload broke off
+    or was refused.
     """
 
     RECEIVING = "receiving"
     UPLOADED = "uploaded"
     VALIDATED = "validated"
+    COMMITTED = "committed"
     FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class ExportFacts:
+    """What a workbook says about itself, read at validation for the commit.
+
+    The run a commit opens records them exactly as the command-line loader
+    records them for the same file.
+
+    Attributes:
+        sheet_names: every sheet of the workbook, in its order.
+        window_start: the first date of the period column; ``None`` for a
+            snapshot, or when no cell of that column is a date.
+        window_end: the last date of it, likewise.
+        export_info: what the "Info" sheet of a QAD export says about the
+            query; empty for a workbook without one.
+        search_conditions: the rows of its "Condiciones de búsqueda" sheet, as
+            delivered; empty without one.
+    """
+
+    sheet_names: tuple[str, ...]
+    window_start: date | None = None
+    window_end: date | None = None
+    export_info: Mapping[str, str] = field(default_factory=dict)
+    search_conditions: tuple[Mapping[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +139,8 @@ class ValidationSummary:
         spec_digest: the digest of the spec the file was checked against
             (:func:`energy.domain.dataset_spec.spec_digest`); ``None`` for a
             validation older than revision 0008.
+        facts: what the workbook says about itself; ``None`` for a validation
+            older than revision 0009, or of a file that could not be read.
     """
 
     sheet_name: str
@@ -120,6 +150,7 @@ class ValidationSummary:
     rows_with_warnings: int
     counts: tuple[RuleCount, ...]
     spec_digest: str | None = None
+    facts: ExportFacts | None = None
 
     @property
     def blocking(self) -> bool:
@@ -155,6 +186,8 @@ class Draft:
         previous_draft_id: the draft whose file this one corrects, if it was
             uploaded as a correction. The earlier draft may since have
             expired or been purged.
+        run_id: for a committed draft, the Bronze run that landed its rows.
+        committed_at: when it was committed.
     """
 
     draft_id: UUID
@@ -177,6 +210,8 @@ class Draft:
     failure_code: str | None
     validation: ValidationSummary | None
     previous_draft_id: UUID | None = None
+    run_id: UUID | None = None
+    committed_at: datetime | None = None
 
 
 def clean_filename(raw: str) -> str:
@@ -327,6 +362,7 @@ __all__ = [
     "ZIP_MAGIC",
     "Draft",
     "DraftStatus",
+    "ExportFacts",
     "UploadGuard",
     "ValidationSummary",
     "check_declared_size",

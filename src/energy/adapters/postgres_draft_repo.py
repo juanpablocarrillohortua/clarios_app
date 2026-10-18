@@ -4,7 +4,7 @@ Layer: adapters
 
 Responsibility:
     Implements :class:`~energy.ports.draft_repository.DraftRepository` against
-    schema ``staging`` (revisions 0007 and 0008). Every read is filtered by the owner and
+    schema ``staging`` (revisions 0007 to 0009). Every read is filtered by the owner and
     by the draft's expiry, so a person never sees a draft of someone else and
     an expired draft is gone before the purge removes it.
 
@@ -19,7 +19,10 @@ Responsibility:
     :func:`energy.domain.draft_comparison.compared_by_row`.
 
     The statements name schema ``staging`` only. Nothing here reads or writes
-    Bronze, Silver or Gold; a unit test reads this file to keep it so.
+    Bronze, Silver or Gold; a unit test reads this file to keep it so. The
+    commit, which reads staging and writes Bronze in one transaction, is
+    :mod:`energy.adapters.postgres_load_committer`; it reads drafts with
+    :data:`DRAFT_COLUMNS`, :func:`as_draft` and :func:`rule_counts`.
 
 Depends on:
     ``energy.ports.draft_repository``, ``energy.domain``, ``energy.core``,
@@ -41,7 +44,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from energy.domain.draft_comparison import IssueChange
 from energy.domain.draft_reasons import Reason, ReasonId, ranked
 from energy.domain.draft_rules import Issue, IssueSeverity, ReasonCount, RuleCount, RuleId
-from energy.domain.drafts import Draft, DraftStatus, ValidationSummary
+from energy.domain.drafts import Draft, DraftStatus, ExportFacts, ValidationSummary
 from energy.domain.exceptions import DraftBusyError, RepositoryError, UnknownDraftError
 from energy.ports.draft_repository import ExpiredDraft, IssuePage
 
@@ -58,13 +61,15 @@ if TYPE_CHECKING:
 
 DEFAULT_BATCH_SIZE: Final = 5_000
 
-_DRAFT_COLUMNS: Final = """
+DRAFT_COLUMNS: Final = """
     draft_id, dataset_key, source_key, plant_code, status, filename, declared_bytes,
     size_bytes, content_hash, bucket, object_key, created_by, created_by_name,
     created_at, uploaded_at, validated_at, expires_at, failure_code,
     sheet_name, header_row, rows_read, rows_with_errors, rows_with_warnings,
-    previous_draft_id, spec_digest
+    previous_draft_id, spec_digest, run_id, committed_at,
+    sheet_names, window_start, window_end, export_info, search_conditions
 """
+_DRAFT_COLUMNS: Final = DRAFT_COLUMNS
 
 _INSERT_DRAFT: Final = text(
     f"""
@@ -128,7 +133,7 @@ _SELECT_DUPLICATE: Final = text(
     SELECT {_DRAFT_COLUMNS}
     FROM staging.drafts
     WHERE created_by = :owner AND dataset_key = :dataset_key AND content_hash = :content_hash
-      AND status IN ('uploaded', 'validated') AND expires_at > now()
+      AND status IN ('uploaded', 'validated', 'committed') AND expires_at > now()
       AND draft_id <> :excluding
     ORDER BY created_at DESC
     LIMIT 1
@@ -182,7 +187,10 @@ _FINISH_VALIDATION: Final = text(
     SET status = 'validated', validated_at = now(), expires_at = now() + interval '30 days',
         sheet_name = :sheet_name, header_row = :header_row, rows_read = :rows_read,
         rows_with_errors = :rows_with_errors, rows_with_warnings = :rows_with_warnings,
-        spec_digest = :spec_digest
+        spec_digest = :spec_digest, sheet_names = CAST(:sheet_names AS text[]),
+        window_start = :window_start, window_end = :window_end,
+        export_info = CAST(:export_info AS jsonb),
+        search_conditions = CAST(:search_conditions AS jsonb)
     WHERE draft_id = :draft_id
     RETURNING {_DRAFT_COLUMNS}
     """  # noqa: S608  # nosec B608
@@ -335,7 +343,7 @@ _COPY_ISSUES: Final = (
 )
 
 
-def _counts(connection: Connection, draft_id: UUID) -> tuple[RuleCount, ...]:
+def rule_counts(connection: Connection, draft_id: UUID) -> tuple[RuleCount, ...]:
     """Return how often each rule was broken in a draft."""
     rows = connection.execute(_SELECT_COUNTS, {"draft_id": draft_id}).all()
     reasons: dict[tuple[str, str], list[ReasonCount]] = {}
@@ -356,10 +364,23 @@ def _counts(connection: Connection, draft_id: UUID) -> tuple[RuleCount, ...]:
     )
 
 
-def _as_draft(row: Row[Any], counts: tuple[RuleCount, ...] = ()) -> Draft:
+def _facts(row: Row[Any]) -> ExportFacts | None:
+    """Return what a draft's workbook said about itself, if its validation kept it."""
+    if row.sheet_names is None:
+        return None
+    return ExportFacts(
+        sheet_names=tuple(row.sheet_names),
+        window_start=row.window_start,
+        window_end=row.window_end,
+        export_info=dict(row.export_info or {}),
+        search_conditions=tuple(dict(item) for item in (row.search_conditions or [])),
+    )
+
+
+def as_draft(row: Row[Any], counts: tuple[RuleCount, ...] = ()) -> Draft:
     """Build a draft from its row and, once validated, its counts."""
     validation = None
-    if row.status == DraftStatus.VALIDATED:
+    if row.status in {DraftStatus.VALIDATED, DraftStatus.COMMITTED}:
         validation = ValidationSummary(
             sheet_name=row.sheet_name,
             header_row=row.header_row,
@@ -368,6 +389,7 @@ def _as_draft(row: Row[Any], counts: tuple[RuleCount, ...] = ()) -> Draft:
             rows_with_warnings=row.rows_with_warnings,
             counts=counts,
             spec_digest=row.spec_digest,
+            facts=_facts(row),
         )
     return Draft(
         draft_id=row.draft_id,
@@ -390,6 +412,8 @@ def _as_draft(row: Row[Any], counts: tuple[RuleCount, ...] = ()) -> Draft:
         failure_code=row.failure_code,
         validation=validation,
         previous_draft_id=row.previous_draft_id,
+        run_id=row.run_id,
+        committed_at=row.committed_at,
     )
 
 
@@ -513,6 +537,7 @@ class _PostgresDraftValidation:
                         "rows_affected": by_reason.rows,
                     },
                 )
+        facts = summary.facts
         row = self._connection.execute(
             _FINISH_VALIDATION,
             {
@@ -523,9 +548,20 @@ class _PostgresDraftValidation:
                 "rows_with_errors": summary.rows_with_errors,
                 "rows_with_warnings": summary.rows_with_warnings,
                 "spec_digest": summary.spec_digest,
+                "sheet_names": list(facts.sheet_names) if facts else None,
+                "window_start": facts.window_start if facts else None,
+                "window_end": facts.window_end if facts else None,
+                "export_info": json.dumps(dict(facts.export_info), ensure_ascii=False)
+                if facts
+                else None,
+                "search_conditions": json.dumps(
+                    [dict(item) for item in facts.search_conditions], ensure_ascii=False
+                )
+                if facts
+                else None,
             },
         ).one()
-        return _as_draft(row, summary.counts)
+        return as_draft(row, summary.counts)
 
 
 class PostgresDraftRepository:
@@ -563,7 +599,7 @@ class PostgresDraftRepository:
                     connection.execute(_EXTEND_PREVIOUS, parameters)
         except SQLAlchemyError as exc:
             raise RepositoryError("could not record the draft", reason=str(exc)) from exc
-        return _as_draft(row)
+        return as_draft(row)
 
     def mark_uploaded(self, draft_id: UUID, archived: ArchivedFile) -> Draft:
         """Record where the original was archived; the draft is ``uploaded``."""
@@ -583,7 +619,7 @@ class PostgresDraftRepository:
             ) from exc
         if row is None:
             raise DraftBusyError("the draft is no longer receiving", draft_id=str(draft_id))
-        return _as_draft(row)
+        return as_draft(row)
 
     def mark_failed(self, draft_id: UUID, failure_code: str) -> None:
         """Record that the upload failed, and why."""
@@ -605,7 +641,7 @@ class PostgresDraftRepository:
             ).one_or_none()
             if row is None:
                 return None
-            return _as_draft(row, _counts(connection, draft_id))
+            return as_draft(row, rule_counts(connection, draft_id))
 
     def find_duplicate(
         self, owner: str, dataset_key: str, content_hash: str, excluding: UUID
@@ -623,7 +659,7 @@ class PostgresDraftRepository:
             ).one_or_none()
             if row is None:
                 return None
-            return _as_draft(row, _counts(connection, row.draft_id))
+            return as_draft(row, rule_counts(connection, row.draft_id))
 
     @contextmanager
     def validation(self, draft_id: UUID, owner: str) -> Iterator[_PostgresDraftValidation]:
@@ -649,6 +685,8 @@ class PostgresDraftRepository:
                     raise
                 if row is None:
                     raise UnknownDraftError("no draft of yours has that ID", draft_id=str(draft_id))
+                if row.status == DraftStatus.COMMITTED:
+                    raise DraftBusyError("the draft was committed", draft_id=str(draft_id))
                 if row.status not in {DraftStatus.UPLOADED, DraftStatus.VALIDATED}:
                     raise DraftBusyError("the draft's file has not arrived", draft_id=str(draft_id))
                 for statement in _CLEAR_RESULTS:
@@ -753,4 +791,10 @@ class PostgresDraftRepository:
         return int(result.rowcount)
 
 
-__all__ = ["DEFAULT_BATCH_SIZE", "PostgresDraftRepository"]
+__all__ = [
+    "DEFAULT_BATCH_SIZE",
+    "DRAFT_COLUMNS",
+    "PostgresDraftRepository",
+    "as_draft",
+    "rule_counts",
+]

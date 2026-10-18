@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 from tests.fixtures.drafts import InMemoryDraftRepository
+from tests.fixtures.loads import InMemoryBronze, build_load_service
 from tests.fixtures.workbooks import (
     lines_broken,
     lines_defects,
@@ -49,16 +50,26 @@ def repository() -> InMemoryDraftRepository:
 
 
 @pytest.fixture
+def bronze() -> InMemoryBronze:
+    return InMemoryBronze()
+
+
+@pytest.fixture
 def bind_service(
-    app: FastAPI, repository: InMemoryDraftRepository, tmp_path: Path
+    app: FastAPI, repository: InMemoryDraftRepository, bronze: InMemoryBronze, tmp_path: Path
 ) -> Iterator[Any]:
-    """Return a function that binds a draft service, with limits of the test's choice."""
-    from energy.api.deps import get_draft_service  # noqa: PLC0415
+    """Return a function that binds a draft service, with limits of the test's choice.
+
+    The load service is bound with it, on the same drafts and an in-memory
+    Bronze, for the routes of the commit.
+    """
+    from energy.api.deps import get_draft_service, get_load_service  # noqa: PLC0415
 
     def bind(**limits: int) -> DraftService:
+        storage = LocalObjectStorage(tmp_path / "archive")
         service = DraftService(
             repository=repository,
-            storage=LocalObjectStorage(tmp_path / "archive"),
+            storage=storage,
             reader=CalamineWorkbookReader(),
             inspector=ZipPackageInspector(),
             catalogue=app.state.dataset_catalogue,
@@ -66,12 +77,17 @@ def bind_service(
             temp_dir=tmp_path,
             **limits,  # type: ignore[arg-type]
         )
+        loads, _committer, _ledger = build_load_service(
+            service, repository, storage, app.state.dataset_catalogue, bronze
+        )
         app.dependency_overrides[get_draft_service] = lambda: service
+        app.dependency_overrides[get_load_service] = lambda: loads
         return service
 
     bind()
     yield bind
     app.dependency_overrides.pop(get_draft_service, None)
+    app.dependency_overrides.pop(get_load_service, None)
 
 
 @pytest.fixture

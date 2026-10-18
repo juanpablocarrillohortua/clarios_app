@@ -58,11 +58,14 @@ def purge_drafts(dry_run: bool = False, only: UUID | None = None) -> PurgeOutcom
         bucket=settings.minio.bucket_bronze,
     )
     bronze = PostgresBronzeLandingRepository(engine)
-    return service.purge(
-        landed=lambda content_hash: bronze.find_file(content_hash) is not None,
-        dry_run=dry_run,
-        only=only,
-    )
+
+    def landed(content_hash: str, bucket: str, object_key: str) -> bool:
+        # Bronze needs this very object only when it catalogues it, not merely
+        # the same bytes archived under another key (by the command line).
+        known = bronze.find_file(content_hash)
+        return known is not None and (known.bucket, known.object_key) == (bucket, object_key)
+
+    return service.purge(landed=landed, dry_run=dry_run, only=only)
 
 
 __all__ = ["purge_drafts"]

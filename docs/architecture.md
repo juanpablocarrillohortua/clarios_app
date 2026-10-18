@@ -286,28 +286,44 @@ role is given a meaning: the app holds no such rule. [The API](api.md) follows a
 request through these steps and lists every endpoint; [Sign-in and
 roles](sign-in.md) has the Entra ID side.
 
-### A file upload
+### A file upload, from the web app
 
 ```
-POST /api/uploads
-  → UploadService hashes the payload
-  → duplicate? → 202 with duplicate=true, no run started
-  → archive original bytes in MinIO (write-once)
-  → register an ingestion run
-  → 202 with run_id
-  → Prefect: excel_ingestion flow
-      → parse workbook            (adapters.excel_source)
-      → append to Bronze          (tasks.extract)
-      → validate against contract (tasks.validate)
-          → passing rows  → consolidate → Silver
-          → failing rows  → quarantine
-      → derive the affected window from the parsed rows
-      → recompute exactly those Gold periods
+POST /api/drafts?dataset_key=…        the file is the body, streamed
+  → DraftService: count, check and hash the bytes on the way
+  → same person, same bytes, same dataset? → 200 with that draft
+  → archive the original in MinIO, under the Bronze loader's key
+  → 201 with the draft                (staging.drafts; Bronze untouched)
+POST /api/drafts/{draft_id}/validate
+  → read the workbook as Bronze would (domain.landing)
+  → the spec's rules and the reasons  (domain.draft_rules, draft_reasons)
+  → rows and issues into staging      (adapters.postgres_draft_repo)
+GET /api/drafts/{draft_id}/confirmation
+  → what the commit would write; a catalogue's difference from its
+    current version                    (adapters.postgres_load_committer)
+POST /api/drafts/{draft_id}/commit
+  → LoadService: the digest seen, the warnings accepted, the original present
+  → LoadCommitter.commit, one transaction:
+      lock the draft and the dataset → catalogue the file (raw_files)
+      → open the run → copy the staged rows into the landing table
+      → check the counts → complete the run → clear the staged rows
+      → mark the draft committed
+  → 201 with the load                  (GET /api/loads/{run_id})
 ```
 
-The file is archived **before** the run is registered. A crash between the two
-leaves an orphaned object — harmless — rather than a run pointing at bytes that
-were never stored.
+- **The file is archived before anything else,** and catalogued in Bronze only
+  by the commit. An abandoned draft leaves Bronze untouched, and the purge
+  removes its original.
+- **A failed commit leaves nothing,** not even a failed run, and a draft
+  commits once
+  ([ADR 0010](adr/0010-a-draft-is-committed-once-in-one-transaction.md)).
+- **Silver and Gold are rebuilt by commands** (`make equs-silver`,
+  `make refresh`) until increment 10 of the frontend plan runs them after a
+  load.
+- **Energy readings are another path.** The `excel_ingestion` flow (parse,
+  append to Bronze, validate against a contract, consolidate into Silver,
+  recompute the affected Gold periods) is their Phase 3 design. No endpoint
+  starts it yet.
 
 ### A dashboard query
 
@@ -501,6 +517,7 @@ internal.
 - [ADR 0007](adr/0007-figures-reach-people-through-power-bi.md) — why figures reach people through Power BI only, and the API's KPI endpoints are removed
 - [ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md) — how the dashboard embeds the report with the user's own Power BI token
 - [ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md) — why data is entered and corrected in Excel: no grid and no form in the app
+- [ADR 0010](adr/0010-a-draft-is-committed-once-in-one-transaction.md) — why a draft is committed once, in one transaction, with the loader's own SQL
 - [The API](api.md) — what it is in plain words, every endpoint, the token check, the errors, how the web app calls it
 - [Sign-in and roles](sign-in.md) — the app registration, giving someone access, troubleshooting
 - [Frontend plan](frontend-plan.md) — the web app's design and its increments

@@ -30,6 +30,7 @@ bronze:
   dataset_key: {key}
 silver:
   table: silver.{key}
+  removed_rows: kept
 natural_key: [Código]
 columns:
   - {{header: Código, type: text, required: true}}
@@ -123,7 +124,7 @@ def test_a_key_written_twice_is_refused_not_overwritten(tmp_path: Path) -> None:
 
     (problem,) = problems_of(tmp_path)
 
-    assert problem.startswith(f"{path.as_posix()}: line 16, column ")
+    assert problem.startswith(f"{path.as_posix()}: line 17, column ")
     assert problem.endswith("not valid YAML: the key 'type' appears twice")
 
 

@@ -521,17 +521,35 @@ def landing_rows(
     Yields:
         One :class:`LandingRow` per kept row, carrying its real Excel row number.
     """
+    for kept in spanned(sheet_payloads(rows, first_row, first_column, header_row), span):
+        payload_json = canonical_json(kept.payload)
+        yield LandingRow(kept.source_row, sha256_hex(payload_json.encode("utf-8")), payload_json)
+
+
+def spanned(rows: Iterable[SheetRow], span: DateSpan | None) -> Iterator[SheetRow]:
+    """Pass kept rows on, showing a span the cell of its column in each.
+
+    The command-line loader and the web app's validation both read the period
+    of a load this way, so a file gives the same period whichever path it
+    takes.
+
+    Args:
+        rows: kept rows, as :func:`sheet_payloads` yields them.
+        span: the span to show the dated column to; ``None`` passes the rows on.
+
+    Yields:
+        The same rows, unchanged.
+    """
     keys: tuple[str, ...] | None = None
     watched = -1
-    for kept in sheet_payloads(rows, first_row, first_column, header_row):
+    for kept in rows:
         if span is not None:
             if kept.keys is not keys:
                 keys = kept.keys
                 watched = _watched_column(keys, span)
             if 0 <= watched < len(kept.cells):
                 span.observe(kept.cells[watched])
-        payload_json = canonical_json(kept.payload)
-        yield LandingRow(kept.source_row, sha256_hex(payload_json.encode("utf-8")), payload_json)
+        yield kept
 
 
 # -----------------------------------------------------------------------------
@@ -590,4 +608,5 @@ __all__ = [
     "row_payload",
     "sha256_hex",
     "sheet_payloads",
+    "spanned",
 ]

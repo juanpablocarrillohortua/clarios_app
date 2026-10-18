@@ -37,7 +37,7 @@ WORKSPACE = "44444444-4444-4444-8444-444444444444"
 REPORT = "55555555-5555-4555-8555-555555555555"
 A_RUN = "0b7a2d0e-6f0f-4c59-9a3e-2f1d4c5b6a70"
 
-GUARDED = ["/me", "/kpis/summary", "/uploads", "/runs", f"/runs/{A_RUN}"]
+GUARDED = ["/me", "/kpis/summary", "/loads", f"/loads/{A_RUN}", f"/drafts/{A_RUN}"]
 
 
 @pytest.fixture
@@ -84,8 +84,10 @@ def test_without_a_token_a_guarded_route_answers_401(
 
 
 def test_writing_without_a_token_answers_401(client: TestClient, token_verifier: Any) -> None:
-    assert client.post(f"/runs/{A_RUN}/retry").status_code == 401
-    assert client.post("/uploads").status_code == 401
+    commit = {
+        "validation_digest": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+    assert client.post(f"/drafts/{A_RUN}/commit", json=commit).status_code == 401
     assert client.post("/drafts?dataset_key=lineas_produccion", content=b"PK").status_code == 401
     assert client.post(f"/drafts/{A_RUN}/validate").status_code == 401
 
@@ -202,13 +204,15 @@ def test_me_ignores_a_role_value_the_application_does_not_define(
 @pytest.mark.parametrize(
     "path",
     [
-        "/uploads",
-        "/runs",
-        f"/runs/{A_RUN}",
+        "/loads",
+        f"/loads/{A_RUN}",
+        f"/loads/{A_RUN}/original",
         "/datasets",
         "/datasets/qad_facturas/template",
         f"/drafts/{A_RUN}",
         f"/drafts/{A_RUN}/issues",
+        f"/drafts/{A_RUN}/confirmation",
+        f"/drafts/{A_RUN}/difference?change=added",
     ],
 )
 def test_a_viewer_is_refused_on_data_loading(
@@ -225,14 +229,13 @@ def test_a_viewer_is_refused_on_data_loading(
 
 
 @pytest.mark.parametrize("role", ["operator", "engineer", "admin"])
-@pytest.mark.parametrize("path", ["/uploads", "/runs", f"/runs/{A_RUN}"])
 def test_an_operator_and_above_reach_data_loading(
-    client: TestClient, auth_headers: Any, role: str, path: str
+    client: TestClient, auth_headers: Any, role: str
 ) -> None:
-    response = client.get(path, headers=auth_headers(role))
+    # The template needs no database, so the guard is all this checks.
+    response = client.get("/datasets/qad_facturas/template", headers=auth_headers(role))
 
-    assert response.status_code == 501
-    assert response.json()["code"] == "not_implemented"
+    assert response.status_code == 200
 
 
 def test_a_viewer_may_not_upload_and_the_file_is_not_read(
@@ -247,11 +250,16 @@ def test_a_viewer_may_not_upload_and_the_file_is_not_read(
     assert response.status_code == 403
 
 
-def test_only_an_operator_and_above_may_retry_a_run(client: TestClient, auth_headers: Any) -> None:
-    path = f"/runs/{A_RUN}/retry"
+def test_a_viewer_may_not_commit_a_draft(client: TestClient, auth_headers: Any) -> None:
+    response = client.post(
+        f"/drafts/{A_RUN}/commit",
+        json={
+            "validation_digest": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        headers=auth_headers("viewer"),
+    )
 
-    assert client.post(path, headers=auth_headers("viewer")).status_code == 403
-    assert client.post(path, headers=auth_headers("operator")).status_code == 501
+    assert response.status_code == 403
 
 
 @pytest.mark.parametrize("role", ["viewer", "operator", "engineer", "admin"])
@@ -261,7 +269,7 @@ def test_every_role_of_people_reaches_the_figures(
     assert client.get("/kpis/summary", headers=auth_headers(role)).status_code == 501
 
 
-@pytest.mark.parametrize("path", ["/kpis/summary", "/uploads", "/runs"])
+@pytest.mark.parametrize("path", ["/kpis/summary", "/loads", "/datasets"])
 def test_a_person_without_a_role_is_refused_everywhere_but_me(
     client: TestClient, auth_headers: Any, path: str
 ) -> None:
@@ -276,7 +284,7 @@ def test_a_refusal_is_logged_with_the_caller_and_without_the_token(
 ) -> None:
     headers = auth_headers("viewer")
 
-    client.get("/uploads", headers=headers)
+    client.get("/loads", headers=headers)
     client.get("/me", headers={"Authorization": "Bearer a-forged-token"})
 
     assert token_verifier.subject in caplog.text

@@ -186,7 +186,7 @@ def test_migrations_apply_to_head(migrated_engine: Engine) -> None:
         version = connection.execute(
             text("SELECT version_num FROM public.alembic_version")
         ).scalar_one()
-    assert version == "0008"
+    assert version == "0009"
 
 
 def test_all_schemas_exist(migrated_engine: Engine) -> None:
@@ -1072,7 +1072,7 @@ class TestReportingRevision:
 
 
 class TestStagingRevision:
-    """Revisions 0007 and 0008: drafts of the web app, a working area beside the medallion."""
+    """Revisions 0007 to 0009: drafts of the web app, a working area beside the medallion."""
 
     DRAFT = (
         "INSERT INTO staging.drafts (dataset_key, source_key, plant_code, filename,"
@@ -1120,6 +1120,11 @@ class TestStagingRevision:
             "input_mode = 'form'",
             "spec_digest = 'not a digest'",
             "previous_draft_id = draft_id",
+            "status = 'committed'",
+            "run_id = gen_random_uuid(), committed_at = now()",
+            "window_start = '2025-02-01', window_end = '2025-01-01'",
+            "export_info = '[]'::jsonb",
+            "search_conditions = '{}'::jsonb",
         ],
     )
     def test_checks_refuse_what_a_draft_cannot_be(self, gold_engine: Engine, change: str) -> None:
@@ -1224,6 +1229,35 @@ class TestStagingRevision:
             )
         assert link == earlier
 
+    def test_a_validated_draft_becomes_committed_naming_its_run(self, gold_engine: Engine) -> None:
+        """Revision 0009: a committed draft names the run that landed it, and when."""
+        with gold_engine.begin() as connection:
+            draft_id = connection.execute(text(self.DRAFT)).one().draft_id
+            connection.execute(
+                text(
+                    "UPDATE staging.drafts SET status = 'validated', size_bytes = 10,"
+                    " content_hash = :h, bucket = 'b', object_key = 'k', validated_at = now(),"
+                    " rows_read = 1, rows_with_errors = 0, rows_with_warnings = 0,"
+                    " sheet_names = ARRAY['Datos'], window_start = '2025-10-01',"
+                    " window_end = '2025-10-31', export_info = '{}'::jsonb,"
+                    " search_conditions = '[]'::jsonb"
+                    " WHERE draft_id = :d"
+                ),
+                {"d": draft_id, "h": "a" * 64},
+            )
+            committed = connection.execute(
+                text(
+                    "UPDATE staging.drafts SET status = 'committed', run_id = gen_random_uuid(),"
+                    " committed_at = now() WHERE draft_id = :d RETURNING status, run_id"
+                ),
+                {"d": draft_id},
+            ).one()
+            connection.execute(
+                text("DELETE FROM staging.drafts WHERE draft_id = :d"), {"d": draft_id}
+            )
+        assert committed.status == "committed"
+        assert committed.run_id is not None
+
     def test_the_reporting_reader_gets_nothing_here(self, gold_engine: Engine) -> None:
         """Drafts are not figures: the BI login cannot even see the schema."""
         with gold_engine.connect() as connection:
@@ -1273,7 +1307,7 @@ def test_gold_downgrades_to_silver_and_up_again(database_url: str) -> None:
             version = connection.execute(
                 text("SELECT version_num FROM public.alembic_version")
             ).scalar_one()
-        assert version == "0008"
+        assert version == "0009"
     finally:
         with engine.begin() as connection:
             for schema in reversed(ALL_SCHEMAS):
@@ -1320,7 +1354,7 @@ def test_staging_reasons_downgrade_to_0007_and_up_again(database_url: str) -> No
             version = connection.execute(
                 text("SELECT version_num FROM public.alembic_version")
             ).scalar_one()
-        assert version == "0008"
+        assert version == "0009"
     finally:
         with engine.begin() as connection:
             for schema in reversed(ALL_SCHEMAS):
@@ -1500,6 +1534,63 @@ def test_downgrade_reverts_cleanly(database_url: str) -> None:
         inspector = inspect(engine)
         remaining = set(inspector.get_schema_names()) & set(ALL_SCHEMAS)
         assert not remaining, f"schemas left behind after downgrade: {sorted(remaining)}"
+    finally:
+        with engine.begin() as connection:
+            for schema in reversed(ALL_SCHEMAS):
+                connection.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            connection.execute(text("DROP TABLE IF EXISTS public.alembic_version"))
+        engine.dispose()
+        if previous is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous
+
+
+def test_staging_commit_downgrades_to_0008_and_up_again(database_url: str) -> None:
+    """Revision 0009 alone goes down and up, but never while a draft is committed."""
+    import os  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from alembic import command  # noqa: PLC0415
+    from alembic.config import Config  # noqa: PLC0415
+
+    previous = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = database_url
+    root = Path(__file__).resolve().parent.parent.parent
+    config = Config(toml_file=str(root / "pyproject.toml"))
+    config.set_main_option("script_location", str(root / "migrations"))
+
+    engine = create_engine(database_url, future=True)
+    committed = (
+        "INSERT INTO staging.drafts (dataset_key, source_key, plant_code, filename, content_type,"
+        " declared_bytes, created_by, status, size_bytes, content_hash, bucket, object_key,"
+        " validated_at, rows_read, rows_with_errors, rows_with_warnings, run_id, committed_at)"
+        " VALUES ('lineas_produccion', 'manual_sheets', '1515', 'a.xlsx', 'x', 10, 'someone',"
+        " 'committed', 10, :h, 'b', 'k', now(), 1, 0, 0, gen_random_uuid(), now())"
+    )
+    try:
+        command.upgrade(config, "head")
+        with engine.begin() as connection:
+            connection.execute(text(committed), {"h": "a" * 64})
+        with pytest.raises(Exception, match="committed drafts exist"):
+            command.downgrade(config, "0008")
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM staging.drafts"))
+        command.downgrade(config, "0008")
+        inspector = inspect(engine)
+        draft_columns = {c["name"] for c in inspector.get_columns("drafts", STAGING_SCHEMA)}
+        assert not {"run_id", "committed_at", "sheet_names", "export_info"} & draft_columns
+        checks = {
+            check["name"]: check["sqltext"]
+            for check in inspector.get_check_constraints("drafts", STAGING_SCHEMA)
+        }
+        assert "committed" not in str(checks["ck_drafts_status"])
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            version = connection.execute(
+                text("SELECT version_num FROM public.alembic_version")
+            ).scalar_one()
+        assert version == "0009"
     finally:
         with engine.begin() as connection:
             for schema in reversed(ALL_SCHEMAS):
