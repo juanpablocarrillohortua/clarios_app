@@ -158,3 +158,85 @@ def test_bucket_names_that_escape_the_root_are_refused(
     """A bucket is one directory directly under the root."""
     with pytest.raises(ConfigurationError):
         storage.ensure_bucket(bucket)
+
+
+class _Chunks:
+    """A byte source that hands over its chunks one read at a time."""
+
+    def __init__(self, *chunks: bytes, fail_after: int | None = None) -> None:
+        self._chunks = list(chunks)
+        self._fail_after = fail_after
+        self.reads = 0
+
+    def read(self, size: int = -1, /) -> bytes:
+        del size
+        self.reads += 1
+        if self._fail_after is not None and self.reads > self._fail_after:
+            raise RuntimeError("the client went away")
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+def test_a_stream_is_stored_with_its_size_and_hash(storage: LocalObjectStorage) -> None:
+    """A payload of unknown length arrives in pieces and is hashed on the way."""
+    stored = storage.put_stream(BUCKET, KEY, _Chunks(b"work", b"book ", b"bytes"), "x/test")
+
+    assert stored.size_bytes == len(DATA)
+    assert stored.content_hash == hashlib.sha256(DATA).hexdigest()
+    assert storage.get(BUCKET, KEY) == DATA
+
+
+def test_a_stream_that_breaks_leaves_nothing(storage: LocalObjectStorage, tmp_path: Path) -> None:
+    """An upload cut short is not stored, not even in part."""
+    with pytest.raises(RuntimeError):
+        storage.put_stream(BUCKET, KEY, _Chunks(b"work", b"book", fail_after=1), "x/test")
+
+    assert not storage.exists(BUCKET, KEY)
+    assert [path for path in (tmp_path / "archive").rglob("*") if path.is_file()] == []
+
+
+def test_a_stream_is_written_once(storage: LocalObjectStorage) -> None:
+    """A stream cannot replace what is already stored."""
+    storage.put(BUCKET, KEY, DATA, "x/test")
+
+    with pytest.raises(FileExistsError):
+        storage.put_stream(BUCKET, KEY, _Chunks(b"other"), "x/test")
+
+
+def test_a_copy_takes_the_metadata_it_is_given(storage: LocalObjectStorage) -> None:
+    """A copy is verified against the hash it is given, and is written once."""
+    storage.put_stream(BUCKET, "incoming/1", _Chunks(DATA), "x/test")
+    content_hash = hashlib.sha256(DATA).hexdigest()
+
+    copied = storage.copy(BUCKET, "incoming/1", KEY, {"content-hash": content_hash})
+
+    assert copied.content_hash == content_hash
+    assert storage.get(BUCKET, KEY) == DATA
+    with pytest.raises(FileExistsError):
+        storage.copy(BUCKET, "incoming/1", KEY, {"content-hash": content_hash})
+
+
+def test_delete_removes_an_object_and_tolerates_a_missing_one(storage: LocalObjectStorage) -> None:
+    """Deleting twice is not an error."""
+    storage.put(BUCKET, KEY, DATA, "x/test")
+
+    storage.delete(BUCKET, KEY)
+    storage.delete(BUCKET, KEY)
+
+    assert not storage.exists(BUCKET, KEY)
+
+
+def test_download_to_copies_the_bytes_and_checks_them(
+    storage: LocalObjectStorage, tmp_path: Path
+) -> None:
+    """A download is verified against the recorded hash."""
+    storage.put(BUCKET, KEY, DATA, "x/test")
+    target = tmp_path / "copy.bin"
+
+    with target.open("wb") as handle:
+        storage.download_to(BUCKET, KEY, handle)
+
+    assert target.read_bytes() == DATA
+
+    (tmp_path / "archive" / BUCKET / KEY).write_bytes(b"tampered")
+    with target.open("wb") as handle, pytest.raises(ContentHashMismatchError):
+        storage.download_to(BUCKET, KEY, handle)

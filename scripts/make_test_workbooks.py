@@ -1,0 +1,86 @@
+"""Write the synthetic workbooks of the upload checks to a folder.
+
+Every file is made up: no real data. They are the files of
+``tests/fixtures/workbooks.py``, for trying the loading page by hand:
+
+* ``lineas_buena.xlsx`` - a production-lines catalogue that breaks no rule;
+* ``lineas_rota.xlsx`` - the same catalogue broken on purpose, one row per
+  rule a cell can break, and a header with a misspelt, a missing and an
+  unknown column. ``lineas_rota.manifest.tsv`` lists every issue it must show,
+  as row, column and rule;
+* ``facturas_rota.xlsx`` - an invoices export with every header, and dates and
+  numbers broken on purpose; with its manifest too.
+
+With ``--large`` it also writes valid ``.xlsx`` packages padded with random
+bytes to an exact size, written a megabyte at a time:
+
+* ``mediano_12MB.xlsx`` - over the 5 MB the API validates itself: kept, and
+  its validation answers "not built yet";
+* ``grande_300MB.xlsx`` - 4 KiB under the 300 MB limit;
+* ``demasiado_301MB.xlsx`` - over the limit, refused.
+
+Usage::
+
+    uv run python scripts/make_test_workbooks.py <folder> [--large]
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from tests.fixtures.workbooks import (  # noqa: E402
+    Planted,
+    invoices_broken,
+    lines_broken,
+    lines_good,
+    write_padded_workbook,
+)
+
+from energy.adapters.yaml_dataset_specs import load_dataset_specs  # noqa: E402
+from energy.domain.drafts import MIB  # noqa: E402
+
+
+def _manifest(path: Path, planted: list[Planted]) -> None:
+    lines = ["row\tcolumn\trule"]
+    lines += [f"{row or ''}\t{column or ''}\t{rule}" for row, column, rule in planted]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def main() -> None:
+    """Write the files."""
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("folder", type=Path, help="where to write the files")
+    parser.add_argument("--large", action="store_true", help="also write the padded files")
+    arguments = parser.parse_args()
+    folder: Path = arguments.folder
+    folder.mkdir(parents=True, exist_ok=True)
+    catalogue = load_dataset_specs(ROOT / "config")
+
+    (folder / "lineas_buena.xlsx").write_bytes(lines_good())
+    data, planted = lines_broken()
+    (folder / "lineas_rota.xlsx").write_bytes(data)
+    _manifest(folder / "lineas_rota.manifest.tsv", planted)
+    data, planted = invoices_broken(catalogue.get("qad_facturas"))
+    (folder / "facturas_rota.xlsx").write_bytes(data)
+    _manifest(folder / "facturas_rota.manifest.tsv", planted)
+
+    if arguments.large:
+        invoices = catalogue.get("qad_facturas")
+        for name, size in (
+            ("mediano_12MB.xlsx", 12 * MIB),
+            ("grande_300MB.xlsx", 300 * MIB - 4096),
+            ("demasiado_301MB.xlsx", 301 * MIB),
+        ):
+            write_padded_workbook(folder / name, size, invoices)
+
+    for path in sorted(folder.iterdir()):
+        print(f"{path.stat().st_size:>12,}  {path.name}")
+
+
+if __name__ == "__main__":
+    main()

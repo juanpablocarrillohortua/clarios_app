@@ -10,7 +10,6 @@ container and are skipped when Docker cannot start one.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 from datetime import timedelta
 from typing import TYPE_CHECKING
@@ -24,13 +23,9 @@ from energy.domain.exceptions import EntityNotFoundError, SourceUnavailableError
 from energy.ports.object_storage import ObjectStorage
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from pathlib import Path
 
 pytestmark = pytest.mark.integration
-
-# The release docker-compose.yml pins, pulled from MinIO's own registry: the
-# Docker Hub mirror refuses anonymous pulls.
-MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
 
 BUCKET = "bronze-raw-test"
 DATA = b"the bytes of a workbook"
@@ -38,38 +33,11 @@ CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.shee
 
 
 @pytest.fixture(scope="module")
-def storage() -> Iterator[MinioObjectStorage]:
-    """Return the adapter bound to a MinIO container, or skip."""
-    try:
-        from testcontainers.minio import MinioContainer  # noqa: PLC0415
-    except ImportError:  # pragma: no cover - testcontainers is a dev dependency
-        pytest.skip("testcontainers is not installed")
-
-    container = None
-    try:
-        container = MinioContainer(image=MINIO_IMAGE)
-        container.start()
-    except Exception as exc:  # any Docker failure means "skip"
-        # A container that started but did not answer in time is still running.
-        if container is not None:
-            with contextlib.suppress(Exception):
-                container.stop()
-        pytest.skip(f"cannot start a MinIO test container: {exc}")
-
-    try:
-        config = container.get_config()
-        settings = MinioSettings(
-            _env_file=None,
-            MINIO_ENDPOINT=config["endpoint"],
-            MINIO_ROOT_USER=config["access_key"],
-            MINIO_ROOT_PASSWORD=config["secret_key"],
-            MINIO_SECURE=False,
-        )
-        adapter = MinioObjectStorage(settings)
-        adapter.ensure_bucket(BUCKET)
-        yield adapter
-    finally:
-        container.stop()
+def storage(minio_settings: MinioSettings) -> MinioObjectStorage:
+    """Return the adapter bound to the session's MinIO container, or skip."""
+    adapter = MinioObjectStorage(minio_settings)
+    adapter.ensure_bucket(BUCKET)
+    return adapter
 
 
 def test_it_satisfies_the_object_storage_port(storage: MinioObjectStorage) -> None:
@@ -182,3 +150,80 @@ def test_an_unreachable_server_is_reported_as_unavailable() -> None:
 
     with pytest.raises(SourceUnavailableError):
         MinioObjectStorage(settings).ensure_bucket(BUCKET)
+
+
+# =============================================================================
+# Streaming: uploads of up to 300 MB pass through a part at a time
+# =============================================================================
+class _Chunks:
+    """A byte source of ``total`` bytes, handed over ``chunk`` at a time."""
+
+    def __init__(self, total: int, chunk: int = 1 << 20, fail_at: int | None = None) -> None:
+        self._left = total
+        self._chunk = chunk
+        self._fail_at = fail_at
+        self._sent = 0
+        self.digest = hashlib.sha256()
+
+    def read(self, size: int = -1, /) -> bytes:
+        if self._fail_at is not None and self._sent >= self._fail_at:
+            raise RuntimeError("the client went away")
+        wanted = self._chunk if size < 0 else min(size, self._chunk)
+        data = bytes([self._sent % 251]) * min(wanted, self._left)
+        self._left -= len(data)
+        self._sent += len(data)
+        self.digest.update(data)
+        return data
+
+
+def test_a_stream_of_several_parts_is_stored_with_its_hash(storage: MinioObjectStorage) -> None:
+    """40 MiB go up as a multipart upload; the size and hash are of what was read."""
+    source = _Chunks(40 * 2**20)
+
+    stored = storage.put_stream(BUCKET, "incoming/several-parts", source, CONTENT_TYPE)
+
+    assert stored.size_bytes == 40 * 2**20
+    assert stored.content_hash == source.digest.hexdigest()
+    assert storage.stat(BUCKET, "incoming/several-parts").size_bytes == 40 * 2**20
+
+
+def test_a_stream_that_breaks_leaves_no_object(storage: MinioObjectStorage) -> None:
+    """The multipart upload is aborted: nothing appears under the key."""
+    key = "incoming/broken"
+
+    with pytest.raises(RuntimeError, match="went away"):
+        storage.put_stream(BUCKET, key, _Chunks(40 * 2**20, fail_at=20 * 2**20), CONTENT_TYPE)
+
+    assert not storage.exists(BUCKET, key)
+
+
+def test_a_copy_carries_the_hash_and_is_written_once(storage: MinioObjectStorage) -> None:
+    """The copy is made inside MinIO, with the metadata it is given."""
+    source = _Chunks(3 * 2**20)
+    storage.put_stream(BUCKET, "incoming/to-copy", source, CONTENT_TYPE)
+    content_hash = source.digest.hexdigest()
+    target = f"1515/manual_sheets/2026/10/17/{content_hash}.xlsx"
+
+    copied = storage.copy(BUCKET, "incoming/to-copy", target, {"content-hash": content_hash})
+
+    assert copied.content_hash == content_hash
+    assert copied.content_type == CONTENT_TYPE
+    assert hashlib.sha256(storage.get(BUCKET, target)).hexdigest() == content_hash
+    with pytest.raises(FileExistsError):
+        storage.copy(BUCKET, "incoming/to-copy", target, {"content-hash": content_hash})
+    storage.delete(BUCKET, "incoming/to-copy")
+    storage.delete(BUCKET, "incoming/to-copy")
+    assert not storage.exists(BUCKET, "incoming/to-copy")
+
+
+def test_download_to_checks_the_bytes(storage: MinioObjectStorage, tmp_path: Path) -> None:
+    """What is written to the file is verified against the recorded hash."""
+    key = "download/workbook.xlsx"
+    storage.put(BUCKET, key, DATA, CONTENT_TYPE)
+    target = tmp_path / "copy.xlsx"
+
+    with target.open("wb") as handle:
+        recorded = storage.download_to(BUCKET, key, handle)
+
+    assert target.read_bytes() == DATA
+    assert recorded.content_hash == hashlib.sha256(DATA).hexdigest()

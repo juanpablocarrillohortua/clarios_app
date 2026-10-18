@@ -53,7 +53,9 @@ Microsoft Entra ID, and roles) are done. Increment 3 (the dashboard, with the
 embedded Power BI report) is built, and waits for the owner's checks in a
 signed-in browser. Increment 4 (the dataset specs, `GET /api/datasets` and the
 template of each) is built; [docs/dataset-specs.md](docs/dataset-specs.md) is
-its guide. The decisions are in
+its guide. Increment 5 (staging, the streaming upload, the checks of a file and
+the issues list, `/api/drafts` and the "Carga de datos" page) is built, and
+waits for the owner's checks in a signed-in browser. The decisions are in
 [ADR 0004](docs/adr/0004-react-spa-entra-and-embedded-power-bi.md) (stack, Entra
 ID sign-in, embedded Power BI),
 [ADR 0005](docs/adr/0005-api-composition-root.md) (`api/deps.py` may import
@@ -79,8 +81,8 @@ Definition-of-Done item is verified against a running stack.
 |---|---|
 | `make up` | **Exit 0 - all 7 services healthy** (api, caddy, dash, db, minio, prefect-server, prefect-worker) |
 | Port policy | Only caddy publishes (8080/8443); everything else internal. One opt-in exception: `reporting-bridge` (profile `reporting`, `make powerbi`) on 127.0.0.1:5433 |
-| `make db-upgrade` | **Exit 0** - Alembic at head `0006` against live TimescaleDB |
-| Schemas / tables | `bronze, gold, reference, reporting, silver`; 42 tables (8 + 9 + 4 + 21), 2 materialized views, 15 views and 8 functions in `gold`, 12 views and 1 function in `reporting` |
+| `make db-upgrade` | **Exit 0** - Alembic at head `0007` against live TimescaleDB |
+| Schemas / tables | `bronze, gold, reference, reporting, silver, staging`; 46 tables (8 + 9 + 4 + 21 + 4), 2 materialized views, 15 views and 8 functions in `gold`, 12 views and 1 function in `reporting` |
 | Extensions | timescaledb **2.30.1**, pgcrypto 1.3 |
 | Hypertables | All 5 registered: `raw_readings, readings, kpi_hourly, kpi_daily, plant_daily_summary` |
 | Timescale policies | 3 compression + 1 retention job created (no warnings) |
@@ -89,11 +91,11 @@ Definition-of-Done item is verified against a running stack.
 | `/api/ready` payload | `degraded` (connectivity+extensions healthy, Silver empty) - correct, returns 200 not 503 |
 | Placeholder endpoint | `/api/kpis/summary` -> **501** with `code=not_implemented` for a signed-in caller (in the tests); 401 without a token |
 | `X-Request-Id` | Present and propagated |
-| `make check` | **Exit 0**, the whole chain as one command, on the code of increment 4 (2026-10-17): format, lint, mypy strict (117 files), bandit, pip-audit, `frontend-check`, tests (26 minutes) |
-| `make frontend-check` | **Exit 0** (2026-10-17, inside `make check`) - Biome on 63 files, `tsc`, 236 Vitest tests in 10 files, production build of two pages, with the Power BI library in a file of its own (229 kB) |
+| `make check` | **Exit 0**, the whole chain as one command, on the code of increment 5 (2026-10-18): format, lint, mypy strict (127 files), bandit, pip-audit, `frontend-check`, tests (28 minutes) |
+| `make frontend-check` | **Exit 0** (2026-10-18, inside `make check`) - Biome on 85 files, `tsc`, 308 Vitest tests in 15 files, production build of two pages (`preview.html` is not built), with the Power BI library in a file of its own (229 kB) |
 | Dashboard (2026-10-13) | With the two IDs empty, `GET /api/config` answers `"powerbi": null` and sign-in asks for the API's scope only. With them set, it carries the `powerbi` object, and a signed-out headless browser reaches Microsoft's sign-in page with both scopes and no error, from `:8080` and from the dev server. The built embedding module, run in headless Edge with made-up IDs and a text that is no token, loads Power BI's frame and receives its refusal. Caddy's headers are unchanged. **Not done by a session:** seeing the report as a signed-in user |
-| `make test` | **969 passed, 39 skipped** (26 minutes with the workbooks present, 2026-10-17, inside `make check`) |
-| Coverage | **96.16%** (threshold 70%) |
+| `make test` | **1,165 passed, 39 skipped** (28 minutes with the workbooks present, 2026-10-18, inside `make check`) |
+| Coverage | **95.72%** (threshold 70%) |
 | `make test-integration` | **118 passed** against real TimescaleDB and MinIO, with the workbooks present (2026-10-07; not re-run on its own since) |
 | `make powerbi` | **Exit 0** in the stack: the bridge healthy on 127.0.0.1:5433; the login reads the reporting views from Windows through it, is refused on gold/silver and with a wrong password; `make powerbi-down` closes the port without touching the db container |
 | No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer. Two deliberate exceptions: `docs/equs_calculation_explained.es.md`, the Spanish translation of the non-technical explanation (asked for on 2026-10-08), and `frontend/src/i18n/es.json`, the texts of the web app's interface (decided on 2026-10-12, ADR 0004) |
@@ -110,9 +112,12 @@ with the dashboard added (increment 3), `make check` ran whole and passed.
 `make up` was run that day too (13 minutes, the README having changed), and
 the routes were checked again with the report configured and not. On
 2026-10-17, with the dataset specs added (increment 4), `make check` ran whole
-and passed again: the `make check`, `make frontend-check`, `make test` and
-coverage rows are from that run. The api image was rebuilt that day and its
-two new routes answer 401 without a token through Caddy.
+and passed again. With staging and the upload added (increment 5), it
+passed that day, then failed twice on 2026-10-18 on two tests that passed
+alone (a fixture whose bytes held the time, and the race described under
+"Tests" of the web app), and passed whole once both were fixed: the `make
+check`, `make frontend-check`, `make test` and coverage rows are from that
+run.
 
 **Integration tests can be skipped silently.** They start a TimescaleDB container
 and wait 120 s for it. On 2026-10-06, with the machine busy, the container needed
@@ -472,7 +477,10 @@ test raising would fail the suite. Keep that distinction.
   and `ResizeObserver`, which Mantine's shell needs and jsdom lacks. The app
   starts with three requests, so a test waits for what it looks at (`findBy…`).
   A test that moves the clock uses `vi.useFakeTimers({ shouldAdvanceTime: true
-  })`, or `findBy…` never returns.
+  })`, or `findBy…` never returns. What an effect's clean-up does (the
+  dashboard removing the report) is awaited with `waitFor`: React may run it
+  after the next screen is already drawn, and under a full run it once had
+  not.
 - **The shell has two layouts, switched at Mantine's `sm` (768 px) by
   `layout/useWideLayout.ts`** (2026-10-16).
   - **Wide:** the sections are tabs in the header, and there is no sidebar
@@ -715,6 +723,73 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
   pattern and range. Codes that may one day hold a letter (items, customers)
   have no pattern, so a new code cannot block a monthly load.
 
+**Staging and drafts** (increment 5, built 2026-10-17; revision `0007`,
+`/api/drafts`, the "Carga de datos" page):
+
+- **A draft is one upload, owner-only.** Schema `staging`: `drafts`,
+  `draft_rows`, `draft_issues`, `draft_rule_counts`. A working area, not a
+  layer: no foreign key into Bronze, `reporting_reader` and `PUBLIC` get
+  nothing. Every read filters by `created_by` and `expires_at`; someone else's
+  draft is a 404. `energy drafts purge [--dry-run] [--draft-id]` removes
+  expired drafts (30 days after the last work) and their original unless
+  another draft or `bronze.raw_files` needs it. Nothing schedules it.
+- **Bronze is unchanged by an upload.** The original is archived at once, under
+  `archive_object_key` (the Bronze loader's key) in `bronze-raw`, but
+  `raw_files` is registered by the commit of increment 7 (decided 2026-10-17,
+  amending plan §6 step 1). `postgres_draft_repo.py` names no `bronze.` object
+  and a test reads it to keep it so.
+- **The upload is the raw body, not a form,** streamed: the async router pulls
+  each chunk from the event loop (`anyio.from_thread.run`) for the service,
+  which runs in a worker thread; `UploadGuard` counts, checks `PK`
+  and stops at 300 MiB; MinIO receives 8 MiB parts under `incoming/<draft_id>`,
+  then a server-side copy goes to the hashed key. **`put_object` must keep
+  `num_parallel_uploads=1`:** minio-py's default (3) queues more parts, which
+  broke the memory bound and gave `IncompleteBody` in a test. **Keep the parts
+  at 8 MiB** (`UPLOAD_PART_BYTES`): minio-py builds a part by appending
+  chunks and copies it again, so the peak is about four parts. Through Caddy,
+  16 MiB parts took the api container 81 MiB over idle for a 300 MiB file,
+  8 MiB parts 47 MiB; measured alone, 80 MiB and 34 MiB (2026-10-17).
+  Every reader handed to `put_object` must return at most `size` bytes: one
+  that returns more makes minio-py's `read_part_data` read the whole stream
+  into one part.
+- **300 MB means 300 MiB** (`MAX_FILE_BYTES`, 314,572,800), checked by the
+  browser (from `limits` of `GET /datasets`), by Caddy (`request_body` on
+  `POST /api/drafts`; 10 MiB on the rest of `/api`; `read_body 30m`) and by
+  the API. `tests/unit/test_caddyfile.py` ties the Caddyfile to the constant.
+- **Validation runs in the request for files up to 5 MiB**
+  (`CHECK_IN_REQUEST_MAX_BYTES`); a larger one answers 501 `not_implemented`
+  until increment 12. It downloads the original to a temp file (hash checked),
+  judges the zip directory (`workbook_limits.IN_REQUEST`) and unpacks every
+  entry through a counter (`zip_package.py`), then reads with calamine
+  `from_path`. One transaction, `FOR UPDATE NOWAIT` on the draft (a second
+  validation is 409), replacing earlier results.
+- **The rules judge what Bronze would store, as Silver reads it.**
+  `landing.sheet_payloads` feeds both `landing_rows` and `check_sheet`; values
+  are trimmed of spaces (`eq_txt`); numbers follow `SILVER_NUMBER`, which a
+  test keeps equal to `pg_temp.eq_num`; a `date` column takes date cells only.
+  The first 1,000 issues per rule and column are listed; every row is counted.
+- **Rule IDs, not sentences, cross the API.** The sentences are
+  `loads.rules.<id>` of `es.json`; `tests/unit/test_draft_rules.py` fails for
+  a rule without one. In the app, `loads/texts.ts` is the one place that looks
+  up keys the server names (untyped, with a fallback).
+- **In the app, only `api/upload.ts` uses `XMLHttpRequest`** (fetch has no
+  upload progress). A draft has its own address, `/loads/drafts/<id>`, so a
+  reload or a new sign-in resumes it; arriving from an upload it validates
+  once (a ref guards strict mode).
+- **`frontend/preview.html` is for the dev server only:** the loading pages with
+  stand-ins for sign-in, the API and the upload (`src/preview/stage.ts`,
+  `?scenario=broken|clean|many|large|busy|refused`). `vite build` does not
+  build it, `checks/previewPage.test.ts` keeps it so, and `:8080` answers 404.
+- **Synthetic files:** `uv run python scripts/make_test_workbooks.py <folder>
+  [--large]` writes broken files with their manifest, and padded packages of
+  12 MiB, 300 MiB - 4 KiB and 301 MiB. No real data. `build_workbook` fixes
+  every timestamp in the package (openpyxl and `zipfile` write the time to
+  the second), so one file built twice has one hash; the duplicate and purge
+  tests rely on it, and one failed in a full run before it was so. The
+  builders are `tests/fixtures/*.py`: `.gitignore` ignores everything else in
+  that folder (generated files), and until 2026-10-18 ignored them too, which
+  no local run could show.
+
 **EQUS Bronze loader** (built 2026-10-07):
 
 - Layout follows the hexagon: payload rules in `domain/landing.py` and
@@ -874,8 +949,10 @@ All deliberate; each is explained where it lives.
 The web app has its own roadmap, in section 8 of
 [docs/frontend-plan.md](docs/frontend-plan.md): fourteen increments, of which 0
 to 2 are done, 3 (the dashboard page, with the embedded Power BI report) is
-built and waits for the owner's browser checks, and 4 (the dataset specs) is
-built. Increment 5 is staging, upload and the schema checks.
+built and waits for the owner's browser checks, 4 (the dataset specs) is
+built, and 5 (staging, upload and the checks of a file) is built and waits for
+the owner's checks signed in. Increment 6 is the reasons, the grid and
+revalidation.
 
 When implementing a placeholder: read its docstring first (it is the spec), keep
 and update the docstring, remove the `Implemented in: Phase N` line, and un-skip

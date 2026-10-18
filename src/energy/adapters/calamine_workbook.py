@@ -19,11 +19,15 @@ Depends on:
 from __future__ import annotations
 
 import io
+from typing import TYPE_CHECKING
 
 from python_calamine import CalamineError, CalamineWorkbook, WorksheetNotFound
 
 from energy.domain.exceptions import EntityNotFoundError, UnsupportedFileFormatError
 from energy.ports.workbook_reader import SheetRange
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class CalamineOpenWorkbook:
@@ -78,7 +82,12 @@ class CalamineOpenWorkbook:
 
 
 class CalamineWorkbookReader:
-    """Opens ``.xlsx``, ``.xlsm``, ``.xls`` and ``.ods`` files."""
+    """Opens ``.xlsx``, ``.xlsm``, ``.xls`` and ``.ods`` files.
+
+    From bytes for the command-line loader, and from a local file for uploads
+    too large to hold: calamine then reads each part of the archive in place,
+    when it is reached.
+    """
 
     def open_workbook(self, data: bytes) -> CalamineOpenWorkbook:
         """Open a workbook from its bytes.
@@ -94,6 +103,26 @@ class CalamineWorkbookReader:
         """
         try:
             workbook = CalamineWorkbook.from_filelike(io.BytesIO(data))
+        except CalamineError as exc:
+            raise UnsupportedFileFormatError(
+                "file is not a readable workbook", reason=str(exc)
+            ) from exc
+        return CalamineOpenWorkbook(workbook)
+
+    def open_workbook_file(self, path: Path) -> CalamineOpenWorkbook:
+        """Open a workbook from a local file.
+
+        Args:
+            path: the file. It must stay in place while the workbook is read.
+
+        Returns:
+            The open workbook.
+
+        Raises:
+            UnsupportedFileFormatError: if the file is not a readable workbook.
+        """
+        try:
+            workbook = CalamineWorkbook.from_path(str(path))
         except CalamineError as exc:
             raise UnsupportedFileFormatError(
                 "file is not a readable workbook", reason=str(exc)

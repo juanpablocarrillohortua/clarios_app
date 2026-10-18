@@ -197,10 +197,12 @@ reports/
 coverage.xml
 htmlcov/
 
-# Local data landing zone and generated fixtures
+# Local data landing zone and generated fixtures. The modules that build the
+# synthetic test files are code and are committed; what they generate is not.
 data/
 tests/fixtures/*
 !tests/fixtures/.gitkeep
+!tests/fixtures/*.py
 
 # Prefect local state
 .prefect/

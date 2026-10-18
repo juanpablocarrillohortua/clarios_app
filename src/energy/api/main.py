@@ -17,6 +17,7 @@ policy can be read in one place:
 - ``/health``, ``/ready``, ``/config`` and the API's own documentation are
   public (:data:`PUBLIC_PATHS`);
 - ``/datasets`` needs ``loads:write``: dataset specs serve loading data;
+- ``/drafts`` needs ``loads:write`` too: files uploaded to be loaded;
 - ``/me`` needs a signed-in person;
 - every other router is mounted with the permission it needs;
 - ``/ingest`` is for devices and keeps its API key (:data:`DEVICE_PATH_PREFIX`).
@@ -30,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,7 +39,17 @@ from fastapi.responses import JSONResponse
 
 from energy.api.deps import load_dataset_catalogue, requires
 from energy.api.middleware import RequestContextMiddleware
-from energy.api.routers import client_config, datasets, health, ingest, kpis, me, runs, uploads
+from energy.api.routers import (
+    client_config,
+    datasets,
+    drafts,
+    health,
+    ingest,
+    kpis,
+    me,
+    runs,
+    uploads,
+)
 from energy.api.security import Permission
 from energy.core.logging import configure_from_settings, get_logger
 from energy.core.settings import Settings, get_settings
@@ -46,11 +57,16 @@ from energy.db.session import dispose_engine
 from energy.domain.exceptions import (
     AuthenticationError,
     DatasetSpecError,
+    DraftBusyError,
     EnergyError,
     EntityNotFoundError,
+    FileTooLargeError,
     IdentityProviderUnavailableError,
+    LengthRequiredError,
     PermissionDeniedError,
     SignInNotConfiguredError,
+    SourceUnavailableError,
+    UnsupportedFileFormatError,
 )
 
 if TYPE_CHECKING:
@@ -81,7 +97,18 @@ TAGS_METADATA = [
     {"name": "ingest", "description": "Sensor and historian push endpoint into Bronze."},
     {"name": "runs", "description": "Pipeline run status and history."},
     {"name": "datasets", "description": "The dataset specs, and the empty template of each."},
+    {"name": "drafts", "description": "Files uploaded to be loaded, and the issues found in them."},
 ]
+
+#: Domain errors that have an HTTP status of their own. Anything else the
+#: domain raises on purpose is a 400.
+_STATUS_OF: Final[dict[type[EnergyError], int]] = {
+    DraftBusyError: status.HTTP_409_CONFLICT,
+    LengthRequiredError: status.HTTP_411_LENGTH_REQUIRED,
+    FileTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
+    UnsupportedFileFormatError: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+    SourceUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+}
 
 
 @asynccontextmanager
@@ -116,6 +143,10 @@ def _register_exception_handlers(app: FastAPI) -> None:
     A caller who cannot be let in gets 401 (no valid token), 403 (no
     permission) or 503 (the token could not be checked, which is this side's
     fault). The 401 says nothing about why: the reason is logged.
+
+    An upload refused gets 411 (no size), 413 (too large) or 415 (not an
+    ``.xlsx``); a draft busy elsewhere 409; object storage out of reach 503
+    (:data:`_STATUS_OF`). Every other deliberate domain error is a 400.
 
     Args:
         app: the application to attach handlers to.
@@ -167,6 +198,17 @@ def _register_exception_handlers(app: FastAPI) -> None:
     async def _cannot_check_tokens(_request: Request, exc: EnergyError) -> JSONResponse:
         logger.error("a token could not be checked", code=exc.code, detail=str(exc))
         return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=exc.as_dict())
+
+    async def _with_status(_request: Request, exc: Exception) -> JSONResponse:
+        # Registered for the classes of _STATUS_OF only, all domain errors.
+        error = cast("EnergyError", exc)
+        code = next(code for kind, code in _STATUS_OF.items() if isinstance(error, kind))
+        log = logger.error if code >= status.HTTP_500_INTERNAL_SERVER_ERROR else logger.warning
+        log("domain error surfaced to the API", code=error.code, detail=str(error))
+        return JSONResponse(status_code=code, content=error.as_dict())
+
+    for kind in _STATUS_OF:
+        app.add_exception_handler(kind, _with_status)
 
     @app.exception_handler(EnergyError)
     async def _domain_error(_request: Request, exc: EnergyError) -> JSONResponse:
@@ -242,6 +284,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(uploads.router, dependencies=may_load)
     app.include_router(runs.router, dependencies=may_load)
     app.include_router(datasets.router, dependencies=may_load)
+    app.include_router(drafts.router, dependencies=may_load)
     # Devices, by API key (Phase 3).
     app.include_router(ingest.router)
 

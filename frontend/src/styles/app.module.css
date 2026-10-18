@@ -73,6 +73,10 @@
   --ce-panel-marker: var(--ce-info);
 }
 
+.panel[data-tone="success"] {
+  --ce-panel-marker: var(--ce-success);
+}
+
 /* Card accents, as the report's KPI cards: the bar and the top line in one
    colour. Defined for summary cards to come; nothing uses them yet. */
 .panel[data-accent="pink"] {
@@ -126,6 +130,10 @@
 
 .dot[data-tone="warning"] {
   background-color: var(--ce-warning);
+}
+
+.dot[data-tone="info"] {
+  background-color: var(--ce-info);
 }
 
 .status {
@@ -218,4 +226,182 @@
 
 .report[data-waiting] {
   opacity: 0;
+}
+
+/* Data loading ---------------------------------------------------------------- */
+
+/* A dataset to choose: a card that is a radio button. The chosen one takes
+   the accent's edge, at once. */
+.choice {
+  padding: var(--mantine-spacing-md);
+  border: 1px solid var(--ce-border);
+  border-radius: var(--ce-radius-md);
+  background-color: var(--ce-surface);
+  transition:
+    border-color var(--ce-duration-press) var(--ce-ease-out),
+    background-color var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+@media (hover: hover) {
+  .choice:hover {
+    background-color: var(--ce-surface-raised);
+  }
+}
+
+.choice[data-checked] {
+  border-color: var(--ce-accent);
+  background-color: var(--ce-surface-raised);
+}
+
+/* The drop zone: one button the size of a panel. A file dragged over it is
+   answered at once, with the accent's edge and tint: nothing waits for a
+   timer, and leaving takes the tint away as fast. */
+.dropZone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--mantine-spacing-xs);
+  width: 100%;
+  min-height: 132px;
+  padding: var(--mantine-spacing-lg);
+  border: 1px dashed var(--ce-border-control);
+  border-radius: var(--ce-radius-md);
+  background-color: var(--ce-surface-sunken);
+  color: var(--ce-text-secondary);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    transform var(--ce-duration-spring) var(--ce-ease-spring),
+    border-color var(--ce-duration-press) var(--ce-ease-out),
+    background-color var(--ce-duration-press) var(--ce-ease-out);
+}
+
+.dropZone:focus-visible {
+  outline: 2px solid var(--ce-focus);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) {
+  .dropZone:hover {
+    border-color: var(--ce-accent);
+    color: var(--ce-text);
+  }
+}
+
+/* Pressed: feedback on pointer-down. */
+.dropZone:active {
+  transform: scale(var(--ce-press-scale));
+  transition-duration: var(--ce-duration-press);
+  transition-timing-function: var(--ce-ease-out);
+}
+
+.dropZone[data-dragging] {
+  border-style: solid;
+  border-color: var(--ce-accent);
+  background-color: var(--ce-accent-tint);
+  color: var(--ce-text);
+}
+
+.dropZone[data-invalid] {
+  border-color: var(--ce-error);
+}
+
+.dropZone:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* An upload's bar. The fill is scaled along the track, which the compositor
+   alone draws; each new step starts from where the bar is, so it never jumps
+   back to replay a transition. */
+.progressTrack {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--ce-radius-pill);
+  background-color: var(--ce-surface-sunken);
+}
+
+.progressFill {
+  position: absolute;
+  inset: 0;
+  background: var(--ce-gradient-panel-top);
+  transform: scaleX(var(--progress, 0));
+  transform-origin: left center;
+  transition: transform var(--ce-duration-progress) linear;
+  will-change: transform;
+}
+
+/* The figures of a result: the size carries the hierarchy, tabular so they
+   line up, tighter as they grow. */
+.figure {
+  font-size: 1.75rem;
+  font-weight: var(--ce-weight-title);
+  line-height: var(--ce-leading-title);
+  letter-spacing: var(--ce-tracking-display);
+  font-variant-numeric: tabular-nums;
+}
+
+.figureLabel {
+  color: var(--ce-text-muted);
+  font-size: var(--mantine-font-size-sm);
+  letter-spacing: var(--ce-tracking-small);
+}
+
+.figure[data-tone="error"] {
+  color: var(--ce-error);
+}
+
+.figure[data-tone="warning"] {
+  color: var(--ce-warning);
+}
+
+/* The issues: small type, numbers that line up, and the found value quoted. */
+.issueTable {
+  font-size: var(--mantine-font-size-sm);
+  letter-spacing: var(--ce-tracking-small);
+}
+
+.issueTable td {
+  vertical-align: top;
+}
+
+/* A value found: room for a short code on one line; a long text breaks
+   between words, and inside a word only when nothing else fits. */
+.valueCell {
+  min-width: 8rem;
+  overflow-wrap: break-word;
+}
+
+.number {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.code {
+  font-family: var(--ce-font-mono);
+  font-size: 0.92em;
+  color: var(--ce-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.emptyValue {
+  color: var(--ce-text-muted);
+  font-style: italic;
+}
+
+/* A list whose next page is on its way stays where it is, dimmed, instead of
+   blinking out. */
+.stale {
+  opacity: 0.55;
+  transition: opacity var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+/* One issue on a narrow screen: a card instead of a table row. */
+.issueCard {
+  padding-block: var(--mantine-spacing-sm);
+  border-bottom: 1px solid var(--ce-hairline);
+  font-size: var(--mantine-font-size-sm);
 }

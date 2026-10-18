@@ -22,6 +22,15 @@
 
 	admin off
 
+	# A file of up to 300 MB is uploaded in one request (POST /api/drafts). On
+	# a slow plant network that takes minutes; 30 minutes to receive a body
+	# bounds a client that sends nothing, without cutting a slow upload short.
+	servers {
+		timeouts {
+			read_body 30m
+		}
+	}
+
 	log {
 		output stdout
 		format console
@@ -46,8 +55,30 @@
 	# -------------------------------------------------------------------------
 	# API - /api/* is stripped before proxying; FastAPI is told its external
 	# prefix through API_ROOT_PATH so generated URLs and /api/docs stay correct.
+	#
+	# Request bodies are limited here, before the API: 300 MiB for an upload
+	# (POST /api/drafts, whose body is the file itself) and 10 MiB for every
+	# other call. 300MiB must equal MAX_FILE_BYTES of
+	# src/energy/domain/drafts.py; a test keeps the two equal. The browser
+	# checks first and the API counts again: only the API's check cannot be
+	# bypassed. The body is streamed to the API, never buffered here.
 	# -------------------------------------------------------------------------
 	handle_path /api/* {
+		@upload {
+			method POST
+			path /drafts
+		}
+		request_body @upload {
+			max_size 300MiB
+		}
+		@notUpload not {
+			method POST
+			path /drafts
+		}
+		request_body @notUpload {
+			max_size 10MiB
+		}
+
 		reverse_proxy api:8000 {
 			header_up X-Real-IP {remote_host}
 			header_up X-Forwarded-Proto {scheme}

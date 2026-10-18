@@ -62,7 +62,7 @@ describe("the app shell", () => {
 
     await user.click(await screen.findByRole("link", { name: es.nav.loads }));
     expect(await sectionHeading()).toHaveTextContent(es.loads.title);
-    expect(screen.getByText(es.loads.empty)).toBeInTheDocument();
+    expect(screen.getByText(es.loads.intro)).toBeInTheDocument();
 
     await user.click(screen.getByRole("link", { name: es.nav.dashboard }));
     expect(await sectionHeading()).toHaveTextContent(es.dashboard.title);

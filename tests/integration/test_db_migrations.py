@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from energy.core.constants import (
     ALL_SCHEMAS,
@@ -26,6 +27,7 @@ from energy.core.constants import (
     GOLD_SCHEMA,
     REPORTING_SCHEMA,
     SILVER_SCHEMA,
+    STAGING_SCHEMA,
 )
 
 if TYPE_CHECKING:
@@ -132,6 +134,7 @@ EXPECTED_TABLES: dict[str, set[str]] = {
     BRONZE_SCHEMA: {"raw_readings", "ingestion_runs", "raw_files", *LANDING_TABLES},
     SILVER_SCHEMA: {*ENERGY_SILVER_TABLES, *EQUS_SILVER_TABLES},
     GOLD_SCHEMA: {"kpi_hourly", "kpi_daily", "plant_daily_summary", *EQUS_GOLD_TABLES},
+    STAGING_SCHEMA: {"drafts", "draft_rows", "draft_issues", "draft_rule_counts"},
 }
 
 # Index name -> the payload key it is built on. The keys are header texts of the
@@ -177,7 +180,7 @@ def test_migrations_apply_to_head(migrated_engine: Engine) -> None:
         version = connection.execute(
             text("SELECT version_num FROM public.alembic_version")
         ).scalar_one()
-    assert version == "0006"
+    assert version == "0007"
 
 
 def test_all_schemas_exist(migrated_engine: Engine) -> None:
@@ -1062,6 +1065,116 @@ class TestReportingRevision:
         assert months == 0
 
 
+class TestStagingRevision:
+    """Revision 0007: drafts of the web app, a working area beside the medallion."""
+
+    DRAFT = (
+        "INSERT INTO staging.drafts (dataset_key, source_key, plant_code, filename,"
+        " content_type, declared_bytes, created_by)"
+        " VALUES ('lineas_produccion', 'manual_sheets', '1515', 'a.xlsx', 'x', 10, 'someone')"
+        " RETURNING draft_id, status, expires_at - created_at AS kept"
+    )
+
+    def test_holds_the_four_tables_and_no_view(self, gold_engine: Engine) -> None:
+        """Drafts, their rows, their issues, and the counts of every issue."""
+        inspector = inspect(gold_engine)
+        assert set(inspector.get_table_names(schema=STAGING_SCHEMA)) == {
+            "drafts",
+            "draft_rows",
+            "draft_issues",
+            "draft_rule_counts",
+        }
+        assert inspector.get_view_names(schema=STAGING_SCHEMA) == []
+        assert {
+            key["referred_schema"] for key in inspector.get_foreign_keys("drafts", STAGING_SCHEMA)
+        } == set()
+
+    def test_a_draft_starts_receiving_and_is_kept_30_days(self, gold_engine: Engine) -> None:
+        """Question 17 of the plan: abandoned drafts are kept 30 days."""
+        with gold_engine.begin() as connection:
+            draft = connection.execute(text(self.DRAFT)).one()
+            connection.execute(
+                text("DELETE FROM staging.drafts WHERE draft_id = :d"), {"d": draft.draft_id}
+            )
+        assert draft.status == "receiving"
+        assert draft.kept.days == 30
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            "status = 'unknown'",
+            "status = 'uploaded'",
+            "content_hash = 'not a hash'",
+            "dataset_key = 'Not Snake'",
+            "source_key = 'elsewhere'",
+            "filename = ''",
+            "declared_bytes = 0",
+        ],
+    )
+    def test_checks_refuse_what_a_draft_cannot_be(self, gold_engine: Engine, change: str) -> None:
+        """An archived draft knows where its original is; every value has its form."""
+        with gold_engine.connect() as connection:
+            draft_id = connection.execute(text(self.DRAFT)).one().draft_id
+            with pytest.raises(IntegrityError):
+                # The change is one of this test's own literals.
+                connection.execute(
+                    text(f"UPDATE staging.drafts SET {change} WHERE draft_id = :d"),  # noqa: S608
+                    {"d": draft_id},
+                )
+            connection.rollback()
+
+    def test_removing_a_draft_removes_everything_staged_for_it(self, gold_engine: Engine) -> None:
+        """The purge is one delete: rows, issues and counts go with their draft."""
+        with gold_engine.begin() as connection:
+            draft_id = connection.execute(text(self.DRAFT)).one().draft_id
+            parameters = {"d": draft_id, "h": "a" * 64, "p": '{"A": "1"}'}
+            connection.execute(
+                text("INSERT INTO staging.draft_rows VALUES (:d, 2, :h, CAST(:p AS jsonb))"),
+                parameters,
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO staging.draft_issues (draft_id, rule_id, severity, source_row)"
+                    " VALUES (:d, 'cell.type', 'error', 2)"
+                ),
+                parameters,
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO staging.draft_rule_counts"
+                    " (draft_id, rule_id, severity, rows_affected, issues_listed)"
+                    " VALUES (:d, 'cell.type', 'error', 1, 1)"
+                ),
+                parameters,
+            )
+            connection.execute(text("DELETE FROM staging.drafts WHERE draft_id = :d"), parameters)
+            left = connection.execute(
+                text(
+                    "SELECT (SELECT count(*) FROM staging.draft_rows)"
+                    " + (SELECT count(*) FROM staging.draft_issues)"
+                    " + (SELECT count(*) FROM staging.draft_rule_counts)"
+                )
+            ).scalar_one()
+        assert left == 0
+
+    def test_the_reporting_reader_gets_nothing_here(self, gold_engine: Engine) -> None:
+        """Drafts are not figures: the BI login cannot even see the schema."""
+        with gold_engine.connect() as connection:
+            usage = connection.execute(
+                text("SELECT has_schema_privilege(:r, :s, 'USAGE')"),
+                {"r": READER_ROLE, "s": STAGING_SCHEMA},
+            ).scalar_one()
+            public = connection.execute(
+                text(
+                    "SELECT has_schema_privilege('public', :s, 'USAGE')"
+                    " OR has_schema_privilege('public', :s, 'CREATE')"
+                ),
+                {"s": STAGING_SCHEMA},
+            ).scalar_one()
+        assert usage is False
+        assert public is False
+
+
 def test_gold_downgrades_to_silver_and_up_again(database_url: str) -> None:
     """Revision 0004 alone goes down and up, and takes back the plant areas it added."""
     import os  # noqa: PLC0415
@@ -1093,7 +1206,7 @@ def test_gold_downgrades_to_silver_and_up_again(database_url: str) -> None:
             version = connection.execute(
                 text("SELECT version_num FROM public.alembic_version")
             ).scalar_one()
-        assert version == "0006"
+        assert version == "0007"
     finally:
         with engine.begin() as connection:
             for schema in reversed(ALL_SCHEMAS):

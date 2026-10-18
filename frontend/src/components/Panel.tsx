@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 import classes from "../styles/app.module.css";
 
 /** The kind of message a panel holds. The title says it too: never colour alone. */
-export type PanelTone = "error" | "warning" | "info";
+export type PanelTone = "error" | "warning" | "info" | "success";
 
 /** The colour of a summary card. Defined for cards to come; nothing uses it yet. */
 export type PanelAccent = "pink" | "blue" | "purple" | "cyan" | "magenta" | "amber";

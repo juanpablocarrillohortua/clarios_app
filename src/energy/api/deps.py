@@ -13,9 +13,10 @@ may import ``energy.adapters`` (ADR 0005, enforced by
 rule of its own: what a role may do is decided in :mod:`energy.api.security`.
 
 Wired today: settings, database sessions, the request id, the signed-in
-caller, the dataset specs (read once, when the app is built) and the writer of
-their templates. Repository and service providers arrive with the endpoints
-that need them.
+caller, the dataset specs (read once, when the app is built), the writer of
+their templates, and the draft service of the loading page (built on first
+use and kept on the app: it holds the object storage client). Repository and
+service providers arrive with the endpoints that need them.
 """
 
 from __future__ import annotations
@@ -27,18 +28,25 @@ from typing import TYPE_CHECKING, Annotated
 from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from energy.adapters.calamine_workbook import CalamineWorkbookReader
 from energy.adapters.entra_token_verifier import EntraTokenVerifier
+from energy.adapters.local_storage import LocalObjectStorage
+from energy.adapters.minio_storage import MinioObjectStorage
+from energy.adapters.postgres_draft_repo import PostgresDraftRepository
 from energy.adapters.xlsx_dataset_template import XlsxDatasetTemplateWriter
 from energy.adapters.yaml_dataset_specs import load_dataset_specs
+from energy.adapters.zip_package import ZipPackageInspector
 from energy.api import security
 from energy.api.security import Permission, Principal
 from energy.core.constants import ENTRA_API_SCOPE_NAME
 from energy.core.settings import Settings, get_settings
-from energy.db.session import get_sessionmaker
+from energy.db.session import get_engine, get_sessionmaker
 from energy.domain.dataset_spec import DatasetCatalogue
 from energy.domain.exceptions import AuthenticationError, SignInNotConfiguredError
 from energy.ports.dataset_template import DatasetTemplateWriter
+from energy.ports.object_storage import ObjectStorage
 from energy.ports.token_verifier import TokenVerifier
+from energy.services.draft_service import DraftService
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -243,6 +251,46 @@ def get_template_writer() -> DatasetTemplateWriter:
     return XlsxDatasetTemplateWriter()
 
 
+def build_object_storage(settings: Settings) -> ObjectStorage:
+    """Return the object storage originals are archived into.
+
+    Args:
+        settings: the configuration; ``ARCHIVE_BACKEND`` chooses MinIO (the
+            stack) or a directory.
+
+    Returns:
+        The storage, as the port.
+    """
+    if settings.archive.backend == "local":
+        return LocalObjectStorage(settings.archive.local_dir)
+    return MinioObjectStorage(settings.minio)
+
+
+def get_draft_service(request: Request) -> DraftService:
+    """Return the draft service, building it on first use.
+
+    Args:
+        request: the current request, whose app holds the settings, the
+            dataset specs and, once built, the service.
+
+    Returns:
+        The :class:`~energy.services.draft_service.DraftService`.
+    """
+    service: DraftService | None = getattr(request.app.state, "draft_service", None)
+    if service is None:
+        settings: Settings = request.app.state.settings
+        service = DraftService(
+            repository=PostgresDraftRepository(get_engine()),
+            storage=build_object_storage(settings),
+            reader=CalamineWorkbookReader(),
+            inspector=ZipPackageInspector(),
+            catalogue=request.app.state.dataset_catalogue,
+            bucket=settings.minio.bucket_bronze,
+        )
+        request.app.state.draft_service = service
+    return service
+
+
 # -----------------------------------------------------------------------------
 # Annotated aliases - route handlers depend on these, never on the functions.
 # -----------------------------------------------------------------------------
@@ -253,6 +301,7 @@ APIKeyDep = Annotated[str, Depends(require_api_key)]
 PrincipalDep = Annotated[Principal, Depends(get_principal)]
 DatasetCatalogueDep = Annotated[DatasetCatalogue, Depends(get_dataset_catalogue)]
 TemplateWriterDep = Annotated[DatasetTemplateWriter, Depends(get_template_writer)]
+DraftServiceDep = Annotated[DraftService, Depends(get_draft_service)]
 
 
 def requires(permission: Permission) -> Callable[[Principal], Principal]:
@@ -282,14 +331,17 @@ def requires(permission: Permission) -> Callable[[Principal], Principal]:
 __all__ = [
     "APIKeyDep",
     "DatasetCatalogueDep",
+    "DraftServiceDep",
     "PrincipalDep",
     "RequestIdDep",
     "SessionDep",
     "SettingsDep",
     "TemplateWriterDep",
+    "build_object_storage",
     "get_app_settings",
     "get_dataset_catalogue",
     "get_db_session",
+    "get_draft_service",
     "get_principal",
     "get_request_id",
     "get_template_writer",

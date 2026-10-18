@@ -100,7 +100,7 @@ describe("a viewer", () => {
 
     expect(await sectionHeading()).toHaveTextContent(es.forbidden.title);
     expect(screen.getByText(es.forbidden.text)).toBeInTheDocument();
-    expect(screen.queryByText(es.loads.empty)).toBeNull();
+    expect(screen.queryByText(es.loads.intro)).toBeNull();
 
     await user.click(screen.getByRole("link", { name: es.forbidden.back }));
     expect(await sectionHeading()).toHaveTextContent(es.dashboard.title);
@@ -113,7 +113,7 @@ describe("an operator", () => {
     renderAppAt(paths.loads);
 
     expect(await sectionHeading()).toHaveTextContent(es.loads.title);
-    expect(screen.getByText(es.loads.empty)).toBeInTheDocument();
+    expect(screen.getByText(es.loads.intro)).toBeInTheDocument();
   });
 
   it("is taken into the app from the signed-out page once signed in", async () => {

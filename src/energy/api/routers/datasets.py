@@ -9,7 +9,8 @@ may be entered (:mod:`energy.domain.dataset_spec`). The specs are files in
 the API at start.
 
 - ``GET /datasets`` lists every spec, for the web app to build its loading
-  pages from;
+  pages from, with the size limits of an uploaded file, so the browser
+  refuses a file too large before it sends a byte;
 - ``GET /datasets/{dataset_key}/template`` returns the empty workbook a user
   fills in: the dataset's sheet, with exactly the spec's headers.
 
@@ -27,8 +28,10 @@ from energy.api.schemas.responses import (
     DatasetDescription,
     DatasetsResponse,
     ErrorResponse,
+    UploadLimits,
 )
 from energy.domain.dataset_spec import ColumnSpec, DatasetSpec
+from energy.domain.drafts import CHECK_IN_REQUEST_MAX_BYTES, MAX_FILE_BYTES
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -72,7 +75,7 @@ def _dataset(spec: DatasetSpec) -> DatasetDescription:
     status_code=status.HTTP_200_OK,
 )
 async def list_datasets(catalogue: DatasetCatalogueDep) -> DatasetsResponse:
-    """Return every dataset spec, sorted by key.
+    """Return every dataset spec, sorted by key, and how large a file may be.
 
     Args:
         catalogue: the specs the API was built with.
@@ -80,7 +83,13 @@ async def list_datasets(catalogue: DatasetCatalogueDep) -> DatasetsResponse:
     Returns:
         A :class:`~energy.api.schemas.responses.DatasetsResponse`.
     """
-    return DatasetsResponse(datasets=[_dataset(spec) for spec in catalogue])
+    return DatasetsResponse(
+        datasets=[_dataset(spec) for spec in catalogue],
+        limits=UploadLimits(
+            max_file_bytes=MAX_FILE_BYTES,
+            validated_in_request_bytes=CHECK_IN_REQUEST_MAX_BYTES,
+        ),
+    )
 
 
 @router.get(

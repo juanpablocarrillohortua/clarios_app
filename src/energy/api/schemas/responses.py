@@ -201,14 +201,150 @@ class DatasetDescription(ResponseModel):
     columns: list[DatasetColumn]
 
 
+class UploadLimits(ResponseModel):
+    """How large a file may be, for the web app to check before it sends one.
+
+    Attributes:
+        max_file_bytes: the largest file accepted (300 MiB). The API and Caddy
+            refuse anything larger.
+        validated_in_request_bytes: the largest file the API validates itself
+            (5 MiB). A larger one is archived, and its validation answers 501
+            until the worker validates large files (increment 12).
+    """
+
+    max_file_bytes: int
+    validated_in_request_bytes: int
+
+
 class DatasetsResponse(ResponseModel):
     """Every dataset spec the server holds, by key.
 
     Attributes:
         datasets: the datasets.
+        limits: how large an uploaded file may be.
     """
 
     datasets: list[DatasetDescription]
+    limits: UploadLimits
+
+
+IssueSeverityName = Literal["error", "warning", "info"]
+DraftStatusName = Literal["receiving", "uploaded", "validated", "failed"]
+
+
+class RuleCountResponse(ResponseModel):
+    """How often one rule was broken in one column of a draft.
+
+    Attributes:
+        rule: the rule's ID, such as ``cell.pattern``.
+        severity: ``error``, ``warning`` or ``info``.
+        column: the column's key; ``None`` for the file as a whole.
+        rows: every row that broke it, exactly.
+        listed: how many of those are in the issues list (at most 1,000).
+    """
+
+    rule: str
+    severity: IssueSeverityName
+    column: str | None
+    rows: int
+    listed: int
+
+
+class DraftValidationResponse(ResponseModel):
+    """What the last validation of a draft found.
+
+    Attributes:
+        validated_at: when it ran.
+        sheet: the sheet that was read.
+        header_row: the row its headers were read from.
+        rows_read: the data rows read, as Bronze would keep them.
+        rows_with_errors: rows with at least one error.
+        rows_with_warnings: rows with at least one warning.
+        blocking: whether an error stops this file from being loaded.
+        counts: how often each rule was broken in each column.
+    """
+
+    validated_at: AwareDatetime
+    sheet: str
+    header_row: int
+    rows_read: int
+    rows_with_errors: int
+    rows_with_warnings: int
+    blocking: bool
+    counts: list[RuleCountResponse]
+
+
+class DraftResponse(ResponseModel):
+    """One uploaded file, while it is prepared. Only its owner sees it.
+
+    Attributes:
+        draft_id: the draft's ID.
+        dataset_key: the dataset spec it is checked against.
+        status: ``receiving``, ``uploaded``, ``validated`` or ``failed``.
+        filename: the file's name, as given.
+        declared_bytes: the size the upload announced.
+        size_bytes: the size received; ``None`` until the file has arrived.
+        content_hash: the file's SHA-256; ``None`` until then.
+        created_at: when the upload began.
+        uploaded_at: when the original was archived.
+        expires_at: when the draft is purged if nobody works on it.
+        failure_code: why the upload failed, for a ``failed`` draft.
+        validation: what the last validation found; ``None`` before one.
+    """
+
+    draft_id: UUID
+    dataset_key: str
+    status: DraftStatusName
+    filename: str
+    declared_bytes: int
+    size_bytes: int | None
+    content_hash: str | None
+    created_at: AwareDatetime
+    uploaded_at: AwareDatetime | None
+    expires_at: AwareDatetime
+    failure_code: str | None
+    validation: DraftValidationResponse | None
+
+
+class IssueResponse(ResponseModel):
+    """One problem found in a draft's file.
+
+    The web app turns ``rule`` and ``params`` into a sentence of its own
+    language; the API sends no prose about the data.
+
+    Attributes:
+        row: the Excel row; ``None`` for the file as a whole.
+        column: the Excel column letter; ``None`` when not in one column.
+        column_key: the column's key; ``None`` for the file as a whole.
+        rule: the rule's ID, such as ``cell.type``.
+        severity: ``error``, ``warning`` or ``info``.
+        value: the text found, at most 200 characters.
+        params: what the sentence needs: the pattern, the allowed values ...
+    """
+
+    row: int | None
+    column: str | None
+    column_key: str | None
+    rule: str
+    severity: IssueSeverityName
+    value: str | None
+    params: dict[str, str | int | list[str]]
+
+
+class IssuesPageResponse(ResponseModel):
+    """A page of a draft's issues.
+
+    Attributes:
+        total: how many listed issues match the filter.
+        offset: where this page starts.
+        limit: the largest page asked for.
+        items: the issues, by row then column, the file's own first.
+    """
+
+    total: int
+    offset: int
+    limit: int
+    items: list[IssueResponse]
 
 
 class HealthResponse(ResponseModel):
@@ -521,9 +657,15 @@ __all__ = [
     "AuthClientConfig",
     "CheckResponse",
     "ClientConfigResponse",
+    "DraftResponse",
+    "DraftStatusName",
+    "DraftValidationResponse",
     "ErrorResponse",
     "HealthResponse",
     "IngestAcceptedResponse",
+    "IssueResponse",
+    "IssueSeverityName",
+    "IssuesPageResponse",
     "KPIPoint",
     "KPISeriesResponse",
     "KPISummaryItem",
@@ -533,6 +675,7 @@ __all__ = [
     "PowerBIClientConfig",
     "ReadinessResponse",
     "RejectedReading",
+    "RuleCountResponse",
     "RunDetailResponse",
     "RunListResponse",
     "RunState",
@@ -541,4 +684,5 @@ __all__ = [
     "UploadAcceptedResponse",
     "UploadHistoryItem",
     "UploadHistoryResponse",
+    "UploadLimits",
 ]

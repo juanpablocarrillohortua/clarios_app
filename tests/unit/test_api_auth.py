@@ -86,6 +86,8 @@ def test_without_a_token_a_guarded_route_answers_401(
 def test_writing_without_a_token_answers_401(client: TestClient, token_verifier: Any) -> None:
     assert client.post(f"/runs/{A_RUN}/retry").status_code == 401
     assert client.post("/uploads").status_code == 401
+    assert client.post("/drafts?dataset_key=lineas_produccion", content=b"PK").status_code == 401
+    assert client.post(f"/drafts/{A_RUN}/validate").status_code == 401
 
 
 @pytest.mark.parametrize("header", ["Basic dXNlcjpwYXNz", "Bearer", "token-without-a-scheme"])
@@ -199,7 +201,15 @@ def test_me_ignores_a_role_value_the_application_does_not_define(
 # =============================================================================
 @pytest.mark.parametrize(
     "path",
-    ["/uploads", "/runs", f"/runs/{A_RUN}", "/datasets", "/datasets/qad_facturas/template"],
+    [
+        "/uploads",
+        "/runs",
+        f"/runs/{A_RUN}",
+        "/datasets",
+        "/datasets/qad_facturas/template",
+        f"/drafts/{A_RUN}",
+        f"/drafts/{A_RUN}/issues",
+    ],
 )
 def test_a_viewer_is_refused_on_data_loading(
     client: TestClient, auth_headers: Any, path: str
@@ -223,6 +233,18 @@ def test_an_operator_and_above_reach_data_loading(
 
     assert response.status_code == 501
     assert response.json()["code"] == "not_implemented"
+
+
+def test_a_viewer_may_not_upload_and_the_file_is_not_read(
+    client: TestClient, auth_headers: Any
+) -> None:
+    response = client.post(
+        "/drafts?dataset_key=lineas_produccion",
+        content=b"PK not read",
+        headers={**auth_headers("viewer"), "X-File-Name": "a.xlsx"},
+    )
+
+    assert response.status_code == 403
 
 
 def test_only_an_operator_and_above_may_retry_a_run(client: TestClient, auth_headers: Any) -> None:

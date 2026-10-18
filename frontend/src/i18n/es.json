@@ -58,9 +58,196 @@
   },
   "loads": {
     "title": "Carga de datos",
-    "empty": "Aquí podrá agregar datos: subir un archivo, llenar un formulario o editar una tabla."
+    "intro": "Elija qué datos va a cargar y suba el archivo. Antes de que nada llegue a la base de datos, se revisa contra la plantilla.",
+    "dataset": {
+      "heading": "Datos que va a cargar",
+      "sheet": "Hoja «{{sheet}}» · {{count}} columnas",
+      "template": "Descargar plantilla",
+      "templateHint": "La plantilla tiene exactamente las columnas que se esperan.",
+      "templateFailed": "No se pudo descargar la plantilla. Intente de nuevo.",
+      "loading": "Cargando los conjuntos de datos…",
+      "failed": "No se pudo obtener la lista de conjuntos de datos.",
+      "none": "Todavía ningún conjunto de datos se carga desde un archivo."
+    },
+    "file": {
+      "heading": "Archivo",
+      "drop": "Arrastre aquí el archivo .xlsx",
+      "dropping": "Suelte el archivo para elegirlo",
+      "choose": "Elegir archivo",
+      "chooseAnother": "Elegir otro archivo",
+      "limits": "Hasta {{max}} · solo .xlsx",
+      "tooLarge": "Este archivo pesa {{size}}; el máximo es {{max}}.",
+      "notXlsx": "Solo se aceptan archivos .xlsx. Si tiene un .xls o un .csv, ábralo en Excel y guárdelo como «Libro de Excel (.xlsx)».",
+      "empty": "El archivo está vacío.",
+      "large": "Los archivos de más de {{limit}} se guardan, pero todavía no se validan.",
+      "upload": "Subir y validar",
+      "uploadOnly": "Subir"
+    },
+    "upload": {
+      "label": "Progreso de la carga",
+      "progress": "{{sent}} de {{total}} · {{percent}} %",
+      "remainingMinutes_one": "queda alrededor de {{count}} minuto",
+      "remainingMinutes_other": "quedan alrededor de {{count}} minutos",
+      "remainingSoon": "falta menos de un minuto",
+      "announce": "Carga al {{percent}} %",
+      "archiving": "Guardando el archivo…",
+      "cancel": "Cancelar",
+      "cancelled": "Carga cancelada. El archivo sigue elegido: puede subirlo de nuevo.",
+      "failed": "La carga se interrumpió. Revise su conexión e intente de nuevo.",
+      "tooLargeForServer": "El servidor no aceptó el archivo por su tamaño. Avise a un administrador.",
+      "refused": "El servidor no aceptó el archivo (código: {{code}}).",
+      "sessionRefused": "Su sesión ya no es válida. Recargue la página e inicie sesión de nuevo."
+    },
+    "draft": {
+      "loading": "Cargando el archivo subido…",
+      "missing": "Este archivo subido no existe o ya no está disponible. Los archivos que no se cargan se guardan 30 días.",
+      "failed": "No se pudo obtener el archivo subido.",
+      "unfinished": "La carga de este archivo no terminó. Súbalo de nuevo.",
+      "file": "{{name}} · {{size}}",
+      "validating": "Validando el archivo…",
+      "validate": "Validar",
+      "validateFailed": "No se pudo validar el archivo. Intente de nuevo.",
+      "busy": "El archivo se está validando en otra pestaña. Espere un momento e intente de nuevo.",
+      "archivedTitle": "Archivo guardado",
+      "notValidated": "La validación de archivos de más de {{limit}} llegará en una próxima versión. El archivo quedó guardado y no se cargó.",
+      "another": "Subir otro archivo"
+    },
+    "result": {
+      "blocking_one": "El archivo tiene {{rows}} fila con errores que impiden cargarlo.",
+      "blocking_other": "El archivo tiene {{rows}} filas con errores que impiden cargarlo.",
+      "fileBlocking": "El archivo tiene un problema que impide cargarlo.",
+      "warnings_one": "Sin errores · {{rows}} fila con advertencias.",
+      "warnings_other": "Sin errores · {{rows}} filas con advertencias.",
+      "clean": "El archivo cumple todas las reglas.",
+      "rowsRead": "Filas leídas",
+      "rowsWithErrors": "Con errores",
+      "rowsWithWarnings": "Con advertencias",
+      "nextStep": "Confirmar la carga llegará en una próxima versión: por ahora nada se escribe en la base de datos."
+    },
+    "issues": {
+      "heading": "Problemas encontrados",
+      "severityFilter": "Gravedad",
+      "allCount": "Todos ({{n}})",
+      "errorCount": "Errores ({{n}})",
+      "warningCount": "Advertencias ({{n}})",
+      "infoCount": "Información ({{n}})",
+      "rule": "Regla",
+      "anyRule": "Todas las reglas",
+      "column": "Columna",
+      "anyColumn": "Todas las columnas",
+      "row": "Fila",
+      "value": "Valor",
+      "detail": "Detalle",
+      "severity": "Gravedad",
+      "wholeFile": "Archivo",
+      "empty": "vacío",
+      "expected": "Formato esperado: {{pattern}}",
+      "range": "{{from}}–{{to}} de {{total}}",
+      "previous": "Anterior",
+      "next": "Siguiente",
+      "none": "Ninguna regla encontró problemas.",
+      "noMatch": "Ningún caso con estos filtros.",
+      "clearFilters": "Quitar filtros",
+      "failed": "No se pudo obtener la lista de problemas.",
+      "capped": "En la columna «{{column}}», «{{rule}}» afecta a {{rows}} filas; se muestran las primeras {{listed}}.",
+      "unknownRule": "Regla {{rule}}"
+    },
+    "severity": {
+      "error": "Error",
+      "warning": "Advertencia",
+      "info": "Información"
+    },
+    "types": {
+      "text": "un texto",
+      "integer": "un número entero",
+      "decimal": "un número",
+      "date": "una fecha de Excel"
+    },
+    "range": {
+      "both": "entre {{min}} y {{max}}",
+      "min": "como mínimo {{min}}",
+      "max": "como máximo {{max}}"
+    },
+    "unreadable": {
+      "not_a_zip": "El archivo no es un libro de Excel, aunque su nombre termine en .xlsx.",
+      "corrupt": "El archivo está dañado o incompleto. Ábralo en Excel, guárdelo de nuevo y vuelva a subirlo.",
+      "not_a_spreadsheet": "El archivo no es una hoja de cálculo de Excel.",
+      "macros": "El archivo tiene macros. Guárdelo como «Libro de Excel (.xlsx)», sin macros."
+    },
+    "rules": {
+      "file": {
+        "unreadable": {
+          "name": "Archivo ilegible",
+          "message": "El archivo no se puede leer como libro de Excel (.xlsx)."
+        },
+        "too_many_parts": {
+          "name": "Demasiadas partes",
+          "message": "El archivo tiene {{found}} partes internas; el máximo es {{limit}}."
+        },
+        "content_too_large": {
+          "name": "Contenido demasiado grande",
+          "message": "Abierto, el archivo ocuparía {{found_bytes}}; el máximo es {{limit_bytes}}."
+        },
+        "shared_strings_too_large": {
+          "name": "Demasiado texto",
+          "message": "El texto del archivo ocupa {{found_bytes}} al abrirlo; el máximo es {{limit_bytes}}."
+        },
+        "sheet_missing": {
+          "name": "Falta la hoja",
+          "message": "El archivo no tiene la hoja «{{sheet}}». Hojas encontradas: {{sheets}}."
+        },
+        "header_row_empty": {
+          "name": "Sin encabezados",
+          "message": "La fila {{row}} debería tener los encabezados y está vacía."
+        },
+        "no_rows": {
+          "name": "Sin filas",
+          "message": "La hoja «{{sheet}}» no tiene filas de datos debajo de los encabezados."
+        }
+      },
+      "schema": {
+        "header_mismatch": {
+          "name": "Encabezado distinto",
+          "message": "La columna se llama «{{found}}», pero la plantilla la llama «{{expected}}». Corrija el encabezado: con otro nombre, la columna no se usaría."
+        },
+        "column_missing": {
+          "name": "Falta una columna",
+          "message": "Falta la columna «{{header}}» de la plantilla."
+        },
+        "column_unknown": {
+          "name": "Columna desconocida",
+          "message": "La columna «{{header}}» no está en la plantilla. Sus valores se guardan, pero no se usan."
+        }
+      },
+      "cell": {
+        "required": {
+          "name": "Valor obligatorio",
+          "message": "Falta el valor; esta columna es obligatoria."
+        },
+        "type": {
+          "name": "Tipo de dato",
+          "message": "El valor no es {{type}}."
+        },
+        "pattern": {
+          "name": "Formato",
+          "message": "El valor no tiene el formato de esta columna."
+        },
+        "allowed": {
+          "name": "Valor no permitido",
+          "message": "El valor no es uno de los permitidos: {{allowed}}."
+        },
+        "range": {
+          "name": "Fuera de rango",
+          "message": "El valor debe estar {{range}}."
+        }
+      }
+    }
   },
   "datasets": {
+    "kind": {
+      "snapshot": "Catálogo",
+      "movement": "Movimientos"
+    },
     "lineas_produccion": {
       "name": "Líneas de producción",
       "description": "Catálogo de las líneas de producción: hoja «Lineas Produccion» del libro EQUS BATT."

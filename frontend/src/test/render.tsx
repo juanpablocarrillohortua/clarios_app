@@ -7,6 +7,7 @@ import { MemoryRouter } from "react-router";
 import { type Mock, vi } from "vitest";
 import { App } from "../App";
 import type { AuthConfig, PowerBiConfig } from "../api/config";
+import type { Datasets } from "../api/datasets";
 import type { Me } from "../api/me";
 import type { Account, AuthClient, CreateAuthClient } from "../auth/authClient";
 import type {
@@ -151,8 +152,14 @@ interface RenderOptions {
   loadEmbedReport?: LoadEmbedReport;
 }
 
-/** Render the whole app as if the browser had opened `path`. */
-export function renderAppAt(path: string, options: RenderOptions = {}) {
+/**
+ * Render the whole app as if the browser had opened `path`. An object also
+ * gives the history state the page arrives with, as `navigate` would.
+ */
+export function renderAppAt(
+  path: string | { pathname: string; search?: string; state?: unknown },
+  options: RenderOptions = {},
+) {
   const auth = options.auth ?? fakeAuth();
   const embed = options.embed ?? fakeEmbed();
   const createAuthClient = vi.fn<CreateAuthClient>(options.createAuthClient ?? (async () => auth));
@@ -189,7 +196,59 @@ export function json(body: unknown, status = 200): Response {
   });
 }
 
-type Answer = () => Response | Promise<Response>;
+type Answer = (init?: RequestInit) => Response | Promise<Response>;
+
+const MIB = 1024 * 1024;
+
+/**
+ * What GET /api/datasets answers: the two pilots, cut down to what the pages
+ * read, and the server's limits (300 MiB, 5 MiB). The labels are keys of
+ * es.json, as the real specs' are.
+ */
+export const datasetsAnswer: Datasets = {
+  datasets: [
+    {
+      key: "lineas_produccion",
+      kind: "snapshot",
+      origin: "catalogue",
+      label: "datasets.lineas_produccion.name",
+      description: "datasets.lineas_produccion.description",
+      entry_modes: ["upload", "grid", "form"],
+      sheet: "Lineas Produccion",
+      header_row: 1,
+      natural_key: ["Línea"],
+      period_column: null,
+      columns: [
+        {
+          header: "Línea",
+          key: "Línea",
+          label: null,
+          type: "text",
+          required: true,
+          pattern: "^[A-Z0-9]+$",
+          allowed: null,
+          min: null,
+          max: null,
+          severity: "error",
+        },
+      ],
+    },
+    {
+      key: "qad_facturas",
+      kind: "movement",
+      origin: "export",
+      label: "datasets.qad_facturas.name",
+      description: "datasets.qad_facturas.description",
+      entry_modes: ["upload"],
+      sheet: "Datos",
+      header_row: 1,
+      natural_key: ["Núm Fact", "Orden", "Línea"],
+      period_column: "Fecha Efectiva",
+      columns: [],
+    },
+  ],
+  limits: { max_file_bytes: 300 * MIB, validated_in_request_bytes: 5 * MIB },
+};
 
 interface ApiStub {
   /** Who GET /api/me says is signed in. Defaults to an operator. */
@@ -200,6 +259,15 @@ interface ApiStub {
   powerBi?: PowerBiConfig | null;
   /** Replaces the answer to one address, for example to make it fail. */
   answers?: Record<string, Answer>;
+}
+
+/** The address a call to the stand-in went to, and how. */
+export function calls(fetchStub: Mock) {
+  return fetchStub.mock.calls.map(([input, init]) => ({
+    address: String(input),
+    method: (init as RequestInit | undefined)?.method ?? "GET",
+    headers: new Headers((init as RequestInit | undefined)?.headers),
+  }));
 }
 
 /**
@@ -218,11 +286,12 @@ export function stubApi({
     "/api/health": () =>
       json({ status: "ok", service: "clarios-energy", version, environment: "test" }),
     [powerBiConfig.report_api_url]: () => json({ embedUrl: EMBED_URL }),
+    "/api/datasets": () => json(datasetsAnswer),
   };
-  const fetchStub = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+  const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const address = String(input);
     const answer = answers[address] ?? usual[address];
-    return answer ? answer() : json({ code: "not_found" }, 404);
+    return answer ? answer(init) : json({ code: "not_found" }, 404);
   });
   vi.stubGlobal("fetch", fetchStub);
   return fetchStub;

@@ -24,6 +24,7 @@ exists and what it guarantees. New to the project? Start with the
 | `silver` | Validated readings; EQUS tables | Readings: insert + supersede, never delete. EQUS: rebuilt from Bronze |
 | `gold` | Published KPIs; EQUS Gold | KPIs: replaced per period. EQUS: views over Silver, plus the frozen monthly close, changed only by a reclose |
 | `reporting` | Read-only views for BI tools such as Power BI | Views only; nothing is stored |
+| `staging` | Files uploaded through the web app, while they are checked | A working area: a new check replaces the last; abandoned drafts are purged after 30 days |
 
 ---
 
@@ -992,6 +993,79 @@ on the schema and `SELECT` on every view, and no privilege on any other schema.
   `recibos_produccion` holds the 138,773 receipts.
 - **Speed:** every view answers in under a second, except
   `calidad_datos_mensual`, which takes about 3 seconds.
+
+---
+
+## `staging` — uploads while they are checked
+
+Created by [`0007_create_staging_schema.py`](../migrations/versions/0007_create_staging_schema.py).
+The API's `/api/drafts` routes write it ([api.md](api.md)); what a file is
+checked against is in [dataset-specs.md](dataset-specs.md#what-a-file-is-checked-against).
+
+A working area, not a layer of the medallion: nothing here is evidence, no
+foreign key points into Bronze, and nothing in Bronze points here. The schema
+belongs to the application's role; `PUBLIC` and `reporting_reader` have no
+privilege on it.
+
+### `staging.drafts`
+
+One upload of one `.xlsx` for one dataset spec.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| `draft_id` | `UUID` | no | Primary key. |
+| `dataset_key` | `VARCHAR(64)` | no | The spec, `config/datasets/<key>.yaml`. Not a foreign key: specs are files. |
+| `source_key` | `VARCHAR(64)` | no | The spec's Bronze source; one of the five EQUS keys. |
+| `plant_code` | `VARCHAR(32)` | no | `1515`. |
+| `input_mode` | `VARCHAR(10)` | no | `upload` today; `grid` and `form` arrive with later increments. |
+| `status` | `VARCHAR(20)` | no | `receiving` while the bytes arrive, `uploaded` once the original is archived, `validated` once checked, `failed` when the upload broke off or was refused. |
+| `filename` | `TEXT` | no | The name the person gave, cleaned: last path segment, NFC, no control characters, 1 to 255 characters. Data only: never a key or a path. |
+| `content_type` | `VARCHAR(150)` | no | What the browser declared. Not trusted: the bytes are checked. |
+| `declared_bytes` | `BIGINT` | no | The upload's `Content-Length`. |
+| `size_bytes`, `content_hash` | `BIGINT`, `CHAR(64)` | yes | Size and SHA-256 of what arrived; null until then. |
+| `bucket`, `object_key` | `VARCHAR(63)`, `TEXT` | yes | Where the original is archived: `bronze-raw`, `1515/<source_key>/<YYYY>/<MM>/<DD>/<sha256>.xlsx`, the key the Bronze loader uses for the same bytes. |
+| `created_by`, `created_by_name` | `VARCHAR(64)`, `VARCHAR(200)` | no, yes | The person: Entra ID's subject (object ID), and their name for display. Only they see the draft. |
+| `created_at`, `uploaded_at`, `validated_at` | `TIMESTAMPTZ` | no, yes, yes | When the upload began, when the original was archived, when it was last checked. |
+| `expires_at` | `TIMESTAMPTZ` | no | When an abandoned draft is purged: 30 days after the last work on it (question 17 of the frontend plan). |
+| `failure_code` | `VARCHAR(64)` | yes | Why a `failed` upload failed: `file_too_large`, `unsupported_file_format`, `incomplete_upload`, `client_disconnected`, `source_unavailable`. |
+| `sheet_name`, `header_row`, `rows_read`, `rows_with_errors`, `rows_with_warnings` | | yes | What the last check found. |
+
+**Constraints:** the statuses, input modes and source keys above; the hash
+format; `uploaded` and `validated` drafts know their size, hash, bucket and key;
+a `validated` draft knows when and how many rows; the row counts are consistent.
+**Indexes:** `(created_by, created_at DESC)`, `expires_at`, `content_hash`.
+
+### `staging.draft_rows`
+
+The rows of a checked file exactly as Bronze would land them, from the same
+rules (`energy.domain.landing`): `(draft_id, source_row)` as key,
+`content_hash` (SHA-256 of the canonical payload) and `payload` (JSONB object).
+Written by the check, for files the API checks itself (up to 5 MiB).
+
+### `staging.draft_issues`
+
+The first 1,000 issues of each rule in each column.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| `issue_id` | `BIGINT` | no | Identity. |
+| `draft_id` | `UUID` | no | The draft; removing it removes its issues. |
+| `rule_id` | `VARCHAR(40)` | no | The rule, for example `cell.type` ([the list](dataset-specs.md#what-a-file-is-checked-against)). |
+| `severity` | `VARCHAR(10)` | no | `error`, `warning` or `info`. |
+| `source_row` | `INTEGER` | yes | The Excel row; null for the file as a whole. |
+| `column_index` | `INTEGER` | yes | The 0-based Excel column (0 is A); null when not in one column. |
+| `column_key` | `TEXT` | yes | The column's payload key. |
+| `value` | `TEXT` | yes | The text found, at most 200 characters. |
+| `params` | `JSONB` | no | What the message needs: the pattern, the allowed values, the bounds. |
+
+**Indexes:** `(draft_id, source_row, column_index)` for the list in order, and
+`(draft_id, severity, rule_id)` for its filters.
+
+### `staging.draft_rule_counts`
+
+Every issue, counted: `(draft_id, rule_id, column_key)` as key (`column_key`
+empty for the file as a whole), `severity`, `rows_affected` (every row that
+broke the rule) and `issues_listed` (how many of them `draft_issues` holds).
 
 ---
 

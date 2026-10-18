@@ -114,7 +114,7 @@ to Microsoft with that account is usually not asked for the password again.
 | Role | May |
 |---|---|
 | `viewer` | See the dashboard |
-| `operator` | The above, and load data, see the history of loads, and read the dataset specs and download their templates |
+| `operator` | The above, and load data, see the history of loads, and read the dataset specs and download their templates. A file someone uploads is theirs alone: nobody else sees it, whatever their role |
 | `engineer`, `admin` | The same as `operator` today; more arrives with later features |
 | No role | Sign in, and nothing else. The app shows a page saying so |
 
@@ -130,8 +130,13 @@ Every answer of the API carries a number, the *status code*. Four of them mean
 |---|---|---|
 | Sign in first | 401 | Nobody is signed in, or the pass is not valid: expired, altered, or issued for something else |
 | You may not do this | 403 | You are signed in, and your role does not allow this request |
-| Not built yet | 501 | The request is defined, and the feature behind it is not written yet |
+| Not built yet | 501 | The request is defined, and the feature behind it is not written yet. Validating an uploaded file over 5 MB answers this too: the file is kept, and its check arrives later |
 | I cannot check passes right now | 503 | The API could not obtain Microsoft's keys, or was not told where users sign in. It lets nobody in until it can check |
+
+An upload has refusals of its own: a file over 300 MB (413), a file that is not
+an `.xlsx` (415), a request that does not say the file's size (411). The app
+checks the first two before it sends anything, so a person meets them only
+when something else sends the file.
 
 The app hides what you may not open, so you rarely meet these. The API refuses
 by itself all the same, whatever the app shows.
@@ -201,10 +206,11 @@ flowchart LR
 | **Works** | Signing in, and the answer to "who am I, and what may I do?" |
 | **Works** | The health checks: is the API running, and can it reach the database? |
 | **Works** | The settings the app reads when it starts: where users sign in, and which report the dashboard shows |
-| **Works** | The kinds of data the app knows how to load ("dataset specs"), and an empty template of each to download. Two so far: production lines and invoice lines. Built on 2026-10-17; the web app does not show them yet |
+| **Works** | The kinds of data the app knows how to load ("dataset specs"), and an empty template of each to download. Two so far: production lines and invoice lines. Built on 2026-10-17 |
+| **Works** | Uploading a file of up to 300 MB from the web app, and checking a file of up to 5 MB against its dataset's spec: every problem, with its row, column and rule. The file is kept; nothing reaches the database's evidence (Bronze) yet. Built on 2026-10-17; seeing it as a signed-in user is still to be checked in a browser |
 | **Works, outside the API** | Loading the exports and calculating the figures, by commands on the server |
 | **Works, outside the API** | Power BI reading the equivalent batteries through the reporting views |
-| **Defined, not built** | Loading a file from the web app, and the list of past loads |
+| **Planned** | Confirming an upload, so that it lands in the database, and the list of past loads. Checking files over 5 MB |
 | **Defined, not built** | The history of processing runs |
 | **Defined, not built** | Readings sent by the plant's devices |
 | **Built, outside the API** | The Power BI report shown inside the web app's dashboard. Built on 2026-10-13; seeing it as a signed-in user is still to be checked in a browser |
@@ -315,8 +321,12 @@ refused, and how the app and Entra ID take part.
 | `GET /api/runs/{run_id}` | `loads:write` | Placeholder, Phase 3 | One run in detail |
 | `GET /api/runs/{run_id}/quarantine` | `loads:write` | Placeholder, Phase 3 | The rows a run rejected, and why |
 | `POST /api/runs/{run_id}/retry` | `loads:write` | Placeholder, Phase 3 | 202 with the ID of the new run |
-| `GET /api/datasets` | `loads:write` | Built | Every dataset spec: its kind, where it comes from, how rows may be entered, its sheet, natural key, period column and columns |
+| `GET /api/datasets` | `loads:write` | Built | Every dataset spec: its kind, where it comes from, how rows may be entered, its sheet, natural key, period column and columns; and `limits`, the largest file accepted and the largest validated now |
 | `GET /api/datasets/{dataset_key}/template` | `loads:write` | Built | The dataset's empty `.xlsx` template, named `<dataset_key>.xlsx`: its sheet, with exactly the spec's headers. 404 with `code` `unknown_dataset` for a key no spec has |
+| `POST /api/drafts` | `loads:write` | Built | Takes one `.xlsx` as the raw body (query `dataset_key`, headers `Content-Length` and `X-File-Name`), streams it to object storage and answers 201 with the new draft and its `Location`; 200 with the earlier draft when the same person sends the same bytes for the same dataset again. 411, 413, 415 and 400 refuse it before or while it arrives |
+| `GET /api/drafts/{draft_id}` | `loads:write`, the draft's owner only | Built | The draft, and what its last validation found: rows read, rows with errors and with warnings, whether it can be loaded, and how often each rule broke in each column. 404 `unknown_draft` for anyone else's |
+| `POST /api/drafts/{draft_id}/validate` | `loads:write`, the draft's owner only | Built | Checks the file against its dataset spec, replacing earlier results, and answers the draft. 409 `draft_busy` while it is arriving or being validated; 501 `not_implemented` for a file over 5 MiB |
+| `GET /api/drafts/{draft_id}/issues` | `loads:write`, the draft's owner only | Built | A page of the issues found (`offset`, `limit` up to 500), filtered by `severity`, `rule` and `column`: each with its row, column, rule, severity, value and the values its sentence needs |
 | `POST /api/ingest/readings` | Devices. Not enforced yet | Placeholder, Phase 3 | The accepted and rejected counts of a batch |
 | `GET /api/ingest/watermark/{plant_code}/{source_key}` | Devices. Not enforced yet | Placeholder, Phase 3 | The newest timestamp held for a plant and source |
 
@@ -424,7 +434,8 @@ A person without a role gets the same shape with `"roles": []` and
          "pattern": null, "allowed": null, "min": null, "max": null, "severity": "error"}
       ]
     }
-  ]
+  ],
+  "limits": {"max_file_bytes": 314572800, "validated_in_request_bytes": 5242880}
 }
 ```
 
@@ -438,6 +449,96 @@ A person without a role gets the same shape with `"roles": []` and
   not texts. The app shows the header of a column without a `label`.
 - **Nothing about Bronze or Silver is in the answer:** the app needs only what
   a person sees and types.
+- **`limits`** are the sizes of increment 5: a file may be up to 300 MiB, and
+  the API validates one of up to 5 MiB itself. The browser checks a file
+  against `max_file_bytes` before sending a byte.
+
+`POST /api/drafts`, with `dataset_key=lineas_produccion`, the synthetic broken
+catalogue of `tests/fixtures/workbooks.py` as the body and
+`X-File-Name: L%C3%ADneas%20rotas.xlsx`: 201, with the draft's address in
+`Location`
+
+```json
+{
+  "draft_id": "038ab17d-3944-4ba0-b75b-5556f85d39a0",
+  "dataset_key": "lineas_produccion",
+  "status": "uploaded",
+  "filename": "Líneas rotas.xlsx",
+  "declared_bytes": 5422,
+  "size_bytes": 5422,
+  "content_hash": "1dfec722923b25a122f8acfdffcef9c0a7e3b556b5cb059bd8d2d4f915f48997",
+  "created_at": "2026-10-17T18:50:45.076485Z",
+  "uploaded_at": "2026-10-17T18:50:45.193724Z",
+  "expires_at": "2026-11-16T18:50:45.193724Z",
+  "failure_code": null,
+  "validation": null
+}
+```
+
+`POST /api/drafts/{draft_id}/validate`, the same draft once validated (10
+counts; three shown)
+
+```json
+{
+  "draft_id": "038ab17d-3944-4ba0-b75b-5556f85d39a0",
+  "status": "validated",
+  "validation": {
+    "validated_at": "2026-10-17T18:50:45.252264Z",
+    "sheet": "Lineas Produccion",
+    "header_row": 1,
+    "rows_read": 9,
+    "rows_with_errors": 7,
+    "rows_with_warnings": 0,
+    "blocking": true,
+    "counts": [
+      {"rule": "cell.allowed", "severity": "error", "column": "Firma Automática", "rows": 1, "listed": 1},
+      {"rule": "schema.column_missing", "severity": "warning", "column": "Última Firma Automática", "rows": 1, "listed": 1},
+      {"rule": "schema.header_mismatch", "severity": "error", "column": "Descripción", "rows": 1, "listed": 1}
+    ]
+  }
+}
+```
+
+`GET /api/drafts/{draft_id}/issues`, with `severity=error` and `limit=2`
+
+```json
+{
+  "total": 8,
+  "offset": 0,
+  "limit": 2,
+  "items": [
+    {"row": 1, "column": "C", "column_key": "Descripción", "rule": "schema.header_mismatch",
+     "severity": "error", "value": "Descripcion",
+     "params": {"found": "Descripcion", "expected": "Descripción"}},
+    {"row": 3, "column": "A", "column_key": "Línea", "rule": "cell.required",
+     "severity": "error", "value": null, "params": {}}
+  ]
+}
+```
+
+- **The body is the file itself,** not a form: the API streams it to object
+  storage a part (8 MiB) at a time and never holds it whole. A form would be
+  parsed into a temporary file before the handler could start. The file's
+  name is percent-encoded UTF-8, because a header holds ASCII only, and it is
+  data: no key or path is ever made of it.
+- **The size is checked three times.** `Content-Length` over 300 MiB is a 413
+  before a byte is read; the bytes are counted as they arrive; and Caddy
+  allows no body over 300 MiB on this route (10 MiB on every other). Without
+  `Content-Length` the answer is 411. The first four bytes must be those of a
+  zip archive, which every `.xlsx` is, or the upload stops with 415.
+- **The original is archived under the key the Bronze loader uses,**
+  `1515/<source_key>/<YYYY>/<MM>/<DD>/<sha256>.xlsx` in `bronze-raw`. Nothing
+  is written to Bronze's tables: the commit of a later increment registers the
+  file and lands the rows.
+- **Rules are sent as IDs and values, never as sentences.** The web app keeps
+  the sentence of every rule in its translation file, and a test of the server
+  checks that every rule has one. The rules are in
+  [Dataset specs](dataset-specs.md#what-a-file-is-checked-against).
+- **The list is capped, the counts are not.** Each rule lists its first 1,000
+  issues per column; `counts` gives every row it broke.
+- **A draft is its owner's.** Anyone else gets 404, as for a draft that does
+  not exist. A draft not worked on for 30 days is purged
+  (`energy drafts purge`).
 
 ### 3. The three parties
 
@@ -627,15 +728,20 @@ developer; the app shows its own texts and reads only the status and the
 
 | Status | `code` | When | Body |
 |---|---|---|---|
-| 200, 202 | | Success. 202 means "accepted, follow the run" | The endpoint's model |
-| 400 | The error's own, for example `invalid_time_window` | A rule of the domain refused the request: any `EnergyError` without a row of its own | Envelope |
+| 200, 201, 202 | | Success. 201: a draft was created, and `Location` names it. 202 means "accepted, follow the run" | The endpoint's model |
+| 400 | The error's own, for example `invalid_time_window`, `invalid_filename`, `incomplete_upload` or `entry_mode_not_allowed` | A rule of the domain refused the request: any `EnergyError` without a row of its own | Envelope |
 | 401 | `unauthenticated` | No token, or a token that failed a check of section 5 | Envelope, with a fixed message and empty `details` |
 | 403 | `forbidden` | A valid token without the permission the route needs | Envelope; `details.permission` names it |
-| 404 | `entity_not_found` | A lookup by identifier found nothing | Envelope |
+| 404 | `entity_not_found`, or `unknown_dataset` and `unknown_draft` | A lookup by identifier found nothing. A draft of someone else answers the same | Envelope |
+| 409 | `draft_busy` | A draft still arriving, failed, or being validated by another request | Envelope |
+| 411 | `length_required` | An upload without `Content-Length` | Envelope |
+| 413 | `file_too_large` | An upload over 300 MiB: announced by `Content-Length`, or counted as it arrives | Envelope. Caddy refuses a body over its limit itself, before the API: 413 with an empty body, or a cut connection |
+| 415 | `unsupported_file_format`, `empty_file` | An upload whose name, declared type or first bytes are not an `.xlsx`, or that is empty | Envelope |
 | 404 | | No such path | FastAPI's own: `{"detail": "Not Found"}` |
 | 422 | | A parameter or the body failed validation | FastAPI's own: `{"detail": [ … ]}`, one entry per problem |
 | 500 | | An error nobody foresaw. The log line `request failed` has the traceback and the request ID | Plain text, without the `X-Request-ID` header |
-| 501 | `not_implemented` | A placeholder endpoint. The message names the phase | Envelope |
+| 501 | `not_implemented` | A placeholder endpoint, or a feature not built for this input (the validation of a draft over 5 MiB). The message names the phase or increment | Envelope |
+| 503 | `source_unavailable` | Object storage could not be reached, or refused to store a file | Envelope |
 | 503 | `auth_not_configured` | A token arrived, and `ENTRA_TENANT_ID` or `ENTRA_CLIENT_ID` is not set | Envelope |
 | 503 | `identity_provider_unavailable` | The signing keys could not be fetched and none are held | Envelope |
 | 503 | | `GET /api/ready` found a dependency down | The readiness payload |
@@ -676,7 +782,10 @@ docker compose logs api | grep <request id>
 
 | File | Does |
 |---|---|
-| [`frontend/src/api/client.ts`](../frontend/src/api/client.ts) | `createApi(auth).get(path)`: asks the sign-in client for a token, calls `/api` + `path` with `Authorization: Bearer`, and throws `ApiError(status, code)` for an answer that is not a success |
+| [`frontend/src/api/client.ts`](../frontend/src/api/client.ts) | `createApi(auth)`: `get(path)`, `post(path)` and `download(path)` ask the sign-in client for a token, call `/api` + `path` with `Authorization: Bearer`, and throw `ApiError(status, code)` for an answer that is not a success. `download` returns the file and the name the API gave it |
+| [`frontend/src/api/datasets.ts`](../frontend/src/api/datasets.ts) | `fetchDatasets(api)`: `GET /api/datasets`, the specs and the upload `limits`. `downloadTemplate(api, key)` |
+| [`frontend/src/api/drafts.ts`](../frontend/src/api/drafts.ts) | `uploadDraft(...)`: `POST /api/drafts` through `upload.ts`, with a token asked for just before sending. `fetchDraft`, `validateDraft` and `fetchIssues` for the other three |
+| [`frontend/src/api/upload.ts`](../frontend/src/api/upload.ts) | The only file that uses `XMLHttpRequest`, because `fetch` reports no upload progress. It sends the file as the raw body with its name percent-encoded in `X-File-Name`, and stops on an `AbortSignal` |
 | [`frontend/src/api/config.ts`](../frontend/src/api/config.ts) | `fetchClientConfig()`: `GET /api/config`, without a token. Its answer also names the report of the dashboard |
 | [`frontend/src/api/me.ts`](../frontend/src/api/me.ts) | `fetchMe(api)`: `GET /api/me`, with the token |
 | [`frontend/src/api/health.ts`](../frontend/src/api/health.ts) | `fetchHealth()`: `GET /api/health`, without a token. The status line of the header asks every 30 seconds |
@@ -711,8 +820,14 @@ API helper, and the answer of `/api/me`.
   hands `/api` to the stack on port 8080 through its proxy, so the app's code
   is the same in both. `API_CORS_ORIGINS` matters only for a client served
   from another address.
-- **Only `GET` exists in the client so far.** Sending a file arrives with the
-  data-loading increments of [the frontend plan](frontend-plan.md).
+- **A file is sent once, as it is.** The loading page checks a file's name,
+  emptiness and size against `limits` before anything leaves the browser,
+  then sends it with `upload.ts`, showing the bytes as they leave. Cancelling
+  aborts the request; the API removes what it had received. Once the draft
+  exists the page moves to `/loads/drafts/<id>`, asks once for its validation,
+  and pages through its issues. That address survives a reload or a new
+  sign-in. The sentences of the rules are the app's (`loads.rules.*` of
+  `es.json`); the API sends their IDs and values.
 - **The dashboard asks the API for nothing more.** Once it knows which report
   to show, it talks to Entra ID and to Power BI (section 9, "The report inside
   the web app").
@@ -908,6 +1023,24 @@ curl -s -H "Authorization: Bearer $TOKEN" -OJ http://localhost:8080/api/datasets
 The second saves `qad_facturas.xlsx` in the current folder. Swagger UI offers
 the same two calls, and a download link for the file.
 
+**An upload, its validation and its issues.** The file is the body itself;
+`--data-binary` sends it as it is, and curl adds `Content-Length`.
+`scripts/make_test_workbooks.py <folder>` writes made-up files to try,
+`lineas_rota.xlsx` among them, with the list of every issue it must show:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN"   -H "Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"   -H "X-File-Name: lineas_rota.xlsx" --data-binary @lineas_rota.xlsx   "http://localhost:8080/api/drafts?dataset_key=lineas_produccion"
+DRAFT=<the draft_id of the answer>
+curl -s -X POST -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/drafts/$DRAFT/validate
+curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/drafts/$DRAFT/issues?severity=error"
+```
+
+A file of more than 5 MB answers 201 and then 501 to the validation; one of
+more than 300 MB answers 413 (with `--large`, the script writes one of each).
+Remove a draft and its original at once with
+`energy drafts purge --draft-id $DRAFT`; `energy drafts purge --dry-run` says
+what the purge of expired drafts would remove.
+
 **A malformed spec stops the API.** Check the specs without starting anything:
 `energy datasets check`, or `energy datasets check --config-dir <folder>` for a
 copy being edited ([Dataset specs](dataset-specs.md#checking-a-spec)).
@@ -929,6 +1062,10 @@ ticket, a chat or this repository.
 | `tests/unit/test_settings.py` | The settings, among them the two that name the report: empty means not configured, and a value that is not a GUID is refused |
 | `tests/unit/test_api_datasets.py` | The two dataset routes: who may call them, the specs described, the template read back, the 404, and a malformed spec stopping the app from being built |
 | `tests/unit/test_dataset_spec.py`, `test_yaml_dataset_specs.py`, `test_dataset_specs_committed.py`, `test_xlsx_dataset_template.py` | What a spec may hold, one case per kind of mistake; reading them from their folder; the committed specs against the loader's routes, the Silver build's SQL, the translation file and the real workbooks; every template read back by the Bronze reader |
+| `tests/unit/test_api_drafts.py` | The four draft routes through the API with the real service, an in-memory repository and a directory archive: 201 and 200, every refusal (400, 404, 411, 413, 415), owner only, validation, the 409 and the 501, issues filtered and paged |
+| `tests/unit/test_drafts.py`, `test_draft_rules.py`, `test_zip_package.py`, `test_draft_service.py`, `test_caddyfile.py` | The limits and the upload guard; each rule, with the Silver build's own number and the sentences of `es.json`; the archive's limits and a lying archive; the use cases, including a client that goes away and the purge; the Caddyfile's limits against the API's |
+| `tests/integration/test_drafts_end_to_end.py` | Against PostgreSQL and MinIO: every planted issue found, the original archived under its hash, Bronze unchanged, and a 96 MiB upload through the API under a memory bound |
+| `frontend/src/loads/*.test.tsx`, `frontend/src/api/upload.test.ts` | The loading pages: datasets, template, the checks before sending, progress, cancel, every refusal, the validation and the issues list, with a stand-in for `XMLHttpRequest` |
 | `frontend/src/pages/DashboardPage.test.tsx`, `frontend/src/powerbi/*.test.ts` | The dashboard: the report shown, its token replaced, and each message, with stand-ins for sign-in and for Power BI. One file runs Microsoft's embedding library itself, in a test browser that loads nothing |
 
 - **Tests never reach Entra ID.** The fixture `token_verifier` replaces the
@@ -952,6 +1089,13 @@ ticket, a chat or this repository.
 ### 14. Not built yet, and limits
 
 - **The endpoints for data.** Section 2 marks each placeholder with its phase.
+- **An upload does not resume.** A connection that breaks loses the upload:
+  the API removes what it had received, and the file is sent again whole.
+- **A file over 5 MiB is kept, not validated.** Its validation answers 501
+  until the worker validates large files (increment 12 of the frontend plan).
+- **A draft is its owner's only,** whatever the role. Nobody else can see it,
+  validate it or list its issues.
+- **Nothing reaches Bronze from a draft yet.** Confirming a load is increment 7.
 - **No figure comes from the API.** The KPI endpoints are placeholders that
   Phase 4 removes
   ([ADR 0007](adr/0007-figures-reach-people-through-power-bi.md)). A figure is

@@ -285,7 +285,9 @@ describe("the report's token", () => {
 
     expect(await screen.findByText(problems.authorize.title)).toBeInTheDocument();
     expect(screen.getByText(codeLine("login_required"))).toBeInTheDocument();
-    expect(report.remove).toHaveBeenCalledTimes(1);
+    // The frame goes in an effect's clean-up, which React may run after the
+    // problem is already on screen: under a loaded machine, it once had not.
+    await waitFor(() => expect(report.remove).toHaveBeenCalledTimes(1));
   });
 });
 

@@ -191,6 +191,8 @@
   --ce-tracking-display: -0.02em;
   --ce-tracking-title: -0.01em;
   --ce-tracking-small: 0.01em;
+  /* Codes and patterns shown as written, such as a column's expected format. */
+  --ce-font-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
 
   /* Motion ------------------------------------------------------------------ */
 
@@ -223,6 +225,9 @@
   --ce-ease-out: cubic-bezier(0.2, 0, 0, 1);
   --ce-duration-press: 100ms;
   --ce-duration-fade: 180ms;
+  /* An upload's bar follows the bytes sent: each step glides to the next,
+     linearly, and a new step starts from where the bar is. */
+  --ce-duration-progress: 200ms;
   /* A pressed control shrinks a little, on pointer-down. */
   --ce-press-scale: 0.97;
   /* How far a panel rises as it appears. */
@@ -239,6 +244,7 @@
     --ce-duration-spring: 0ms;
     --ce-duration-press: 0ms;
     --ce-duration-fade: 120ms;
+    --ce-duration-progress: 0ms;
     --ce-press-scale: 1;
     --ce-enter-offset: 0px;
   }

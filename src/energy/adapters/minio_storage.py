@@ -10,6 +10,10 @@ Responsibility:
     verified against its recorded SHA-256 on read, so a Bronze row's
     ``source_uri`` always resolves to the exact bytes that produced it.
 
+    An upload of up to 300 MB passes through as a multipart upload, a part at
+    a time, and is read back into a file a megabyte at a time; neither ever
+    holds the whole payload.
+
 Depends on:
     ``energy.ports.object_storage``, ``energy.domain``,
     ``energy.core.settings``, ``minio``.
@@ -21,14 +25,16 @@ import hashlib
 import io
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 import certifi
 import urllib3
 from minio import Minio
+from minio.commonconfig import REPLACE, CopySource
 from minio.error import MinioException, S3Error
 from urllib3.exceptions import HTTPError
 
+from energy.domain.drafts import UPLOAD_PART_BYTES
 from energy.domain.exceptions import (
     ContentHashMismatchError,
     EntityNotFoundError,
@@ -41,8 +47,10 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
     from datetime import timedelta
     from io import BufferedReader
+    from typing import BinaryIO
 
     from energy.core.settings import MinioSettings
+    from energy.ports.object_storage import ByteSource
 
 # S3 returns user metadata as HTTP headers carrying this prefix.
 _USER_METADATA_PREFIX: Final = "x-amz-meta-"
@@ -52,6 +60,7 @@ _DEFAULT_CONTENT_TYPE: Final = "application/octet-stream"
 _CONNECT_TIMEOUT_SECONDS: Final = 10.0
 _READ_TIMEOUT_SECONDS: Final = 300.0
 _RETRIES: Final = 2
+_DOWNLOAD_CHUNK_BYTES: Final = 1024 * 1024
 
 
 @contextmanager
@@ -69,6 +78,30 @@ def _translated(bucket: str, key: str | None = None) -> Iterator[None]:
         raise SourceUnavailableError(
             "object storage is unreachable", bucket=bucket, key=key, reason=str(exc)
         ) from exc
+
+
+class _HashingReader:
+    """Read from a source, hashing and counting what passes.
+
+    Args:
+        source: where the bytes come from.
+    """
+
+    def __init__(self, source: ByteSource) -> None:
+        self._source = source
+        self._digest = hashlib.sha256()
+        self.size = 0
+
+    def read(self, size: int = -1, /) -> bytes:
+        """Return up to ``size`` bytes of the source."""
+        chunk = self._source.read(size)
+        self._digest.update(chunk)
+        self.size += len(chunk)
+        return chunk
+
+    def hexdigest(self) -> str:
+        """Return the SHA-256 of everything read so far."""
+        return self._digest.hexdigest()
 
 
 def _http_client() -> urllib3.PoolManager:
@@ -171,6 +204,156 @@ class MinioObjectStorage:
             stored_at=datetime.now(UTC),
             metadata=user_metadata,
         )
+
+    def put_stream(
+        self,
+        bucket: str,
+        key: str,
+        source: ByteSource,
+        content_type: str,
+        metadata: Mapping[str, str] | None = None,
+    ) -> StoredObject:
+        """Store a payload of unknown length as a multipart upload.
+
+        One part (8 MiB) is sent at a time. If reading ``source`` raises, the
+        client aborts the multipart upload, so nothing is left under ``key``,
+        and the error propagates unchanged. MinIO also removes, after a day,
+        the parts of an upload whose process died before it could abort.
+
+        Args:
+            bucket: target bucket.
+            key: object key.
+            source: where the bytes are read from, until it returns ``b""``.
+            content_type: MIME type of the payload.
+            metadata: user metadata to attach. The content hash is not known
+                before the end, so it is not attached here.
+
+        Returns:
+            The :class:`~energy.ports.object_storage.StoredObject` written,
+            with the size and SHA-256 of what was read.
+
+        Raises:
+            FileExistsError: if the key is already present.
+            SourceUnavailableError: if MinIO is unreachable.
+        """
+        if self.exists(bucket, key):
+            raise FileExistsError(f"object already exists: {bucket}/{key}")
+
+        reader = _HashingReader(source)
+        with _translated(bucket, key):
+            self._client.put_object(
+                bucket,
+                key,
+                # minio reads it through read() alone; it needs nothing else of a file.
+                cast("BinaryIO", reader),
+                length=-1,
+                part_size=UPLOAD_PART_BYTES,
+                content_type=content_type,
+                metadata=dict(metadata or {}),
+                # One part at a time. The client's default sends three in
+                # parallel and queues more, which holds several parts in memory.
+                num_parallel_uploads=1,
+            )
+        return StoredObject(
+            key=key,
+            size_bytes=reader.size,
+            content_hash=reader.hexdigest(),
+            content_type=content_type,
+            stored_at=datetime.now(UTC),
+            metadata=dict(metadata or {}),
+        )
+
+    def copy(
+        self,
+        bucket: str,
+        source_key: str,
+        target_key: str,
+        metadata: Mapping[str, str] | None = None,
+    ) -> StoredObject:
+        """Copy an object inside MinIO, refusing to overwrite the target.
+
+        Args:
+            bucket: the bucket of both objects.
+            source_key: the object to copy.
+            target_key: the key of the copy.
+            metadata: the copy's user metadata, replacing the source's.
+
+        Returns:
+            The copy's metadata.
+
+        Raises:
+            EntityNotFoundError: if the source does not exist.
+            FileExistsError: if the target already exists.
+            SourceUnavailableError: if MinIO is unreachable.
+        """
+        if self.exists(bucket, target_key):
+            raise FileExistsError(f"object already exists: {bucket}/{target_key}")
+        source = self.stat(bucket, source_key)
+        headers: dict[str, str | list[str] | tuple[str]] = {
+            "Content-Type": source.content_type,
+            **dict(metadata or {}),
+        }
+        with _translated(bucket, source_key):
+            self._client.copy_object(
+                bucket,
+                target_key,
+                CopySource(bucket, source_key),
+                metadata=headers,
+                metadata_directive=REPLACE,
+            )
+        return self.stat(bucket, target_key)
+
+    def delete(self, bucket: str, key: str) -> None:
+        """Remove an object; one that is not there is not an error.
+
+        Args:
+            bucket: source bucket.
+            key: object key.
+
+        Raises:
+            SourceUnavailableError: if MinIO is unreachable.
+        """
+        with _translated(bucket, key):
+            self._client.remove_object(bucket, key)
+
+    def download_to(self, bucket: str, key: str, target: BinaryIO) -> StoredObject:
+        """Copy an object into a file a megabyte at a time, checking its hash.
+
+        Args:
+            bucket: source bucket.
+            key: object key.
+            target: an open binary file to write to.
+
+        Returns:
+            The object's metadata.
+
+        Raises:
+            EntityNotFoundError: if the key does not exist.
+            ContentHashMismatchError: if the bytes do not hash to the digest
+                recorded at upload time.
+        """
+        recorded = self.stat(bucket, key)
+        digest = hashlib.sha256()
+        with _translated(bucket, key):
+            response = self._client.get_object(bucket, key)
+            try:
+                for chunk in response.stream(_DOWNLOAD_CHUNK_BYTES):
+                    digest.update(chunk)
+                    target.write(chunk)
+            finally:
+                response.close()
+                response.release_conn()
+
+        actual = digest.hexdigest()
+        if recorded.content_hash and actual != recorded.content_hash:
+            raise ContentHashMismatchError(
+                "stored object does not match its recorded hash",
+                bucket=bucket,
+                key=key,
+                expected=recorded.content_hash,
+                actual=actual,
+            )
+        return recorded
 
     def get(self, bucket: str, key: str) -> bytes:
         """Retrieve a payload and verify its integrity.

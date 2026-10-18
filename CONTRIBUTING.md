@@ -258,6 +258,30 @@ has the format and the steps.
   loader's routes, the Silver SQL, the translation file and, when present, the
   real workbook.
 
+### Adding a validation rule
+
+The checks of an uploaded file are pure functions in
+`src/energy/domain/draft_rules.py` (and `workbook_limits.py` for the archive);
+[docs/dataset-specs.md](docs/dataset-specs.md#what-a-file-is-checked-against)
+lists them.
+
+- **Give it an ID in `RuleId`,** `<group>.<name>`, and a severity. A rule a spec
+  configures takes the column's `severity`.
+- **Judge the text Bronze would store, as the Silver build reads it.** The
+  rows come from `landing.sheet_payloads`; a value is trimmed of spaces, as
+  `pg_temp.eq_txt` does. A rule about numbers or dates must agree with the
+  Silver build's parsing, and a test keeps `SILVER_NUMBER` equal to it.
+- **Write its sentence in `frontend/src/i18n/es.json`,** under
+  `loads.rules.<group>.<name>`, with a `name` and a `message`. The API sends
+  the ID and the values the message needs, never prose; a test fails for a
+  rule without its sentence.
+- **Test it in `tests/unit/test_draft_rules.py`** with the rows that break it,
+  and add a row to the broken files of `tests/fixtures/workbooks.py` when it
+  belongs in the end-to-end check.
+- **Keep it bounded.** Report through `IssueCollector`, which lists the first
+  1,000 issues of each rule in each column and counts the rest, so a file
+  broken on every row costs counters, not memory.
+
 ### Changing the web app
 
 The app in `frontend/` (React, TypeScript, Vite) is what users open at `/`.

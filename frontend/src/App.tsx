@@ -11,8 +11,9 @@ import type { CreateAuthClient } from "./auth/authClient";
 import { RequirePermission } from "./auth/RequirePermission";
 import { Session, useSession } from "./auth/Session";
 import { Shell } from "./layout/Shell";
+import { DraftPage } from "./loads/DraftPage";
+import { LoadsPage } from "./loads/LoadsPage";
 import { DashboardPage } from "./pages/DashboardPage";
-import { DataLoadingPage } from "./pages/DataLoadingPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { paths } from "./paths";
 import type { LoadEmbedReport } from "./powerbi/reportEmbed";
@@ -62,7 +63,15 @@ export function App({ createAuthClient, loadEmbedReport }: AppProps) {
                 path={paths.loads}
                 element={
                   <RequirePermission permission="loads:write">
-                    <DataLoadingPage />
+                    <LoadsPage />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path={paths.draft}
+                element={
+                  <RequirePermission permission="loads:write">
+                    <DraftPage />
                   </RequirePermission>
                 }
               />

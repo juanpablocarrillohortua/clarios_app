@@ -14,8 +14,9 @@ Responsibility:
 
     The ``equs`` commands are implemented, and so are ``equs-report``, a command
     of its own, ``reporting create-reader``, which gives a BI tool such as
-    Power BI its read-only login, and ``datasets check``, which checks the
-    dataset specs as the API does when it starts. The other commands are
+    Power BI its read-only login, ``datasets check``, which checks the
+    dataset specs as the API does when it starts, and ``drafts purge``, which
+    removes the web app's abandoned drafts. The other commands are
     placeholders for the phase named in each, and are not registered until they
     are built.
 
@@ -44,6 +45,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Final
+from uuid import UUID
 
 import typer
 
@@ -66,6 +68,7 @@ from energy.domain.exceptions import (
 from energy.domain.landing import DEFAULT_PLANT_CODE, LANDING_SOURCES, parse_sheet_spec
 from energy.domain.reporting import describe_reader
 from energy.pipelines.flows.dataset_specs import read_dataset_specs
+from energy.pipelines.flows.drafts_purge import purge_drafts
 from energy.pipelines.flows.equs_bronze_load import (
     DEFAULT_DIRECTORY,
     RouteOutcome,
@@ -777,6 +780,32 @@ def datasets_check(
     typer.echo(f"{count} dataset spec{'' if count == 1 else 's'}, all sound.")
 
 
+def drafts_purge(
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Count what would go, and remove nothing.")
+    ] = False,
+    draft_id: Annotated[
+        UUID | None,
+        typer.Option("--draft-id", help="Purge this one draft now, expired or not."),
+    ] = None,
+) -> None:
+    """Remove the web app's abandoned drafts, and the originals nothing else needs.
+
+    A draft goes 30 days after it was last worked on; an upload that never
+    finished, after a day. An original stays while another draft points at it
+    or Bronze has catalogued the same bytes.
+    """
+    try:
+        outcome = purge_drafts(dry_run=dry_run, only=draft_id)
+    except EnergyError as error:
+        raise _fail(error) from error
+    verb = "would remove" if dry_run else "removed"
+    typer.echo(
+        f"{verb} {outcome.drafts} draft(s), {outcome.objects} archived original(s) "
+        f"and {outcome.incoming} unfinished upload(s)"
+    )
+
+
 def build_app() -> typer.Typer:
     """Build the Typer application with every implemented command.
 
@@ -787,8 +816,9 @@ def build_app() -> typer.Typer:
         ``energy equs refresh-gold`` brings Gold up to date,
         ``energy equs resumen-equ`` prints column H of a month,
         ``energy equs close-month`` freezes a month,
-        ``energy reporting create-reader`` gives Power BI its read-only login and
-        ``energy datasets check`` checks the dataset specs.
+        ``energy reporting create-reader`` gives Power BI its read-only login,
+        ``energy datasets check`` checks the dataset specs and
+        ``energy drafts purge`` removes abandoned drafts.
     """
     app = typer.Typer(
         name="energy",
@@ -826,6 +856,12 @@ def build_app() -> typer.Typer:
     )
     datasets.command("check")(datasets_check)
     app.add_typer(datasets, name="datasets")
+    drafts = typer.Typer(
+        help="The drafts of the web app's loading page, in schema staging.",
+        no_args_is_help=True,
+    )
+    drafts.command("purge")(drafts_purge)
+    app.add_typer(drafts, name="drafts")
     return app
 
 

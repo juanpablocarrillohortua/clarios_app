@@ -34,6 +34,9 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 TIMESCALE_IMAGE = "timescale/timescaledb-ha:pg16"
+# The release docker-compose.yml pins, pulled from MinIO's own registry: the
+# Docker Hub mirror refuses anonymous pulls.
+MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
 CONNECT_TIMEOUT_SECONDS = 5
 
 
@@ -307,6 +310,46 @@ def gold_engine(database_url: str) -> Iterator[Engine]:
         An engine for that database.
     """
     yield from _engine_at(database_url, "head")
+
+
+# =============================================================================
+# Object storage
+# =============================================================================
+@pytest.fixture(scope="session")
+def minio_settings() -> Iterator[Any]:
+    """Return the settings of a MinIO container started once per session, or skip.
+
+    Yields:
+        :class:`~energy.core.settings.MinioSettings` pointing at the container.
+    """
+    try:
+        from testcontainers.minio import MinioContainer  # noqa: PLC0415
+    except ImportError:  # pragma: no cover - testcontainers is a dev dependency
+        pytest.skip("testcontainers is not installed")
+    from energy.core.settings import MinioSettings  # noqa: PLC0415
+
+    container = None
+    try:
+        container = MinioContainer(image=MINIO_IMAGE)
+        container.start()
+    except Exception as exc:  # any Docker failure means "skip"
+        # A container that started but did not answer in time is still running.
+        if container is not None:
+            with contextlib.suppress(Exception):
+                container.stop()
+        pytest.skip(f"cannot start a MinIO test container: {exc}")
+
+    try:
+        config = container.get_config()
+        yield MinioSettings(
+            _env_file=None,
+            MINIO_ENDPOINT=config["endpoint"],
+            MINIO_ROOT_USER=config["access_key"],
+            MINIO_ROOT_PASSWORD=config["secret_key"],
+            MINIO_SECURE=False,
+        )
+    finally:
+        container.stop()
 
 
 # =============================================================================

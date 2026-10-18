@@ -1,0 +1,20 @@
+<!doctype html>
+<!--
+  The dev server only: the loading pages with stand-ins for sign-in, the API
+  and the upload, to look at every state without signing in. `vite build`
+  does not build this page (vite.config.ts names two inputs), so the stack
+  answers 404 for it. Open /preview.html?path=/loads on the dev server.
+-->
+<html lang="es" data-mantine-color-scheme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Clarios Energy · vista previa</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/preview/main.tsx"></script>
+  </body>
+</html>

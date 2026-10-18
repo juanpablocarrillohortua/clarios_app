@@ -31,7 +31,9 @@ The two meet in one indicator: energy used per equivalent battery.
 
 Data moves through three layers, each stricter than the one before. A fourth schema
 holds the lists the others refer to. A fifth, `reporting`, stores nothing: it is
-the read-only window BI tools such as Power BI look through (section 6).
+the read-only window BI tools such as Power BI look through (section 6). A sixth,
+`staging`, sits before the layers: files uploaded through the web app wait there
+while they are checked, and nothing in it is evidence (section 6b).
 
 ```mermaid
 flowchart LR
@@ -87,6 +89,7 @@ flowchart LR
 | `gold` | The figures that reports and dashboards show. | KPIs are recomputed per period. EQUS figures are views; a closed month is frozen and changes only by a reclose. |
 | `reference` | Plants, meters, shifts and targets. | Maintained by people. |
 | `reporting` | Flat views of the EQUS figures for Power BI. | Nothing is stored; the views read Gold. |
+| `staging` | Files uploaded through the web app, while they are checked. | Freely: a new check replaces the last, and an abandoned upload is purged after 30 days. |
 
 The rule behind the layers: **never repair data where it lands**. Bronze keeps the
 evidence, Silver decides what is valid, Gold publishes. If a number looks wrong, you
@@ -725,6 +728,68 @@ measures: [powerbi.md](powerbi.md).
 
 ---
 
+## 6b. Staging: uploads while they are checked
+
+Created by [`0007_create_staging_schema.py`](../migrations/versions/0007_create_staging_schema.py).
+
+A person loading data through the web app uploads a file for one dataset
+([dataset specs](dataset-specs.md)). The file becomes a **draft**: its original is
+archived in object storage at once, under the key the Bronze loader uses, and the
+draft waits here while it is checked. Nothing reaches Bronze until a later
+increment confirms a load, so the layers are untouched by an upload.
+
+```mermaid
+erDiagram
+    drafts ||--o{ draft_rows : "stages"
+    drafts ||--o{ draft_issues : "lists"
+    drafts ||--o{ draft_rule_counts : "counts"
+    drafts {
+        uuid draft_id PK
+        text dataset_key
+        text status "receiving, uploaded, validated, failed"
+        text filename
+        char content_hash "of the original"
+        text object_key "where it is archived"
+        text created_by "the person, as Entra ID's subject"
+        timestamptz expires_at "30 days after the last work"
+    }
+    draft_rows {
+        int source_row "the Excel row"
+        char content_hash
+        jsonb payload "as Bronze would store it"
+    }
+    draft_issues {
+        text rule_id "for example cell.type"
+        text severity "error, warning, info"
+        int source_row
+        int column_index
+        text value
+        jsonb params
+    }
+    draft_rule_counts {
+        text rule_id
+        text column_key
+        bigint rows_affected "every row"
+        int issues_listed "at most 1,000"
+    }
+```
+
+| Table | Holds |
+|---|---|
+| `drafts` | One upload: which dataset, which file, whose, where its original is archived, and what its last check found |
+| `draft_rows` | The rows of the file exactly as Bronze would land them, so a confirmed load lands what was checked |
+| `draft_issues` | The first 1,000 problems of each rule in each column, with row, column and the value found |
+| `draft_rule_counts` | How many rows broke each rule in each column, every one of them |
+
+- **A draft is its owner's.** The API shows it to the person who uploaded it and
+  to nobody else.
+- **Removing a draft removes everything staged for it.** `energy drafts purge`
+  removes drafts not worked on for 30 days, and their original when nothing else
+  needs it.
+- **Power BI's login cannot see this schema.**
+
+---
+
 ## 7. Which tables are time-partitioned
 
 Five tables are TimescaleDB *hypertables*: PostgreSQL tables that are split into
@@ -758,7 +823,8 @@ flowchart LR
     m4["0004<br/>gold<br/>3 + 6 tables, 15 views,<br/>8 functions"]
     m5["0005<br/>hypertables,<br/>compression, retention"]
     m6["0006<br/>reporting<br/>12 views for Power BI,<br/>role reporting_reader"]
-    m1 --> m2 --> m3 --> m4 --> m5 --> m6
+    m7["0007<br/>staging<br/>4 tables: uploads<br/>while they are checked"]
+    m1 --> m2 --> m3 --> m4 --> m5 --> m6 --> m7
 ```
 
 Revisions 0002, 0003 and 0004 were rewritten in place while the EQUS layers were
@@ -766,8 +832,8 @@ built. A database migrated before a rewrite is brought up to date by going down 
 the revision before the rewritten one and up again: for the Gold rewrite,
 `make db-downgrade` until `alembic current` says `0003`, then `make db-upgrade`.
 That leaves Bronze and Silver as they are, but it drops `gold`, closed months
-included. Revision 0006 was added as a new file, so `make db-upgrade` applies it
-to any database already at `0005`.
+included. Revisions 0006 and 0007 were added as new files, so `make db-upgrade` applies
+them to any database already at the revision before.
 
 ---
 

@@ -1,5 +1,5 @@
 // Every colour of the app is a design token of src/styles/tokens.css. This
-// test reads every source file and the two HTML pages, and fails for a colour
+// test reads every source file and the HTML pages, and fails for a colour
 // value written anywhere else: a component names a token, never a colour.
 //
 // It reads the files from disk because the test runner hands CSS modules to
@@ -28,6 +28,7 @@ const files = [
   ...sourcesUnder(join(FRONTEND, "src")),
   join(FRONTEND, "index.html"),
   join(FRONTEND, "redirect.html"),
+  join(FRONTEND, "preview.html"),
 ].filter((path) => path !== TOKENS);
 
 const HEX = /#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{3,4})\b/gi;

@@ -22,10 +22,18 @@ BRONZE_SCHEMA: Final = "bronze"
 SILVER_SCHEMA: Final = "silver"
 GOLD_SCHEMA: Final = "gold"
 REPORTING_SCHEMA: Final = "reporting"
+# Drafts of data loaded through the web app: a working area, not a layer.
+STAGING_SCHEMA: Final = "staging"
 
 MEDALLION_SCHEMAS: Final[tuple[str, ...]] = (BRONZE_SCHEMA, SILVER_SCHEMA, GOLD_SCHEMA)
 # In dependency order: reporting reads gold, so it comes last and is dropped first.
-ALL_SCHEMAS: Final[tuple[str, ...]] = (REFERENCE_SCHEMA, *MEDALLION_SCHEMAS, REPORTING_SCHEMA)
+# Staging depends on nothing and nothing depends on it.
+ALL_SCHEMAS: Final[tuple[str, ...]] = (
+    REFERENCE_SCHEMA,
+    *MEDALLION_SCHEMAS,
+    STAGING_SCHEMA,
+    REPORTING_SCHEMA,
+)
 
 # -----------------------------------------------------------------------------
 # Canonical time grid
@@ -152,6 +160,7 @@ __all__ = [
     "REQUEST_ID_LOG_KEY",
     "SECONDS_PER_HOUR",
     "SILVER_SCHEMA",
+    "STAGING_SCHEMA",
     "UNIT_ELECTRICITY",
     "UNIT_GAS_ENERGY",
     "UNIT_GAS_VOLUME",

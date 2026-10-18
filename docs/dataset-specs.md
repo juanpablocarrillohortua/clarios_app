@@ -10,11 +10,13 @@ dataset, in `config/datasets/`.
 - **`GET /api/datasets`** serves them to the web app, and
   **`GET /api/datasets/{dataset_key}/template`** returns the empty workbook of
   each ([the API guide](api.md#2-endpoints)). Both need `loads:write`.
-- **Nothing checks a file against a spec yet.** The rules a spec declares are
-  applied to uploads from increment 5 of the
-  [frontend plan](frontend-plan.md#8-build-roadmap).
+- **A file uploaded from the web app is checked against its spec**
+  (`/api/drafts`, increment 5 of the
+  [frontend plan](frontend-plan.md#8-build-roadmap)): every problem, with its
+  row, column and rule. [What a file is checked against](#what-a-file-is-checked-against)
+  lists the rules.
 
-Built on 2026-10-17, as increment 4.
+Built on 2026-10-17, as increment 4; the checks of a file, as increment 5.
 
 ## The specs today
 
@@ -177,13 +179,51 @@ the same source, and a missing or empty folder.
 or false. Quote every allowed value: `allowed: ["Sí", "No"]`. The check says so
 when it finds one.
 
+## What a file is checked against
+
+A file uploaded for a dataset is read exactly as the Bronze loader would read
+it (`energy.domain.landing.sheet_payloads`), and every rule is applied to the
+text Bronze would store. Each problem is an issue with a rule ID, a severity,
+the row and the column; the web app turns the ID into a sentence
+(`loads.rules.<id>` in `frontend/src/i18n/es.json`). The rules are in
+`src/energy/domain/draft_rules.py` and `workbook_limits.py`.
+
+| Rule | Severity | Breaks when |
+|---|---|---|
+| `file.unreadable` | error | The file is not a zip archive, is damaged, is not a spreadsheet, or holds macros |
+| `file.too_many_parts`, `file.content_too_large`, `file.shared_strings_too_large` | error | The archive would unpack to more than the API reads in a request: 10,000 entries, 256 MiB, 64 MiB of shared text (a "zip bomb"). Judged from the archive's directory, and every entry is then unpacked through a counter, so a directory that understates a size is caught too |
+| `file.sheet_missing` | error | The spec's sheet is not in the workbook |
+| `file.header_row_empty` | error | The spec's header row holds nothing |
+| `file.no_rows` | error | No row of data follows the header |
+| `schema.header_mismatch` | error | A header equals one of the spec only once case, spaces and accents are ignored (`Descripcion` for `Descripción`). Bronze keys a column by the text found, so the Silver build would not find it |
+| `schema.column_missing` | error when the column is `required`, otherwise warning | A header of the spec is not in the file |
+| `schema.column_unknown` | info | A column the spec does not name, or a column with data and no header. Its values are kept, and nothing reads them |
+| `cell.required` | error | A `required` column is empty, or holds spaces only |
+| `cell.type` | error | `integer` or `decimal`: the text is not a number as the Silver build reads one (`pg_temp.eq_num`: digits, one point, an optional sign; no thousands separator, no decimal comma, no exponent), or not whole for `integer`. `date`: the cell is not a date cell. A date typed as text, or a number that lost its date format, is refused, as the format says |
+| `cell.pattern` | the column's `severity` | The value does not match the pattern whole |
+| `cell.allowed` | the column's `severity` | The value is not one of `allowed` |
+| `cell.range` | the column's `severity` | The number is below `min` or above `max` |
+
+- **Values are trimmed of spaces at both ends** before they are judged, as the
+  Silver build reads them. Bronze still stores them as delivered.
+- **One issue per cell:** the first rule a value breaks. A value that is not a
+  number is not also out of range.
+- **The list keeps the first 1,000 issues of each rule in each column; the
+  counts keep every row.** A file broken on every row is reported exactly,
+  without a million lines.
+- **An error blocks the load, a warning will have to be accepted** (increment
+  8), and an issue for information changes nothing.
+- **A file over 5 MiB is not checked yet.** It is kept, and its check is the
+  worker's job (increment 12).
+
 ## Not done yet
 
-- **Applying the rules to a file** is increment 5: the upload, the file and
-  schema checks, and the list of issues.
+- **Checks against data already loaded** (duplicates, references, periods,
+  closed months) are increment 8, and the reasons and fixes shown beside each
+  issue increment 6.
 - **One sheet per spec.** The formed product structures land five sheets under
   one source, and `Clasif_Poly` holds two tables side by side. Increment 12
   decides how to specify them: one spec per sheet, or a version 2 of the
   format.
-- **No page shows the specs yet.** The web app lists them and offers the
-  template from increment 5, in the first step of the loading wizard.
+- **The loading page offers uploads only.** The specs' grid and form entry
+  modes arrive with increment 9.

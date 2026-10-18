@@ -110,6 +110,12 @@ class DomainRuleError(EnergyError):
     code = "domain_rule_error"
 
 
+class EntryModeNotAllowedError(DomainRuleError):
+    """Raised when rows are offered in a way the dataset's spec does not allow."""
+
+    code = "entry_mode_not_allowed"
+
+
 class InvalidTimeWindowError(DomainRuleError):
     """Raised when a time window is not aligned to the canonical grid or is inverted."""
 
@@ -221,6 +227,42 @@ class ContentHashMismatchError(IngestionError):
     code = "content_hash_mismatch"
 
 
+class EmptyFileError(UnsupportedFileFormatError):
+    """Raised when an uploaded file has no bytes at all."""
+
+    code = "empty_file"
+
+
+class FileTooLargeError(IngestionError):
+    """Raised when an upload is larger than the limit. The API answers 413."""
+
+    code = "file_too_large"
+
+
+class LengthRequiredError(IngestionError):
+    """Raised when an upload does not say its size first. The API answers 411."""
+
+    code = "length_required"
+
+
+class InvalidFilenameError(IngestionError):
+    """Raised when an upload names no usable file name."""
+
+    code = "invalid_filename"
+
+
+class IncompleteUploadError(IngestionError):
+    """Raised when an upload ends with fewer or more bytes than it announced."""
+
+    code = "incomplete_upload"
+
+
+class UploadAbortedError(IngestionError):
+    """Raised when the caller goes away before an upload has arrived whole."""
+
+    code = "client_disconnected"
+
+
 # -----------------------------------------------------------------------------
 # Persistence and repositories
 # -----------------------------------------------------------------------------
@@ -240,6 +282,26 @@ class UnknownDatasetError(EntityNotFoundError):
     """Raised when no dataset spec has the requested key. The API answers 404."""
 
     code = "unknown_dataset"
+
+
+class UnknownDraftError(EntityNotFoundError):
+    """Raised when the caller has no live draft of that ID.
+
+    A draft of someone else is answered the same way, so the answer does not
+    tell that it exists. The API answers 404.
+    """
+
+    code = "unknown_draft"
+
+
+class DraftBusyError(RepositoryError):
+    """Raised when a draft cannot be worked on now.
+
+    It is still arriving, it failed, or another validation of it is running.
+    The API answers 409.
+    """
+
+    code = "draft_busy"
 
 
 class DatabaseUnavailableError(RepositoryError):
@@ -327,14 +389,22 @@ __all__ = [
     "ContentHashMismatchError",
     "DataQualityError",
     "DatabaseUnavailableError",
+    "DatasetSpecError",
     "DomainRuleError",
+    "DraftBusyError",
     "DuplicateReadingError",
+    "EmptyFileError",
     "EnergyError",
     "EntityNotFoundError",
+    "EntryModeNotAllowedError",
+    "FileTooLargeError",
     "IdentityProviderUnavailableError",
+    "IncompleteUploadError",
     "IngestionError",
+    "InvalidFilenameError",
     "InvalidPeriodError",
     "InvalidTimeWindowError",
+    "LengthRequiredError",
     "LockTimeoutError",
     "NaiveDatetimeError",
     "NegativeEnergyError",
@@ -346,8 +416,11 @@ __all__ = [
     "SignInNotConfiguredError",
     "SourceUnavailableError",
     "UnitMismatchError",
+    "UnknownDatasetError",
+    "UnknownDraftError",
     "UnknownKPIError",
     "UnknownSourceError",
     "UnsupportedFileFormatError",
+    "UploadAbortedError",
     "WatermarkError",
 ]

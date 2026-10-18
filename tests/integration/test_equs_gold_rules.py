@@ -1200,6 +1200,7 @@ class TestReportingSchema:
             "SELECT count(*) FROM silver.reporte_qad",
             "SELECT count(*) FROM gold.v_resumen_equ",
             "SELECT count(*) FROM bronze.ingestion_runs",
+            "SELECT count(*) FROM staging.drafts",
             "SELECT count(*) FROM gold.resumen_equ_rango('2026-09-01', '2026-09-30')",
         ):
             with reader.connect() as connection, pytest.raises(DBAPIError, match="permission"):

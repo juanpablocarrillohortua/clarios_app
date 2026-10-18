@@ -711,3 +711,46 @@ def test_datasets_check_names_each_problem_and_exits_1(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "error: dataset specs are invalid" in result.output
     assert f"{spec.as_posix()}: version: 2 is not a version this build reads" in result.output
+
+
+# =============================================================================
+# energy drafts purge
+# =============================================================================
+def test_drafts_purge_says_what_it_removed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The purge passes its options on and prints one line."""
+    from uuid import UUID  # noqa: PLC0415
+
+    from energy.services.draft_service import PurgeOutcome  # noqa: PLC0415
+
+    seen: dict[str, Any] = {}
+
+    def fake_purge(dry_run: bool = False, only: UUID | None = None) -> PurgeOutcome:
+        seen.update(dry_run=dry_run, only=only)
+        return PurgeOutcome(drafts=2, objects=1, incoming=0)
+
+    monkeypatch.setattr(cli, "purge_drafts", fake_purge)
+    draft_id = "0b7a2d0e-6f0f-4c59-9a3e-2f1d4c5b6a70"
+
+    result = runner.invoke(
+        cli.build_app(), ["drafts", "purge", "--dry-run", "--draft-id", draft_id]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == {"dry_run": True, "only": UUID(draft_id)}
+    assert result.output.strip() == (
+        "would remove 2 draft(s), 1 archived original(s) and 0 unfinished upload(s)"
+    )
+
+
+def test_drafts_purge_exits_1_on_a_domain_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failure is reported, not raised."""
+
+    def failing(dry_run: bool = False, only: object = None) -> None:
+        raise RepositoryError("could not remove drafts")
+
+    monkeypatch.setattr(cli, "purge_drafts", failing)
+
+    result = runner.invoke(cli.build_app(), ["drafts", "purge"])
+
+    assert result.exit_code == 1
+    assert "could not remove drafts" in result.output
