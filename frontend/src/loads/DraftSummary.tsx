@@ -10,7 +10,7 @@ import classes from "../styles/app.module.css";
 import { formatCount } from "./formatBytes";
 import { ruleName } from "./texts";
 
-function Figure({ label, value, tone }: { label: string; value: number; tone?: string }) {
+export function Figure({ label, value, tone }: { label: string; value: number; tone?: string }) {
   return (
     <Stack gap={0}>
       <Text className={classes.figure} data-tone={value > 0 ? tone : undefined}>

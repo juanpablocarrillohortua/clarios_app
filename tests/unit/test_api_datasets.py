@@ -52,7 +52,7 @@ def test_a_catalogue_is_described_for_the_web_app(client: TestClient, auth_heade
         "origin": "catalogue",
         "label": "datasets.lineas_produccion.name",
         "description": "datasets.lineas_produccion.description",
-        "entry_modes": ["upload", "grid", "form"],
+        "entry_modes": ["upload"],
         "sheet": "Lineas Produccion",
         "header_row": 1,
         "natural_key": ["Línea"],

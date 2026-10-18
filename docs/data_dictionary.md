@@ -998,7 +998,9 @@ on the schema and `SELECT` on every view, and no privilege on any other schema.
 
 ## `staging` — uploads while they are checked
 
-Created by [`0007_create_staging_schema.py`](../migrations/versions/0007_create_staging_schema.py).
+Created by [`0007_create_staging_schema.py`](../migrations/versions/0007_create_staging_schema.py);
+reasons and corrections added by
+[`0008_add_reasons_and_corrections.py`](../migrations/versions/0008_add_reasons_and_corrections.py).
 The API's `/api/drafts` routes write it ([api.md](api.md)); what a file is
 checked against is in [dataset-specs.md](dataset-specs.md#what-a-file-is-checked-against).
 
@@ -1017,7 +1019,7 @@ One upload of one `.xlsx` for one dataset spec.
 | `dataset_key` | `VARCHAR(64)` | no | The spec, `config/datasets/<key>.yaml`. Not a foreign key: specs are files. |
 | `source_key` | `VARCHAR(64)` | no | The spec's Bronze source; one of the five EQUS keys. |
 | `plant_code` | `VARCHAR(32)` | no | `1515`. |
-| `input_mode` | `VARCHAR(10)` | no | `upload` today; `grid` and `form` arrive with later increments. |
+| `input_mode` | `VARCHAR(10)` | no | `upload`, the only mode: data is entered and corrected in Excel ([ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)). |
 | `status` | `VARCHAR(20)` | no | `receiving` while the bytes arrive, `uploaded` once the original is archived, `validated` once checked, `failed` when the upload broke off or was refused. |
 | `filename` | `TEXT` | no | The name the person gave, cleaned: last path segment, NFC, no control characters, 1 to 255 characters. Data only: never a key or a path. |
 | `content_type` | `VARCHAR(150)` | no | What the browser declared. Not trusted: the bytes are checked. |
@@ -1029,11 +1031,15 @@ One upload of one `.xlsx` for one dataset spec.
 | `expires_at` | `TIMESTAMPTZ` | no | When an abandoned draft is purged: 30 days after the last work on it (question 17 of the frontend plan). |
 | `failure_code` | `VARCHAR(64)` | yes | Why a `failed` upload failed: `file_too_large`, `unsupported_file_format`, `incomplete_upload`, `client_disconnected`, `source_unavailable`. |
 | `sheet_name`, `header_row`, `rows_read`, `rows_with_errors`, `rows_with_warnings` | | yes | What the last check found. |
+| `spec_digest` | `CHAR(64)` | yes | SHA-256 of the spec the last check used; a correction is compared with its earlier draft only under the same one. |
+| `previous_draft_id` | `UUID` | yes | For a correction, the draft whose file it corrects. Not a foreign key: the earlier draft may be purged first, and the correction still says there was one. Never the draft itself. |
 
-**Constraints:** the statuses, input modes and source keys above; the hash
-format; `uploaded` and `validated` drafts know their size, hash, bucket and key;
-a `validated` draft knows when and how many rows; the row counts are consistent.
-**Indexes:** `(created_by, created_at DESC)`, `expires_at`, `content_hash`.
+**Constraints:** the statuses, input modes and source keys above; the hash and
+digest formats; `uploaded` and `validated` drafts know their size, hash, bucket
+and key; a `validated` draft knows when and how many rows; the row counts are
+consistent; a draft does not correct itself.
+**Indexes:** `(created_by, created_at DESC)`, `expires_at`, `content_hash`,
+`previous_draft_id`.
 
 ### `staging.draft_rows`
 
@@ -1057,15 +1063,25 @@ The first 1,000 issues of each rule in each column.
 | `column_key` | `TEXT` | yes | The column's payload key. |
 | `value` | `TEXT` | yes | The text found, at most 200 characters. |
 | `params` | `JSONB` | no | What the message needs: the pattern, the allowed values, the bounds. |
+| `reasons` | `JSONB` | no | The likely reasons, most likely first, as an array of `{"id", "params"}`; the last is the rule's own ([reasons](dataset-specs.md#reasons-and-fixes)). `[]` for an issue stored before revision 0008: it is read as its rule's own. |
+| `reason_id` | `VARCHAR(60)` | yes | The first reason, for the list's filter. |
+| `match_key` | `VARCHAR(64)` | yes | The identity of the issue's row, to match it in a correction: `key:` and a digest of the row's natural key (case, spaces and accents ignored) with its occurrence, or `row:` and the row number. Null for the file or its header. |
 
-**Indexes:** `(draft_id, source_row, column_index)` for the list in order, and
-`(draft_id, severity, rule_id)` for its filters.
+**Indexes:** `(draft_id, source_row, column_index)` for the list in order,
+`(draft_id, severity, rule_id)` for its filters, `(draft_id, reason_id)`, and
+`(draft_id, rule_id, column_key, match_key)` for matching a correction's issues.
 
 ### `staging.draft_rule_counts`
 
 Every issue, counted: `(draft_id, rule_id, column_key)` as key (`column_key`
 empty for the file as a whole), `severity`, `rows_affected` (every row that
 broke the rule) and `issues_listed` (how many of them `draft_issues` holds).
+
+### `staging.draft_reason_counts`
+
+The same rows by their first reason: `(draft_id, rule_id, column_key,
+reason_id)` as key and `rows_affected`. They add up to the rule's
+`rows_affected`. Removing a draft removes them.
 
 ---
 

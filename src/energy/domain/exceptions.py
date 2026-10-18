@@ -110,12 +110,6 @@ class DomainRuleError(EnergyError):
     code = "domain_rule_error"
 
 
-class EntryModeNotAllowedError(DomainRuleError):
-    """Raised when rows are offered in a way the dataset's spec does not allow."""
-
-    code = "entry_mode_not_allowed"
-
-
 class InvalidTimeWindowError(DomainRuleError):
     """Raised when a time window is not aligned to the canonical grid or is inverted."""
 
@@ -396,7 +390,6 @@ __all__ = [
     "EmptyFileError",
     "EnergyError",
     "EntityNotFoundError",
-    "EntryModeNotAllowedError",
     "FileTooLargeError",
     "IdentityProviderUnavailableError",
     "IncompleteUploadError",

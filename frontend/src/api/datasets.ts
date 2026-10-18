@@ -25,7 +25,8 @@ export interface Dataset {
   label: string;
   /** A key of es.json: what the dataset is. */
   description: string;
-  entry_modes: ("upload" | "grid" | "form")[];
+  /** Always `["upload"]`: data is entered and corrected in Excel (ADR 0009). */
+  entry_modes: "upload"[];
   sheet: string;
   header_row: number;
   natural_key: string[];

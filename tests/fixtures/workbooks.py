@@ -32,6 +32,9 @@ if TYPE_CHECKING:
     from energy.domain.dataset_spec import DatasetSpec
 
 type Planted = tuple[int | None, str | None, str]
+#: An issue planted on purpose: row, column letter, rule, and the reason that
+#: must come first.
+type Explained = tuple[int | None, str | None, str, str]
 
 LINES_SHEET: Final = "Lineas Produccion"
 INVOICES_SHEET: Final = "Datos"
@@ -179,7 +182,7 @@ def invoices_broken(spec: DatasetSpec) -> tuple[bytes, list[Planted]]:
         "Cantidad fac": 10,
         "Porcentaje Descuento": 5,
         "Moneda": "COP",
-        "Fecha Efectiva": datetime(2025, 10, 1),
+        "Fecha Efectiva": datetime(2025, 10, 1),  # noqa: DTZ001 - Excel cells carry no time zone
         "HORA_LIBERACION": "08:00:00",
     }
     position = {column.key: index for index, column in enumerate(spec.columns)}
@@ -200,8 +203,8 @@ def invoices_broken(spec: DatasetSpec) -> tuple[bytes, list[Planted]]:
         list(spec.headers),
         row(),  # 2: sound
         row(**{"Fecha Efectiva": "01/10/2025"}),  # 3: a date typed as text
-        row(**{"Línea": 1.5}),  # 4: not a whole number
-        row(**{"Línea": 0}),  # 5: below 1
+        row(Línea=1.5),  # 4: not a whole number
+        row(Línea=0),  # 5: below 1
         row(**{"Porcentaje Descuento": 150}),  # 6: above 100
         row(Moneda="cop"),  # 7
         row(**{"Núm Fact": ""}),  # 8
@@ -215,6 +218,167 @@ def invoices_broken(spec: DatasetSpec) -> tuple[bytes, list[Planted]]:
         (7, letter("Moneda"), "cell.pattern"),
         (8, letter("Núm Fact"), "cell.required"),
         (9, letter("Fecha Efectiva"), "cell.type"),
+    ]
+    return build_workbook({INVOICES_SHEET: rows}), manifest
+
+
+def _misread(text: str) -> str:
+    """Return text as a CSV saved in UTF-8 reads when opened as Windows-1252."""
+    return text.encode("utf-8").decode("cp1252")
+
+
+#: A non-breaking space, as a copy from a web page or a PDF leaves it.
+NBSP: Final = chr(0xA0)
+
+
+def _lines_row(**changes: Any) -> list[Any]:
+    """Return a sound production line, with some cells changed (A to J)."""
+    values: dict[str, Any] = {
+        "A": "FAFORM01",
+        "B": "1010",
+        "C": "Formación",
+        "D": 100,
+        "F": "Manual",
+        "H": "1 02:30:00",
+        "I": "Sí",
+    }
+    values.update(changes)
+    return [values.get(letter, "") for letter in "ABCDEFGHIJ"]
+
+
+def lines_defects() -> tuple[bytes, list[Explained]]:
+    """Return a catalogue with the defects of section 5 a catalogue can show.
+
+    Every issue the file must give is in the manifest, with the reason that
+    must come first. ``lines_defects_corrected`` is the same file after the
+    fixes the app suggests, some of them.
+    """
+    header = [
+        "Línea",
+        "Almac",
+        "Descripcion",  # 7: an accent missing
+        "Planificación de Unidades por Hora",
+        _misread("Ubicación de Posdeducción"),  # 8: read in the wrong encoding
+        "Método de cantidad de transacción",
+        "Programdor",  # 7: a typo
+        "Tiempo de configuración  (D H:M:S)",
+        "Firma Automática",
+        "Última Firma Automática",
+    ]
+    rows = [
+        header,
+        _lines_row(),  # 2: sound
+        _lines_row(A="FAFORM03", I="si"),  # 3: almost an allowed value (5)
+        _lines_row(A="FAFORM04", B=f"1010{NBSP}"),  # 4: an invisible character (6)
+        _lines_row(A="FAFORM05", B=101),  # 5: a code that lost its leading zero (4)
+        _lines_row(A="FAFORM06", B="1.01E+03"),  # 6: a code in scientific notation (4)
+        _lines_row(A="FAFORM07", B="1010.0"),  # 7: a code with ".0" (4)
+        list(header),  # 8: the header row pasted inside the data (9)
+        _lines_row(A="FAFORM09", D="12,5"),  # 9: a decimal comma, as text (3)
+        _lines_row(A="FAFORM10", C=_misread("Formación")),  # 10: wrong encoding (8)
+        _lines_row(A="FAFORM11", F=f"Manual{NBSP}"),  # 11: an invisible character (6)
+        _lines_row(A="faform12"),  # 12: lowercase
+    ]
+    manifest: list[Explained] = [
+        (1, "C", "schema.header_mismatch", "header.near_match"),
+        (1, None, "schema.column_missing", "text.wrong_encoding"),
+        (1, None, "schema.column_missing", "header.similar"),
+        (1, "E", "schema.column_unknown", "text.wrong_encoding"),
+        (1, "G", "schema.column_unknown", "default.schema.column_unknown"),
+        (3, "I", "cell.allowed", "allowed.near_match"),
+        (4, "B", "cell.pattern", "text.invisible_characters"),
+        (5, "B", "cell.pattern", "code.lost_leading_zeros"),
+        (6, "B", "cell.pattern", "code.scientific_notation"),
+        (7, "B", "cell.pattern", "code.trailing_zero_decimal"),
+        (8, "A", "cell.pattern", "row.header_repeated"),
+        (8, "B", "cell.pattern", "row.header_repeated"),
+        (8, "D", "cell.type", "row.header_repeated"),
+        (8, "H", "cell.pattern", "row.header_repeated"),
+        (8, "I", "cell.allowed", "row.header_repeated"),
+        (9, "D", "cell.type", "number.text_with_separators"),
+        (10, "C", "cell.text_damaged", "text.wrong_encoding"),
+        (11, "F", "cell.text_damaged", "text.invisible_characters"),
+        (12, "A", "cell.pattern", "text.lowercase"),
+    ]
+    return build_workbook({LINES_SHEET: rows}), manifest
+
+
+def lines_defects_corrected() -> tuple[bytes, dict[str, int]]:
+    """Return ``lines_defects`` after some of the fixes, and what a comparison must find.
+
+    Fixed: the accent and the encoding of two headers; the allowed value; the
+    first invisible character; the ``.0``; the decimal comma; the encoding of
+    a value; the lowercase line (its key stays the same row, loosened). The
+    pasted header row is deleted, so every row below it moves up one. Left:
+    the misspelt header, the lost zero, the scientific notation, the second
+    invisible character. New: a negative planning on line FAFORM03.
+    """
+    header = list(LINES_HEADERS)
+    header[6] = "Programdor"
+    rows = [
+        header,
+        _lines_row(),
+        _lines_row(A="FAFORM03", D=-1),  # new: below its minimum
+        _lines_row(A="FAFORM04"),
+        _lines_row(A="FAFORM05", B=101),  # left
+        _lines_row(A="FAFORM06", B="1.01E+03"),  # left
+        _lines_row(A="FAFORM07"),
+        _lines_row(A="FAFORM09", D=12.5),
+        _lines_row(A="FAFORM10"),
+        _lines_row(A="FAFORM11", F=f"Manual{NBSP}"),  # left
+        _lines_row(A="FAFORM12"),
+    ]
+    expected = {"cleared": 14, "remaining": 5, "new": 1}
+    return build_workbook({LINES_SHEET: rows}), expected
+
+
+def invoices_defects(spec: DatasetSpec) -> tuple[bytes, list[Explained]]:
+    """Return an invoices export with the defects of section 5 an export can show.
+
+    Args:
+        spec: the ``qad_facturas`` spec, whose headers the file carries.
+    """
+    position = {column.key: index for index, column in enumerate(spec.columns)}
+    sound: dict[str, Any] = {
+        "Almac": "1010",
+        "Núm Fact": "F-0001",
+        "Orden": "OV-1",
+        "Línea de productos": "1200",
+        "Número Artículo": "231001483",
+        "Cantidad fac": 10,
+        "Moneda": "COP",
+        "Fecha Efectiva": datetime(2025, 10, 1),  # noqa: DTZ001 - Excel cells carry no time zone
+    }
+
+    def row(line: int, **changes: Any) -> list[Any]:
+        values = {**sound, "Línea": line, **changes}
+        cells: list[Any] = [""] * len(spec.columns)
+        for key, value in values.items():
+            cells[position[key]] = value
+        return cells
+
+    def letter(key: str) -> str:
+        from energy.domain.landing import column_letter  # noqa: PLC0415
+
+        return column_letter(position[key])
+
+    rows = [
+        list(spec.headers),
+        row(1),  # 2: sound
+        row(2, **{"Fecha Efectiva": "01/10/2025"}),  # 3: a date typed as text (1)
+        row(3, **{"Fecha Efectiva": 45992}),  # 4: a date that lost its format (2)
+        row(4, **{"Cantidad fac": "1.234,56"}),  # 5: thousands points and a decimal comma (3)
+        row(5, **{"Número Artículo": "2.31E+08"}),  # 6: an item in scientific notation (4)
+        row(6, **{"Número Artículo": "231001483.0"}),  # 7: an item with ".0" (4)
+        row(7, Moneda="cop"),  # 8: lowercase
+    ]
+    manifest: list[Explained] = [
+        (3, letter("Fecha Efectiva"), "cell.type", "date.typed_as_text"),
+        (4, letter("Fecha Efectiva"), "cell.type", "date.lost_format"),
+        (5, letter("Cantidad fac"), "cell.type", "number.text_with_separators"),
+        (6, letter("Número Artículo"), "cell.text_damaged", "code.scientific_notation"),
+        (7, letter("Número Artículo"), "cell.text_damaged", "code.trailing_zero_decimal"),
+        (8, letter("Moneda"), "cell.pattern", "text.lowercase"),
     ]
     return build_workbook({INVOICES_SHEET: rows}), manifest
 
@@ -266,10 +430,15 @@ __all__ = [
     "INVOICES_SHEET",
     "LINES_HEADERS",
     "LINES_SHEET",
+    "NBSP",
+    "Explained",
     "Planted",
     "build_workbook",
     "invoices_broken",
+    "invoices_defects",
     "lines_broken",
+    "lines_defects",
+    "lines_defects_corrected",
     "lines_good",
     "write_padded_workbook",
 ]

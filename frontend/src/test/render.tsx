@@ -213,7 +213,7 @@ export const datasetsAnswer: Datasets = {
       origin: "catalogue",
       label: "datasets.lineas_produccion.name",
       description: "datasets.lineas_produccion.description",
-      entry_modes: ["upload", "grid", "form"],
+      entry_modes: ["upload"],
       sheet: "Lineas Produccion",
       header_row: 1,
       natural_key: ["Línea"],

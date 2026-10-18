@@ -29,7 +29,16 @@ Responsibility:
     :data:`~energy.domain.drafts.CHECK_IN_REQUEST_MAX_BYTES` is not validated
     here: that is the worker's job, in increment 12.
 
-    Nothing here writes to Bronze.
+    Every issue comes with its likely reasons and an Excel fix (increment 6).
+    Data is corrected in Excel, not in the app (ADR 0009): a corrected file
+    is uploaded as a correction of the draft it came from, and becomes a
+    draft of its own linked to it. Validating a correction first makes sure
+    both files are judged by the same spec: if the earlier one was validated
+    against another, it is validated again. The comparison then says which
+    issues were cleared, which remain and which are new
+    (:mod:`energy.domain.draft_comparison`).
+
+    Nothing here writes to Bronze, Silver or Gold.
 
 Depends on:
     ``energy.domain``, ``energy.ports.draft_repository``,
@@ -47,7 +56,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from energy.core.logging import get_logger
-from energy.domain.dataset_spec import EntryMode
+from energy.domain.dataset_spec import spec_digest
+from energy.domain.draft_comparison import (
+    Comparison,
+    ComparisonState,
+    PreviousFile,
+    compare,
+)
 from energy.domain.draft_rules import (
     DEFAULT_LISTED_PER_COLUMN,
     IssueCollector,
@@ -71,7 +86,6 @@ from energy.domain.drafts import (
 from energy.domain.exceptions import (
     DraftBusyError,
     EnergyError,
-    EntryModeNotAllowedError,
     UnknownDraftError,
     UnsupportedFileFormatError,
 )
@@ -213,6 +227,7 @@ class DraftService:
         declared_bytes: int | None,
         owner: str,
         owner_name: str | None,
+        previous_draft_id: UUID | None = None,
     ) -> Draft:
         """Check what an upload announces and record its draft.
 
@@ -223,13 +238,13 @@ class DraftService:
             declared_bytes: the size the upload announced.
             owner: the person, as the identity provider's subject.
             owner_name: their name, for display.
+            previous_draft_id: for a correction, the draft it corrects.
 
         Returns:
             The draft, in state ``receiving``.
 
         Raises:
             UnknownDatasetError: if no spec has that key.
-            EntryModeNotAllowedError: if the spec takes no uploads.
             InvalidFilenameError: if the name is unusable.
             UnsupportedFileFormatError: if the name or type is not an ``.xlsx``.
             LengthRequiredError: if the size is not announced.
@@ -237,10 +252,6 @@ class DraftService:
             FileTooLargeError: if it is over the limit.
         """
         spec = self._catalogue.get(dataset_key)
-        if EntryMode.UPLOAD not in spec.entry_modes:
-            raise EntryModeNotAllowedError(
-                "this dataset is not loaded from a file", dataset_key=dataset_key
-            )
         cleaned = clean_filename(filename)
         media_type = content_type.split(";", 1)[0]
         require_xlsx(cleaned, media_type)
@@ -255,7 +266,50 @@ class DraftService:
                 declared_bytes=size,
                 created_by=owner,
                 created_by_name=owner_name,
+                previous_draft_id=previous_draft_id,
             )
+        )
+
+    def open_correction(
+        self,
+        draft_id: UUID,
+        filename: str,
+        content_type: str,
+        declared_bytes: int | None,
+        owner: str,
+        owner_name: str | None,
+    ) -> Draft:
+        """Record the draft of a corrected file, for the dataset of the draft it corrects.
+
+        Args:
+            draft_id: the draft whose file was corrected.
+            filename: the corrected file's name, as the client sent it.
+            content_type: the content type the client declared.
+            declared_bytes: the size the upload announced.
+            owner: the person, who must own the earlier draft.
+            owner_name: their name, for display.
+
+        Returns:
+            The new draft, in state ``receiving``, linked to the earlier one.
+
+        Raises:
+            UnknownDraftError: if ``owner`` has no live draft of that ID.
+            DraftBusyError: if the earlier draft's file never arrived.
+            InvalidFilenameError, UnsupportedFileFormatError,
+            LengthRequiredError, EmptyFileError, FileTooLargeError: as for
+            any upload.
+        """
+        earlier = self.get(draft_id, owner)
+        if earlier.status not in {DraftStatus.UPLOADED, DraftStatus.VALIDATED}:
+            raise DraftBusyError("the draft's file never arrived", draft_id=str(draft_id))
+        return self.open_upload(
+            earlier.dataset_key,
+            filename,
+            content_type,
+            declared_bytes,
+            owner,
+            owner_name,
+            previous_draft_id=earlier.draft_id,
         )
 
     def receive(self, draft: Draft, body: ByteSource) -> UploadOutcome:
@@ -366,6 +420,11 @@ class DraftService:
     def validate(self, draft_id: UUID, owner: str) -> Draft:
         """Check a draft's file against its dataset spec, replacing earlier results.
 
+        For a correction, the earlier draft is validated again afterwards if
+        it was judged by another spec, so the comparison judges both files by
+        the same rules. If that cannot be done (the earlier file is too large
+        to validate here, or busy), the comparison says the rules changed.
+
         Args:
             draft_id: the draft.
             owner: the person asking.
@@ -379,9 +438,22 @@ class DraftService:
                 of it is running.
             NotImplementedError: if the file is over the size validated here.
         """
-        draft = self.get(draft_id, owner)
+        validated = self._validate_one(self.get(draft_id, owner), owner)
+        earlier = self._earlier(validated, owner)
+        if earlier is not None and self._judged_by_another_spec(earlier, validated):
+            with contextlib.suppress(DraftBusyError, NotImplementedError):
+                self._validate_one(earlier, owner)
+                logger.info(
+                    "earlier draft validated again under the current spec",
+                    draft_id=str(earlier.draft_id),
+                    correction=str(draft_id),
+                )
+        return validated
+
+    def _validate_one(self, draft: Draft, owner: str) -> Draft:
+        """Validate one draft's file; see :meth:`validate`."""
         if draft.status not in {DraftStatus.UPLOADED, DraftStatus.VALIDATED}:
-            raise DraftBusyError("the draft's file has not arrived", draft_id=str(draft_id))
+            raise DraftBusyError("the draft's file has not arrived", draft_id=str(draft.draft_id))
         if (draft.size_bytes or 0) > self._check_max_bytes:
             msg = "Increment 12: files over 5 MB are validated by a job, which is not built yet"
             raise NotImplementedError(msg)
@@ -389,7 +461,7 @@ class DraftService:
         bucket, key = draft.bucket or self._bucket, draft.object_key or ""
 
         with (
-            self._repository.validation(draft_id, owner) as writing,
+            self._repository.validation(draft.draft_id, owner) as writing,
             tempfile.TemporaryDirectory(prefix="energy-draft-", dir=self._temp_dir) as folder,
         ):
             path = Path(folder) / "original.xlsx"
@@ -400,12 +472,68 @@ class DraftService:
 
         logger.info(
             "draft validated",
-            draft_id=str(draft_id),
+            draft_id=str(draft.draft_id),
             rows_read=summary.rows_read,
             rows_with_errors=summary.rows_with_errors,
             blocking=summary.blocking,
         )
         return validated
+
+    def _earlier(self, draft: Draft, owner: str) -> Draft | None:
+        """Return the live draft a correction corrects, or ``None``."""
+        if draft.previous_draft_id is None:
+            return None
+        return self._repository.find(draft.previous_draft_id, owner)
+
+    def _judged_by_another_spec(self, earlier: Draft, correction: Draft) -> bool:
+        """Return whether two drafts' last validations used different specs."""
+        if earlier.validation is None or correction.validation is None:
+            return earlier.validation is None
+        return earlier.validation.spec_digest != correction.validation.spec_digest
+
+    def comparison(self, draft: Draft, owner: str) -> Comparison | None:
+        """Return how a correction compares with the file it corrects.
+
+        Args:
+            draft: a draft of ``owner``.
+            owner: the person asking.
+
+        Returns:
+            ``None`` for a draft that corrects nothing; otherwise the
+            comparison, or the reason there is none.
+        """
+        if draft.previous_draft_id is None:
+            return None
+        earlier = self._earlier(draft, owner)
+        if earlier is None:
+            return Comparison(ComparisonState.PREVIOUS_GONE, previous=None)
+        previous = PreviousFile(earlier.draft_id, earlier.filename, earlier.validated_at)
+        if draft.validation is None:
+            return Comparison(ComparisonState.NOT_VALIDATED, previous)
+        if earlier.validation is None:
+            return Comparison(ComparisonState.PREVIOUS_NOT_VALIDATED, previous)
+        if self._judged_by_another_spec(earlier, draft):
+            return Comparison(ComparisonState.RULES_CHANGED, previous)
+        revalidated = (
+            earlier.validated_at is not None
+            and draft.validated_at is not None
+            # Equal only when both ran in one request, a clock tick apart.
+            and earlier.validated_at >= draft.validated_at
+        )
+        return compare(
+            earlier.validation.counts,
+            draft.validation.counts,
+            self._repository.matched(draft.draft_id, earlier.draft_id),
+            previous,
+            previous_revalidated=revalidated,
+        )
+
+    def _comparable(self, draft: Draft, owner: str) -> Draft | None:
+        """Return the earlier draft when a correction's issues can be matched with it."""
+        compared = self.comparison(draft, owner)
+        if compared is None or compared.state is not ComparisonState.READY:
+            return None
+        return self._earlier(draft, owner)
 
     def _check(self, spec: DatasetSpec, path: Path, writing: DraftValidation) -> ValidationSummary:
         """Check one file against its spec, staging rows and issues as it goes."""
@@ -436,6 +564,7 @@ class DraftService:
             rows_with_errors=collector.rows_with_errors,
             rows_with_warnings=collector.rows_with_warnings,
             counts=collector.counts(),
+            spec_digest=spec_digest(spec),
         )
 
     def _package_problem(self, path: Path) -> Issue | None:
@@ -463,10 +592,37 @@ class DraftService:
     ) -> IssuePage:
         """Return a page of a draft's listed issues.
 
+        For a correction that can be compared, each item says whether the
+        earlier file had it.
+
         Raises:
             UnknownDraftError: if ``owner`` has no live draft of that ID.
         """
-        return self._repository.issues(draft_id, owner, wanted or IssueFilter(), offset, limit)
+        draft = self.get(draft_id, owner)
+        earlier = self._comparable(draft, owner)
+        return self._repository.issues(
+            draft_id,
+            owner,
+            wanted or IssueFilter(),
+            offset,
+            limit,
+            previous_id=earlier.draft_id if earlier else None,
+        )
+
+    def cleared(self, draft_id: UUID, owner: str, offset: int = 0, limit: int = 100) -> IssuePage:
+        """Return a page of the issues of the earlier file that a correction no longer has.
+
+        Raises:
+            UnknownDraftError: if ``owner`` has no live draft of that ID, or
+                the draft is no correction that can be compared.
+        """
+        draft = self.get(draft_id, owner)
+        earlier = self._comparable(draft, owner)
+        if earlier is None:
+            raise UnknownDraftError(
+                "this draft corrects no file it can be compared with", draft_id=str(draft_id)
+            )
+        return self._repository.cleared(draft_id, earlier.draft_id, offset, limit)
 
     # -------------------------------------------------------------------------
     # Purge

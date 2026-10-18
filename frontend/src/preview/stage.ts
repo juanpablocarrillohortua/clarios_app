@@ -10,17 +10,33 @@
 //   busy              another validation running (409)
 //   refused           the upload refused as too large (413)
 //
+// and, starting on a validated draft with problems, for its corrected file:
+//
+//   corrected         some problems cleared, some left, one new
+//   same              the same file again (200, the same draft)
+//   allFixed          every problem cleared
+//   rulesChanged      the rules changed and the earlier file could not follow
+//   previousGone      the earlier file is no longer kept
+//
 // The data are made up; no real workbook is behind them.
 import type { Datasets } from "../api/datasets";
-import type { Draft, Issue, IssuesPage, RuleCount } from "../api/drafts";
+import type { Comparison, Draft, Issue, IssuesPage, Reason, RuleCount } from "../api/drafts";
 import type { Me } from "../api/me";
 import type { AuthClient } from "../auth/authClient";
 
 const MIB = 1024 * 1024;
 const DRAFT_ID = "00000000-0000-4000-8000-000000000005";
+const CORRECTION_ID = "00000000-0000-4000-8000-000000000006";
 const UPLOAD_MS = 4000;
 
 const scenario = new URLSearchParams(window.location.search).get("scenario") ?? "broken";
+const correcting = ["corrected", "same", "allFixed", "rulesChanged", "previousGone"].includes(
+  scenario,
+);
+
+function because(reason: string, params: Reason["params"] = {}): Reason {
+  return { reason, params };
+}
 
 const me: Me = {
   subject: "00000000-0000-4000-8000-00000000abcd",
@@ -39,7 +55,7 @@ const datasets: Datasets = {
       origin: "catalogue",
       label: "datasets.lineas_produccion.name",
       description: "datasets.lineas_produccion.description",
-      entry_modes: ["upload", "grid", "form"],
+      entry_modes: ["upload"],
       sheet: "Lineas Produccion",
       header_row: 1,
       natural_key: ["Línea"],
@@ -83,6 +99,11 @@ const brokenIssues: Issue[] = [
     severity: "error",
     value: "Descripcion",
     params: { found: "Descripcion", expected: "Descripción" },
+    reasons: [
+      because("header.near_match", { difference: "accent" }),
+      because("default.schema.header_mismatch"),
+    ],
+    change: null,
   },
   {
     row: 1,
@@ -92,6 +113,11 @@ const brokenIssues: Issue[] = [
     severity: "warning",
     value: null,
     params: { header: "Última Firma Automática" },
+    reasons: [
+      because("header.similar", { found: "Ultima Firma Automatica" }),
+      because("default.schema.column_missing"),
+    ],
+    change: null,
   },
   {
     row: 1,
@@ -101,6 +127,8 @@ const brokenIssues: Issue[] = [
     severity: "info",
     value: "Comentarios",
     params: { header: "Comentarios" },
+    reasons: [because("default.schema.column_unknown")],
+    change: null,
   },
   {
     row: 3,
@@ -110,6 +138,8 @@ const brokenIssues: Issue[] = [
     severity: "error",
     value: null,
     params: {},
+    reasons: [because("default.cell.required")],
+    change: null,
   },
   {
     row: 4,
@@ -119,6 +149,8 @@ const brokenIssues: Issue[] = [
     severity: "error",
     value: "faform02",
     params: { pattern: "^[A-Z0-9]+$" },
+    reasons: [because("text.lowercase"), because("default.cell.pattern")],
+    change: null,
   },
   {
     row: 6,
@@ -126,8 +158,10 @@ const brokenIssues: Issue[] = [
     column_key: "Planificación de Unidades por Hora",
     rule: "cell.type",
     severity: "error",
-    value: "doce",
+    value: "1.234,5",
     params: { type: "decimal" },
+    reasons: [because("number.text_with_separators"), because("default.cell.type")],
+    change: null,
   },
   {
     row: 7,
@@ -137,6 +171,8 @@ const brokenIssues: Issue[] = [
     severity: "error",
     value: "-5",
     params: { min: "0" },
+    reasons: [because("default.cell.range")],
+    change: null,
   },
   {
     row: 9,
@@ -144,8 +180,10 @@ const brokenIssues: Issue[] = [
     column_key: "Firma Automática",
     rule: "cell.allowed",
     severity: "error",
-    value: "Tal vez",
+    value: "si",
     params: { allowed: ["Sí", "No"] },
+    reasons: [because("allowed.near_match", { suggestion: "Sí" }), because("default.cell.allowed")],
+    change: null,
   },
 ];
 
@@ -158,10 +196,37 @@ function manyIssues(): Issue[] {
     severity: "error" as const,
     value: String(100 + (index % 9)),
     params: { pattern: "^[0-9]{4}$" },
+    reasons: [because("code.lost_leading_zeros", { digits: 4 }), because("default.cell.pattern")],
+    change: null,
   }));
 }
 
 const issues = scenario === "many" ? manyIssues() : scenario === "clean" ? [] : brokenIssues;
+
+// The corrected file: two problems left as they were, one new, the rest gone.
+const left = new Set([4, 9]);
+const correctionIssues: Issue[] =
+  scenario === "allFixed"
+    ? []
+    : [
+        ...brokenIssues
+          .filter((issue) => issue.row !== null && left.has(issue.row) && issue.row !== 1)
+          .map((issue) => ({ ...issue, change: "remaining" as const })),
+        {
+          row: 8,
+          column: "D",
+          column_key: "Planificación de Unidades por Hora",
+          rule: "cell.range",
+          severity: "error",
+          value: "-1",
+          params: { min: "0" },
+          reasons: [because("default.cell.range")],
+          change: "new",
+        },
+      ];
+const clearedIssues = brokenIssues.filter(
+  (issue) => !(issue.row !== null && left.has(issue.row) && issue.row !== 1),
+);
 
 function countsOf(list: Issue[]): RuleCount[] {
   const tally = new Map<string, RuleCount>();
@@ -173,9 +238,15 @@ function countsOf(list: Issue[]): RuleCount[] {
       column: issue.column_key,
       rows: 0,
       listed: 0,
+      reasons: [],
     };
-    count.rows += scenario === "many" ? 45 : 1;
+    const rows = scenario === "many" ? 45 : 1;
+    count.rows += rows;
     count.listed += 1;
+    const first = issue.reasons[0]?.reason ?? `default.${issue.rule}`;
+    const byReason = count.reasons.find((each) => each.reason === first);
+    if (byReason) byReason.rows += rows;
+    else count.reasons.push({ reason: first, rows });
     tally.set(key, count);
   }
   return [...tally.values()];
@@ -194,15 +265,17 @@ const uploaded: Draft = {
   expires_at: "2026-11-16T10:00:04Z",
   failure_code: null,
   validation: null,
+  previous_draft_id: null,
+  comparison: null,
 };
 
-function validated(): Draft {
-  const counts = countsOf(issues);
+function validated(list: Issue[] = issues, base: Draft = uploaded): Draft {
+  const counts = countsOf(list);
   const errorRows = new Set(
-    issues.filter((issue) => issue.severity === "error" && issue.row !== 1).map((i) => i.row),
+    list.filter((issue) => issue.severity === "error" && issue.row !== 1).map((i) => i.row),
   );
   return {
-    ...uploaded,
+    ...base,
     status: "validated",
     validation: {
       validated_at: "2026-10-17T10:00:06Z",
@@ -217,7 +290,33 @@ function validated(): Draft {
   };
 }
 
-let current: Draft = uploaded;
+let current: Draft = correcting ? validated() : uploaded;
+let correction: Draft | null = null;
+
+function comparisonOf(): Comparison {
+  const previous = {
+    draft_id: DRAFT_ID,
+    filename: uploaded.filename,
+    validated_at: "2026-10-17T10:00:06Z",
+  };
+  const none = { cleared: 0, remaining: 0, new: 0, by_count_only: [] };
+  if (scenario === "rulesChanged") {
+    return { state: "rules_changed", previous, previous_revalidated: false, ...none };
+  }
+  if (scenario === "previousGone") {
+    return { state: "previous_gone", previous: null, previous_revalidated: false, ...none };
+  }
+  const remaining = correctionIssues.filter((issue) => issue.change === "remaining").length;
+  return {
+    state: "ready",
+    previous,
+    previous_revalidated: false,
+    cleared: clearedIssues.length,
+    remaining,
+    new: correctionIssues.length - remaining,
+    by_count_only: [],
+  };
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -230,17 +329,19 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function page(url: URL): IssuesPage {
+function page(url: URL, list: Issue[] = issues): IssuesPage {
   const severity = url.searchParams.get("severity");
   const rule = url.searchParams.get("rule");
   const column = url.searchParams.get("column");
+  const change = url.searchParams.get("change");
   const offset = Number(url.searchParams.get("offset") ?? 0);
   const limit = Number(url.searchParams.get("limit") ?? 100);
-  const matching = issues.filter(
+  const matching = list.filter(
     (issue) =>
       (!severity || issue.severity === severity) &&
       (!rule || issue.rule === rule) &&
-      (!column || issue.column_key === column),
+      (!column || issue.column_key === column) &&
+      (!change || issue.change === change),
   );
   return { total: matching.length, offset, limit, items: matching.slice(offset, offset + limit) };
 }
@@ -287,6 +388,20 @@ export async function previewFetch(input: RequestInfo | URL, init?: RequestInit)
     return json(current);
   }
   if (path === `/api/drafts/${DRAFT_ID}/issues`) return json(page(url));
+  if (path === `/api/drafts/${CORRECTION_ID}` && correction) return json(correction);
+  if (path === `/api/drafts/${CORRECTION_ID}/validate` && init?.method === "POST" && correction) {
+    await wait(1200);
+    correction = {
+      ...validated(correctionIssues, correction),
+      previous_draft_id: DRAFT_ID,
+      comparison: comparisonOf(),
+    };
+    return json(correction);
+  }
+  if (path === `/api/drafts/${CORRECTION_ID}/issues`) return json(page(url, correctionIssues));
+  if (path === `/api/drafts/${CORRECTION_ID}/cleared`) {
+    return json(page(url, clearedIssues));
+  }
   return json({ code: "not_found" }, 404);
 }
 
@@ -299,8 +414,11 @@ export class PreviewRequest {
   onerror: (() => void) | null = null;
   onabort: (() => void) | null = null;
   private timer: ReturnType<typeof setInterval> | undefined;
+  private url = "";
 
-  open() {}
+  open(_method: string, url: string) {
+    this.url = url;
+  }
   setRequestHeader() {}
 
   send(body: File) {
@@ -316,6 +434,21 @@ export class PreviewRequest {
           if (scenario === "refused") {
             this.status = 413;
             this.responseText = JSON.stringify({ code: "file_too_large" });
+          } else if (this.url.includes("/corrections") && scenario === "same") {
+            this.status = 200;
+            this.responseText = JSON.stringify(current);
+          } else if (this.url.includes("/corrections")) {
+            correction = {
+              ...uploaded,
+              draft_id: CORRECTION_ID,
+              filename: body.name,
+              size_bytes: total,
+              declared_bytes: total,
+              previous_draft_id: DRAFT_ID,
+              comparison: { ...comparisonOf(), state: "not_validated" },
+            };
+            this.status = 201;
+            this.responseText = JSON.stringify(correction);
           } else {
             current = {
               ...uploaded,

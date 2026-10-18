@@ -2,8 +2,10 @@
 
 A dataset spec says what the app expects of one kind of data people load: the
 sheet a file must hold, its columns in order, the type and rules of each
-column, how the rows are kept, and how they may be entered. One YAML file per
-dataset, in `config/datasets/`.
+column, how the rows are kept, and how they are entered: always by uploading a
+workbook, since data is entered and corrected in Excel
+([ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)). One YAML
+file per dataset, in `config/datasets/`.
 
 - **The API reads the specs once, when it starts,** and refuses to start if one
   is malformed. The message names the file, the path in it and the problem.
@@ -13,16 +15,18 @@ dataset, in `config/datasets/`.
 - **A file uploaded from the web app is checked against its spec**
   (`/api/drafts`, increment 5 of the
   [frontend plan](frontend-plan.md#8-build-roadmap)): every problem, with its
-  row, column and rule. [What a file is checked against](#what-a-file-is-checked-against)
-  lists the rules.
+  row, column and rule, why it probably happened and what to do in Excel.
+  [What a file is checked against](#what-a-file-is-checked-against) lists the
+  rules and [Reasons](#reasons-and-fixes) the reasons.
 
-Built on 2026-10-17, as increment 4; the checks of a file, as increment 5.
+Built on 2026-10-17, as increment 4; the checks of a file, as increment 5; the
+reasons, as increment 6 (2026-10-18).
 
 ## The specs today
 
 | Spec | Data | Kind | Entered by | Columns |
 |---|---|---|---|---|
-| `lineas_produccion` | Production lines: sheet `Lineas Produccion` of the EQUS BATT workbook | snapshot | upload, grid, form | 10 |
+| `lineas_produccion` | Production lines: sheet `Lineas Produccion` of the EQUS BATT workbook | snapshot | upload | 10 |
 | `qad_facturas` | Invoice lines: sheet `Datos` of the QAD export "Unidades facturadas" | movement | upload | 49 |
 
 Both rest on real data. Their headers were copied from the workbooks, and a
@@ -39,7 +43,7 @@ key: lineas_produccion            # lowercase snake_case, equal to the file name
 kind: snapshot                    # snapshot or movement
 label: datasets.lineas_produccion.name              # keys of frontend/src/i18n/es.json
 description: datasets.lineas_produccion.description
-entry_modes: [upload, grid, form]
+entry_modes: [upload]
 
 bronze:
   source_key: manual_sheets       # a source of energy.domain.landing.LANDING_SOURCES
@@ -66,7 +70,7 @@ columns:
 | `key` | yes | Lowercase snake_case, and the file's name: `<key>.yaml` |
 | `kind` | yes | `snapshot`: replaced whole on every load (catalogues, product structures). `movement`: rows add up, and a corrected row replaces the old one by its natural key |
 | `label`, `description` | yes | Keys of the web app's translation file, never the texts themselves. A test checks that they exist |
-| `entry_modes` | yes | Any of `upload`, `grid`, `form`, none twice. A QAD export (a source whose system is `qad`) is only ever uploaded |
+| `entry_modes` | yes | `[upload]`, the only value since 2026-10-18 ([ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)). `grid` and `form` are refused |
 | `bronze.source_key` | yes | One of the five Bronze sources |
 | `bronze.sheet` | yes | A name Excel accepts, and not a calculated sheet (`REPORTE QAD`, `Unit_Ship`) |
 | `bronze.dataset_key` | for `manual_sheets` | Lowercase snake_case. Refused for the other sources, which take none |
@@ -203,6 +207,7 @@ the row and the column; the web app turns the ID into a sentence
 | `cell.pattern` | the column's `severity` | The value does not match the pattern whole |
 | `cell.allowed` | the column's `severity` | The value is not one of `allowed` |
 | `cell.range` | the column's `severity` | The number is below `min` or above `max` |
+| `cell.text_damaged` | warning | A `text` value no rule above judged shows damage from Excel or a paste: a code in scientific notation (`2.31E+08`) or with `.0`; a non-breaking space, a tab or a zero-width character (a line break is allowed in free text); text read in the wrong encoding (`DescripciÃ³n`). It catches what a pattern would catch in columns that have none, such as item and customer codes. On FY26 it found nothing in the two specs' sheets; run on every text cell of every workbook, it found one non-breaking space, in a description of sheet `Clasif_Poly`, which has no spec yet (measured 2026-10-18) |
 
 - **Values are trimmed of spaces at both ends** before they are judged, as the
   Silver build reads them. Bronze still stores them as delivered.
@@ -216,14 +221,39 @@ the row and the column; the web app turns the ID into a sentence
 - **A file over 5 MiB is not checked yet.** It is kept, and its check is the
   worker's job (increment 12).
 
+## Reasons and fixes
+
+Every issue comes with its likely reasons, most likely first, each saying why
+it happened and what to do in Excel (Spanish-language Excel for Windows). The
+last is always the rule's own (`default.<rule id>`), whose "why" is the rule's
+sentence. The detectors are pure functions in
+`src/energy/domain/draft_reasons.py`; the sentences are
+`loads.reasons.<id>.why` and `.fix` in `frontend/src/i18n/es.json`. What a spec
+says decides what they can tell:
+
+| From the spec | What a detector can tell |
+|---|---|
+| `type: date` | A date typed as text (`date.typed_as_text`), or a number that is an Excel date without its format (`date.lost_format`, which names the date) |
+| `type: integer` or `decimal` | A number kept as text with thousands separators or a decimal comma (`number.text_with_separators`) |
+| A `pattern` of a fixed number of digits (`^[0-9]{4}$`) | A code Excel turned into a number and so lost its leading zeros (`code.lost_leading_zeros`, which says how many digits). Without such a pattern a lost zero cannot be told from a real code |
+| Any `pattern` | A code in scientific notation or with `.0`; a value that would match in upper case (`text.lowercase`) |
+| `allowed` | A value that is one of them once case, spaces and accents are ignored (`allowed.near_match`, which names it) |
+| `header` | A header that differs only by an accent, case or spaces, saying which (`header.near_match`); a missing column close to an unknown one (`header.similar`); a header read in the wrong encoding |
+| `natural_key` | The identity of each row when a corrected file is compared with the one it corrects: the key, ignoring case, spaces and accents, so a row that moved stays the same row |
+
+A row whose cells repeat the headers explains every issue on it at once
+(`row.header_repeated`, first). [CONTRIBUTING.md](../CONTRIBUTING.md#adding-a-reason-detector)
+says how to add a detector.
+
 ## Not done yet
 
 - **Checks against data already loaded** (duplicates, references, periods,
-  closed months) are increment 8, and the reasons and fixes shown beside each
-  issue increment 6.
+  closed months) are increment 8, and so are the reasons that need them: a
+  code known under another one, `1.234` meant as 1234.
 - **One sheet per spec.** The formed product structures land five sheets under
   one source, and `Clasif_Poly` holds two tables side by side. Increment 12
   decides how to specify them: one spec per sheet, or a version 2 of the
   format.
-- **The loading page offers uploads only.** The specs' grid and form entry
-  modes arrive with increment 9.
+- **No grid and no form.** Every dataset is uploaded; a mistake is fixed in
+  Excel and the file uploaded again as a correction (ADR 0009). Increment 9,
+  which was to bring them, was removed on 2026-10-18.

@@ -23,7 +23,7 @@ key: {key}
 kind: snapshot
 label: datasets.{key}.name
 description: datasets.{key}.description
-entry_modes: [upload, grid, form]
+entry_modes: [upload]
 bronze:
   source_key: manual_sheets
   sheet: Hoja1

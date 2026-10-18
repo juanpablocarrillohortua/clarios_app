@@ -3,8 +3,10 @@
 It keeps the port's promises the tests rely on: a draft is visible to its
 owner only and only while it is live; a validation replaces earlier results
 only if it ends without an error; a second validation of a draft that is being
-validated is refused. ``tests/integration/test_drafts_end_to_end.py`` checks
-the PostgreSQL adapter against the same promises.
+validated is refused; a correction's issues are matched with the earlier
+draft's by rule, column and row identity, where both list every issue of a
+rule and column or one lists none. ``tests/integration/test_drafts_end_to_end.py``
+checks the PostgreSQL adapter against the same promises.
 """
 
 from __future__ import annotations
@@ -16,14 +18,16 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
+from energy.domain.draft_comparison import IssueChange, compared_by_row, group_key
 from energy.domain.drafts import DRAFT_RETENTION, Draft, DraftStatus
 from energy.domain.exceptions import DraftBusyError, UnknownDraftError
 from energy.ports.draft_repository import ExpiredDraft, IssuePage
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator, Sequence
+    from collections.abc import Iterable, Iterator, Mapping, Sequence
 
-    from energy.domain.draft_rules import Issue
+    from energy.domain.draft_comparison import GroupKey
+    from energy.domain.draft_rules import Issue, RuleCount
     from energy.domain.drafts import ValidationSummary
     from energy.domain.landing import LandingRow
     from energy.ports.draft_repository import ArchivedFile, IssueFilter, NewDraft
@@ -99,8 +103,18 @@ class InMemoryDraftRepository:
             expires_at=_now() + DRAFT_RETENTION,
             failure_code=None,
             validation=None,
+            previous_draft_id=draft.previous_draft_id,
         )
         self.drafts[created.draft_id] = created
+        previous = (
+            self._live(draft.previous_draft_id, draft.created_by)
+            if draft.previous_draft_id
+            else None
+        )
+        if previous is not None:
+            self.drafts[previous.draft_id] = dataclasses.replace(
+                previous, expires_at=max(previous.expires_at, _now() + DRAFT_RETENTION)
+            )
         return created
 
     def mark_uploaded(self, draft_id: UUID, archived: ArchivedFile) -> Draft:
@@ -166,25 +180,77 @@ class InMemoryDraftRepository:
         self.issue_lists[draft_id] = writing.issues
 
     def issues(
-        self, draft_id: UUID, owner: str, wanted: IssueFilter, offset: int, limit: int
+        self,
+        draft_id: UUID,
+        owner: str,
+        wanted: IssueFilter,
+        offset: int,
+        limit: int,
+        previous_id: UUID | None = None,
     ) -> IssuePage:
         if self._live(draft_id, owner) is None:
             raise UnknownDraftError("no draft of yours has that ID")
-        matching = [
-            issue
+        changed = [
+            (issue, self._change(issue, draft_id, previous_id) if previous_id else None)
             for issue in self.issue_lists.get(draft_id, [])
+        ]
+        matching = [
+            (issue, change)
+            for issue, change in changed
             if (wanted.severity is None or issue.severity == wanted.severity)
             and (wanted.rule is None or issue.rule == wanted.rule)
             and (wanted.column_key is None or issue.column_key == wanted.column_key)
+            and (wanted.reason is None or issue.reasons[0].id == wanted.reason)
+            and (wanted.change is None or change == wanted.change)
         ]
-        matching.sort(
-            key=lambda issue: (
-                -1 if issue.source_row is None else issue.source_row,
-                -1 if issue.column_index is None else issue.column_index,
-                issue.rule.value,
-            )
+        matching.sort(key=lambda pair: _position(pair[0]))
+        page = matching[offset : offset + limit]
+        return IssuePage(
+            total=len(matching),
+            items=tuple(issue for issue, _ in page),
+            changes=tuple(change for _, change in page) if previous_id else (),
         )
-        return IssuePage(total=len(matching), items=tuple(matching[offset : offset + limit]))
+
+    def _counts(self, draft_id: UUID) -> dict[GroupKey, RuleCount]:
+        draft = self.drafts.get(draft_id)
+        counts = draft.validation.counts if draft and draft.validation else ()
+        return {group_key(count.rule, count.column_key): count for count in counts}
+
+    def _by_row(self, issue: Issue, mine: UUID, theirs: UUID) -> bool:
+        key = group_key(issue.rule, issue.column_key)
+        return compared_by_row(self._counts(theirs).get(key), self._counts(mine).get(key))
+
+    def _has(self, draft_id: UUID, issue: Issue) -> bool:
+        return any(
+            other.rule == issue.rule
+            and other.column_key == issue.column_key
+            and other.match_key == issue.match_key
+            for other in self.issue_lists.get(draft_id, [])
+        )
+
+    def _change(self, issue: Issue, draft_id: UUID, previous_id: UUID) -> IssueChange | None:
+        if not self._by_row(issue, draft_id, previous_id):
+            return None
+        return IssueChange.REMAINING if self._has(previous_id, issue) else IssueChange.NEW
+
+    def matched(self, draft_id: UUID, previous_id: UUID) -> Mapping[GroupKey, int]:
+        found: dict[GroupKey, int] = {}
+        for issue in self.issue_lists.get(draft_id, []):
+            if self._has(previous_id, issue):
+                key = group_key(issue.rule, issue.column_key)
+                found[key] = found.get(key, 0) + 1
+        return found
+
+    def cleared(self, draft_id: UUID, previous_id: UUID, offset: int, limit: int) -> IssuePage:
+        gone = sorted(
+            (
+                issue
+                for issue in self.issue_lists.get(previous_id, [])
+                if self._by_row(issue, previous_id, draft_id) and not self._has(draft_id, issue)
+            ),
+            key=_position,
+        )
+        return IssuePage(total=len(gone), items=tuple(gone[offset : offset + limit]))
 
     def expired(self, now: datetime, only: UUID | None = None) -> tuple[ExpiredDraft, ...]:
         def gone(draft: Draft) -> bool:
@@ -226,6 +292,15 @@ class InMemoryDraftRepository:
     def payloads(self, draft_id: UUID) -> list[dict[str, str]]:
         """Return the staged payloads of a draft, decoded."""
         return [json.loads(row.payload_json) for row in self.rows.get(draft_id, [])]
+
+
+def _position(issue: Issue) -> tuple[int, int, str]:
+    """Return where an issue is listed: by row, then column, the file's own first."""
+    return (
+        -1 if issue.source_row is None else issue.source_row,
+        -1 if issue.column_index is None else issue.column_index,
+        issue.rule.value,
+    )
 
 
 __all__ = ["InMemoryDraftRepository"]

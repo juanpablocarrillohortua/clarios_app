@@ -8,28 +8,38 @@ MinIO are checked in ``tests/integration/test_drafts_end_to_end.py``.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import io
 import re
 import zipfile
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
 from tests.fixtures.drafts import InMemoryDraftRepository
-from tests.fixtures.workbooks import LINES_SHEET, build_workbook, lines_broken, lines_good
+from tests.fixtures.workbooks import (
+    LINES_HEADERS,
+    LINES_SHEET,
+    build_workbook,
+    lines_broken,
+    lines_defects,
+    lines_defects_corrected,
+    lines_good,
+)
 
 from energy.adapters.calamine_workbook import CalamineWorkbookReader
 from energy.adapters.local_storage import LocalObjectStorage
 from energy.adapters.yaml_dataset_specs import load_dataset_specs
 from energy.adapters.zip_package import ZipPackageInspector
+from energy.domain.draft_comparison import ComparisonState, IssueChange
 from energy.domain.draft_rules import IssueSeverity, RuleId
 from energy.domain.drafts import XLSX_MEDIA_TYPE, DraftStatus
 from energy.domain.exceptions import (
     DraftBusyError,
     EmptyFileError,
-    EntryModeNotAllowedError,
     FileTooLargeError,
     IncompleteUploadError,
     LengthRequiredError,
@@ -47,6 +57,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from energy.domain.dataset_spec import DatasetCatalogue
+    from energy.domain.draft_comparison import Comparison
     from energy.domain.drafts import Draft
 
 BUCKET = "bronze-raw"
@@ -160,21 +171,6 @@ class TestOpenUpload:
             service.open_upload(dataset, name, media, size, OWNER, None)
 
         assert repository.drafts == {}
-
-    def test_a_dataset_that_takes_no_file_is_refused(
-        self, make_service: Callable[..., DraftService], catalogue: DatasetCatalogue
-    ) -> None:
-        import dataclasses  # noqa: PLC0415
-
-        from energy.domain.dataset_spec import DatasetCatalogue, EntryMode  # noqa: PLC0415
-
-        lines = dataclasses.replace(
-            catalogue.get("lineas_produccion"), entry_modes=(EntryMode.GRID,)
-        )
-        service = make_service(catalogue=DatasetCatalogue((lines,)))
-
-        with pytest.raises(EntryModeNotAllowedError):
-            service.open_upload("lineas_produccion", "a.xlsx", XLSX_MEDIA_TYPE, 10, OWNER, None)
 
 
 class TestReceive:
@@ -495,14 +491,276 @@ class TestPurge:
         assert list(storage.list_objects(BUCKET, "incoming/")) == []
 
 
+def _lines(*rows: list[object]) -> bytes:
+    """Return a catalogue with the template's headers and these rows."""
+    return build_workbook({LINES_SHEET: [LINES_HEADERS, *rows]})
+
+
+def _row(line: str, almac: object = "1010", plan: object = 1) -> list[object]:
+    """Return a production line with a planning and a warehouse of one's choice."""
+    return [line, almac, "", plan, "", "", "", "", "Sí", ""]
+
+
+def correct(service: DraftService, earlier: Draft, data: bytes, owner: str = OWNER) -> Draft:
+    """Upload a corrected file for a draft, and validate it."""
+    draft = service.open_correction(
+        earlier.draft_id, "Líneas corregidas.xlsx", XLSX_MEDIA_TYPE, len(data), owner, "Ada"
+    )
+    received = service.receive(draft, Body(data)).draft
+    return service.validate(received.draft_id, owner)
+
+
+def compared(service: DraftService, draft: Draft) -> Comparison:
+    """Return the comparison of a correction, which must have one."""
+    comparison = service.comparison(draft, OWNER)
+    assert comparison is not None
+    return comparison
+
+
+class TestCorrections:
+    def test_a_correction_says_what_was_cleared_what_remains_and_what_is_new(
+        self, service: DraftService
+    ) -> None:
+        data, _ = lines_defects()
+        earlier = service.validate(upload(service, data).draft_id, OWNER)
+        corrected, expected = lines_defects_corrected()
+
+        correction = correct(service, earlier, corrected)
+        comparison = compared(service, correction)
+
+        assert correction.previous_draft_id == earlier.draft_id
+        assert comparison.state is ComparisonState.READY
+        assert {
+            "cleared": comparison.cleared,
+            "remaining": comparison.remaining,
+            "new": comparison.new,
+        } == expected
+        assert comparison.by_count_only == ()
+        assert comparison.previous is not None
+        assert comparison.previous.draft_id == earlier.draft_id
+
+    def test_the_issues_list_and_the_cleared_list_agree_with_the_counts(
+        self, service: DraftService
+    ) -> None:
+        earlier = service.validate(upload(service, lines_defects()[0]).draft_id, OWNER)
+        correction = correct(service, earlier, lines_defects_corrected()[0])
+
+        everything = service.issues(correction.draft_id, OWNER, limit=500)
+        new = service.issues(
+            correction.draft_id, OWNER, IssueFilter(change=IssueChange.NEW), limit=500
+        )
+        cleared = service.cleared(correction.draft_id, OWNER, limit=500)
+
+        assert Counter(everything.changes) == {IssueChange.REMAINING: 5, IssueChange.NEW: 1}
+        assert [(i.source_row, i.column_letter, i.rule) for i in new.items] == [
+            (3, "D", RuleId.CELL_RANGE)
+        ]
+        assert cleared.total == 14
+        assert {issue.rule for issue in cleared.items} >= {
+            RuleId.SCHEMA_HEADER_MISMATCH,
+            RuleId.CELL_ALLOWED,
+            RuleId.CELL_TEXT_DAMAGED,
+        }
+
+    def test_rows_that_moved_keep_their_issues(self, service: DraftService) -> None:
+        earlier_rows = [_row("A1"), _row("A2", almac=101), _row("A3", almac="1.0E+3")]
+        earlier = service.validate(upload(service, _lines(*earlier_rows)).draft_id, OWNER)
+
+        # Two rows inserted above: every row moves down two; nothing was fixed.
+        moved = _lines(_row("NEW1"), _row("NEW2"), *earlier_rows)
+        comparison = compared(service, correct(service, earlier, moved))
+
+        assert (comparison.cleared, comparison.remaining, comparison.new) == (0, 2, 0)
+
+    def test_fixing_the_case_of_a_key_keeps_its_row(self, service: DraftService) -> None:
+        earlier = service.validate(
+            upload(service, _lines(_row("faform01", almac=101))).draft_id, OWNER
+        )
+
+        fixed_case = _lines(_row("FAFORM01", almac=101))
+        comparison = compared(service, correct(service, earlier, fixed_case))
+
+        # The lowercase is cleared; the warehouse's lost zero is the same issue.
+        assert (comparison.cleared, comparison.remaining, comparison.new) == (1, 1, 0)
+
+    def test_rows_that_share_a_key_pair_up_in_order(self, service: DraftService) -> None:
+        twice = _lines(_row("A1", almac=101), _row("A1", almac=101))
+        earlier = service.validate(upload(service, twice).draft_id, OWNER)
+
+        one_fixed = _lines(_row("A1"), _row("A1", almac=101))
+        comparison = compared(service, correct(service, earlier, one_fixed))
+
+        assert (comparison.cleared, comparison.remaining, comparison.new) == (1, 1, 0)
+
+    def test_a_rule_too_large_on_both_sides_is_compared_by_count(
+        self, make_service: Callable[..., DraftService]
+    ) -> None:
+        service = make_service(listed_per_column=2)
+        earlier = service.validate(
+            upload(service, _lines(*(_row(f"A{n}", almac=101) for n in range(5)))).draft_id,
+            OWNER,
+        )
+
+        fewer = _lines(*(_row(f"A{n}", almac=101) for n in range(3)), _row("B1", plan=-1))
+        comparison = compared(service, correct(service, earlier, fewer))
+
+        assert [(c.rule, c.column_key, c.before, c.after) for c in comparison.by_count_only] == [
+            (RuleId.CELL_PATTERN, "Almac", 5, 3)
+        ]
+        assert (comparison.cleared, comparison.remaining, comparison.new) == (0, 0, 1)
+
+    def test_a_rule_gone_entirely_is_exact_however_many_it_had(
+        self, make_service: Callable[..., DraftService]
+    ) -> None:
+        service = make_service(listed_per_column=2)
+        earlier = service.validate(
+            upload(service, _lines(*(_row(f"A{n}", almac=101) for n in range(5)))).draft_id,
+            OWNER,
+        )
+
+        all_fixed = _lines(*(_row(f"A{n}") for n in range(5)))
+        comparison = compared(service, correct(service, earlier, all_fixed))
+
+        assert (comparison.cleared, comparison.remaining, comparison.new) == (5, 0, 0)
+        assert comparison.by_count_only == ()
+
+    def test_the_same_file_again_is_the_earlier_draft(self, service: DraftService) -> None:
+        data = lines_defects()[0]
+        earlier = service.validate(upload(service, data).draft_id, OWNER)
+
+        draft = service.open_correction(
+            earlier.draft_id, "otra vez.xlsx", XLSX_MEDIA_TYPE, len(data), OWNER, "Ada"
+        )
+        outcome = service.receive(draft, Body(data))
+
+        assert not outcome.created
+        assert outcome.draft.draft_id == earlier.draft_id
+
+    def test_an_earlier_file_judged_by_another_spec_is_validated_again(
+        self, service: DraftService, repository: InMemoryDraftRepository
+    ) -> None:
+        earlier = service.validate(upload(service, lines_defects()[0]).draft_id, OWNER)
+        assert earlier.validation is not None
+        older_rules = dataclasses.replace(earlier.validation, spec_digest="0" * 64)
+        repository.drafts[earlier.draft_id] = dataclasses.replace(
+            repository.drafts[earlier.draft_id], validation=older_rules
+        )
+
+        correction = correct(service, earlier, lines_defects_corrected()[0])
+        comparison = compared(service, correction)
+
+        again = repository.find(earlier.draft_id, OWNER)
+        assert again is not None
+        assert again.validation is not None
+        assert again.validation.spec_digest != "0" * 64
+        assert comparison.state is ComparisonState.READY
+        assert comparison.previous_revalidated
+
+    def test_rules_that_changed_since_are_said_when_the_earlier_file_cannot_follow(
+        self, service: DraftService, repository: InMemoryDraftRepository
+    ) -> None:
+        earlier = service.validate(upload(service, lines_defects()[0]).draft_id, OWNER)
+        correction = correct(service, earlier, lines_defects_corrected()[0])
+        stale = repository.drafts[earlier.draft_id]
+        assert stale.validation is not None
+        repository.drafts[earlier.draft_id] = dataclasses.replace(
+            stale, validation=dataclasses.replace(stale.validation, spec_digest="0" * 64)
+        )
+
+        comparison = compared(service, correction)
+
+        assert comparison.state is ComparisonState.RULES_CHANGED
+        with pytest.raises(UnknownDraftError):
+            service.cleared(correction.draft_id, OWNER)
+        assert service.issues(correction.draft_id, OWNER).changes == ()
+
+    def test_an_earlier_file_too_large_to_validate_here_is_said(
+        self, make_service: Callable[..., DraftService]
+    ) -> None:
+        large, small = lines_defects()[0], lines_defects_corrected()[0]
+        assert len(large) > len(small)
+        service = make_service(check_max_bytes=len(small))
+        earlier = upload(service, large)
+
+        comparison = compared(service, correct(service, earlier, small))
+
+        assert comparison.state is ComparisonState.PREVIOUS_NOT_VALIDATED
+
+    def test_an_earlier_file_that_is_gone_is_said(
+        self, service: DraftService, repository: InMemoryDraftRepository
+    ) -> None:
+        earlier = service.validate(upload(service, lines_defects()[0]).draft_id, OWNER)
+        correction = correct(service, earlier, lines_defects_corrected()[0])
+
+        repository.remove([earlier.draft_id])
+        comparison = compared(service, correction)
+
+        assert comparison.state is ComparisonState.PREVIOUS_GONE
+        assert comparison.previous is None
+        with pytest.raises(UnknownDraftError):
+            service.cleared(correction.draft_id, OWNER)
+
+    def test_a_draft_that_corrects_nothing_has_no_comparison(self, service: DraftService) -> None:
+        draft = service.validate(upload(service, lines_good()).draft_id, OWNER)
+
+        assert service.comparison(draft, OWNER) is None
+        with pytest.raises(UnknownDraftError):
+            service.cleared(draft.draft_id, OWNER)
+
+    def test_only_the_owner_corrects_a_draft(self, service: DraftService) -> None:
+        earlier = upload(service, lines_good())
+
+        with pytest.raises(UnknownDraftError):
+            service.open_correction(
+                earlier.draft_id, "a.xlsx", XLSX_MEDIA_TYPE, 10, SOMEONE_ELSE, None
+            )
+
+    def test_a_draft_whose_file_never_arrived_cannot_be_corrected(
+        self, service: DraftService
+    ) -> None:
+        arriving = service.open_upload(
+            "lineas_produccion", "a.xlsx", XLSX_MEDIA_TYPE, 10, OWNER, None
+        )
+
+        with pytest.raises(DraftBusyError):
+            service.open_correction(arriving.draft_id, "b.xlsx", XLSX_MEDIA_TYPE, 10, OWNER, None)
+
+    def test_a_correction_keeps_the_earlier_draft_alive(
+        self, service: DraftService, repository: InMemoryDraftRepository
+    ) -> None:
+        earlier = upload(service, lines_good())
+        soon = datetime.now(UTC) + timedelta(days=2)
+        repository.drafts[earlier.draft_id] = dataclasses.replace(
+            repository.drafts[earlier.draft_id], expires_at=soon
+        )
+
+        service.open_correction(earlier.draft_id, "b.xlsx", XLSX_MEDIA_TYPE, 10, OWNER, None)
+
+        assert repository.drafts[earlier.draft_id].expires_at > soon + timedelta(days=20)
+
+    def test_the_earlier_original_is_never_touched(
+        self, service: DraftService, storage: LocalObjectStorage
+    ) -> None:
+        data = lines_defects()[0]
+        earlier = service.validate(upload(service, data).draft_id, OWNER)
+        assert earlier.object_key is not None
+        before = storage.get(BUCKET, earlier.object_key)
+
+        correction = correct(service, earlier, lines_defects_corrected()[0])
+
+        assert storage.get(BUCKET, earlier.object_key) == before == data
+        assert correction.object_key != earlier.object_key
+
+
 def test_nothing_on_the_drafts_path_can_write_to_bronze(repo_root: Path) -> None:
-    """Bronze stays unchanged by construction: the drafts path never names it."""
+    """Bronze, Silver and Gold stay unchanged by construction: the drafts path never names them."""
     src = repo_root / "src" / "energy"
     repository = (src / "adapters" / "postgres_draft_repo.py").read_text(encoding="utf-8")
     service = (src / "services" / "draft_service.py").read_text(encoding="utf-8")
     router = (src / "api" / "routers" / "drafts.py").read_text(encoding="utf-8")
 
-    assert "bronze." not in repository.lower()
+    for layer in ("bronze.", "silver.", "gold.", "reference.", "reporting."):
+        assert layer not in repository.lower(), layer
     assert "staging." in repository
     for module in (service, router):
         assert "bronze_landing" not in module

@@ -179,7 +179,7 @@ class DatasetDescription(ResponseModel):
             hand).
         label: the key of the dataset's name in the web app's translation file.
         description: the key of its description there.
-        entry_modes: how rows may be entered: ``upload``, ``grid``, ``form``.
+        entry_modes: how rows may be entered: only ``upload`` (ADR 0009).
         sheet: the worksheet a file must hold.
         header_row: the row of that sheet that holds the headers.
         natural_key: the column keys that identify a row.
@@ -193,7 +193,7 @@ class DatasetDescription(ResponseModel):
     origin: Literal["export", "catalogue"]
     label: str
     description: str
-    entry_modes: list[Literal["upload", "grid", "form"]]
+    entry_modes: list[Literal["upload"]]
     sheet: str
     header_row: int
     natural_key: list[str]
@@ -232,6 +232,18 @@ IssueSeverityName = Literal["error", "warning", "info"]
 DraftStatusName = Literal["receiving", "uploaded", "validated", "failed"]
 
 
+class ReasonCountResponse(ResponseModel):
+    """How many issues of one rule in one column have one first reason.
+
+    Attributes:
+        reason: the reason's ID, such as ``code.lost_leading_zeros``.
+        rows: how many issues it comes first in, exactly.
+    """
+
+    reason: str
+    rows: int
+
+
 class RuleCountResponse(ResponseModel):
     """How often one rule was broken in one column of a draft.
 
@@ -241,6 +253,8 @@ class RuleCountResponse(ResponseModel):
         column: the column's key; ``None`` for the file as a whole.
         rows: every row that broke it, exactly.
         listed: how many of those are in the issues list (at most 1,000).
+        reasons: the same rows by their first reason, most first; they add
+            up to ``rows``.
     """
 
     rule: str
@@ -248,6 +262,7 @@ class RuleCountResponse(ResponseModel):
     column: str | None
     rows: int
     listed: int
+    reasons: list[ReasonCountResponse]
 
 
 class DraftValidationResponse(ResponseModel):
@@ -274,6 +289,64 @@ class DraftValidationResponse(ResponseModel):
     counts: list[RuleCountResponse]
 
 
+class PreviousFileResponse(ResponseModel):
+    """The file a correction is compared with.
+
+    Attributes:
+        draft_id: its draft.
+        filename: its name, as given.
+        validated_at: when it was last validated; ``None`` if never.
+    """
+
+    draft_id: UUID
+    filename: str
+    validated_at: AwareDatetime | None
+
+
+class CountOnlyResponse(ResponseModel):
+    """A rule and column with too many issues on both sides to compare one by one.
+
+    Attributes:
+        rule: the rule's ID.
+        column: the column's key; ``None`` for the file as a whole.
+        before: its issues in the earlier file, exactly.
+        after: its issues in the correction, exactly.
+    """
+
+    rule: str
+    column: str | None
+    before: int
+    after: int
+
+
+class ComparisonResponse(ResponseModel):
+    """How a correction compares with the file it corrects.
+
+    Attributes:
+        state: ``ready``; or why there is no comparison:
+            ``not_validated``, ``previous_not_validated``, ``previous_gone``,
+            ``rules_changed``.
+        previous: the earlier file, while it is kept.
+        previous_revalidated: the earlier file was validated again after
+            the correction, so both are judged by the same rules.
+        cleared: issues of the earlier file the correction no longer has.
+        remaining: issues of the earlier file the correction still has.
+        new: issues of the correction the earlier file did not have.
+        by_count_only: rules and columns compared by count alone; they are
+            not in the three numbers above.
+    """
+
+    state: Literal[
+        "ready", "not_validated", "previous_not_validated", "previous_gone", "rules_changed"
+    ]
+    previous: PreviousFileResponse | None
+    previous_revalidated: bool
+    cleared: int
+    remaining: int
+    new: int
+    by_count_only: list[CountOnlyResponse]
+
+
 class DraftResponse(ResponseModel):
     """One uploaded file, while it is prepared. Only its owner sees it.
 
@@ -290,6 +363,8 @@ class DraftResponse(ResponseModel):
         expires_at: when the draft is purged if nobody works on it.
         failure_code: why the upload failed, for a ``failed`` draft.
         validation: what the last validation found; ``None`` before one.
+        previous_draft_id: the draft whose file this one corrects, if any.
+        comparison: for a correction, how it compares with that file.
     """
 
     draft_id: UUID
@@ -304,6 +379,21 @@ class DraftResponse(ResponseModel):
     expires_at: AwareDatetime
     failure_code: str | None
     validation: DraftValidationResponse | None
+    previous_draft_id: UUID | None
+    comparison: ComparisonResponse | None
+
+
+class ReasonResponse(ResponseModel):
+    """One likely reason for an issue.
+
+    Attributes:
+        reason: the reason's ID; the web app shows why it happened and what
+            to do in Excel (``loads.reasons.<id>`` in its translation file).
+        params: what its sentences need: a date, a suggested value ...
+    """
+
+    reason: str
+    params: dict[str, str | int | list[str]]
 
 
 class IssueResponse(ResponseModel):
@@ -320,6 +410,9 @@ class IssueResponse(ResponseModel):
         severity: ``error``, ``warning`` or ``info``.
         value: the text found, at most 200 characters.
         params: what the sentence needs: the pattern, the allowed values ...
+        reasons: why it probably happened, most likely first; never empty.
+        change: for a correction, ``new`` or ``remaining``; ``None`` for any
+            other draft, or where its rule and column are compared by count.
     """
 
     row: int | None
@@ -329,6 +422,8 @@ class IssueResponse(ResponseModel):
     severity: IssueSeverityName
     value: str | None
     params: dict[str, str | int | list[str]]
+    reasons: list[ReasonResponse]
+    change: Literal["new", "remaining"] | None
 
 
 class IssuesPageResponse(ResponseModel):
@@ -657,6 +752,8 @@ __all__ = [
     "AuthClientConfig",
     "CheckResponse",
     "ClientConfigResponse",
+    "ComparisonResponse",
+    "CountOnlyResponse",
     "DraftResponse",
     "DraftStatusName",
     "DraftValidationResponse",
@@ -673,7 +770,10 @@ __all__ = [
     "LayerCounts",
     "MeResponse",
     "PowerBIClientConfig",
+    "PreviousFileResponse",
     "ReadinessResponse",
+    "ReasonCountResponse",
+    "ReasonResponse",
     "RejectedReading",
     "RuleCountResponse",
     "RunDetailResponse",

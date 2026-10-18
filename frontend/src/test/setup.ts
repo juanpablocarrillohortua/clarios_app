@@ -30,3 +30,7 @@ window.ResizeObserver = class {
   unobserve() {}
   disconnect() {}
 };
+
+// Mantine's select scrolls the highlighted choice into view; jsdom lays out
+// nothing and has no such method.
+Element.prototype.scrollIntoView = () => {};

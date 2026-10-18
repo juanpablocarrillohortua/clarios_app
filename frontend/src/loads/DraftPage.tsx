@@ -5,9 +5,14 @@
 //
 // The server decides what can be validated now: a file over its limit answers
 // "not built yet" (501), and the page says that the file was kept.
+//
+// A file with problems is fixed in Excel and uploaded again from here, as a
+// correction of this draft (increment 6, ADR 0009): by the one primary button,
+// or by dropping the file anywhere on the page. The page then moves to the new
+// draft, which says first what the correction cleared, kept and added.
 import { Anchor, Box, Button, Group, Stack, Text, Title } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useRef } from "react";
+import { type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 
@@ -18,6 +23,9 @@ import { Busy } from "../components/Busy";
 import { Panel } from "../components/Panel";
 import { paths } from "../paths";
 import classes from "../styles/app.module.css";
+import { ClearedList } from "./ClearedList";
+import { ComparisonSummary } from "./ComparisonSummary";
+import { CorrectionUpload, useCorrection } from "./CorrectionUpload";
 import { DraftSummary } from "./DraftSummary";
 import { formatBytes } from "./formatBytes";
 import { IssuesList } from "./IssuesList";
@@ -52,22 +60,53 @@ export function DraftPage() {
   });
 
   // Arriving from an upload: validate once. React's strict mode runs effects
-  // twice, so a ref, not the mutation's state, keeps it to one request.
-  const started = useRef(false);
+  // twice, so a ref, not the mutation's state, keeps it to one request. It
+  // remembers which draft: a correction moves this same page to a new one.
+  const started = useRef<string | null>(null);
   const wanted = (location.state as { validate?: boolean } | null)?.validate === true;
   const status = draft.data?.status;
   useEffect(() => {
-    if (wanted && status === "uploaded" && !started.current) {
-      started.current = true;
+    if (wanted && status === "uploaded" && started.current !== draftId) {
+      started.current = draftId;
       validation.mutate();
       // A reload must not validate again.
       navigate(location.pathname, { replace: true, state: null });
     }
-  }, [wanted, status, validation, navigate, location.pathname]);
+  }, [wanted, status, validation, navigate, location.pathname, draftId]);
 
   const data = draft.data;
   const dataset = datasets.data?.datasets.find((candidate) => candidate.key === data?.dataset_key);
   const limits = datasets.data?.limits;
+  const correction = useCorrection(draftId, limits);
+
+  // A corrected file dropped anywhere on the page goes up at once. Entering a
+  // child fires enter and leave in pairs; counting them keeps the edge steady.
+  const depth = useRef(0);
+  const [dragging, setDragging] = useState(false);
+  const hasIssues = (draft.data?.validation?.counts.length ?? 0) > 0;
+  const droppable =
+    draft.data?.status === "validated" && hasIssues && Boolean(limits) && !correction.busy;
+  const drop = {
+    onDragEnter(event: DragEvent) {
+      if (!droppable) return;
+      event.preventDefault();
+      depth.current += 1;
+      setDragging(true);
+    },
+    onDragOver(event: DragEvent) {
+      if (droppable) event.preventDefault();
+    },
+    onDragLeave() {
+      depth.current = Math.max(0, depth.current - 1);
+      if (depth.current === 0) setDragging(false);
+    },
+    onDrop(event: DragEvent) {
+      event.preventDefault();
+      depth.current = 0;
+      setDragging(false);
+      if (droppable) correction.choose(event.dataTransfer.files[0]);
+    },
+  };
   const another = `${paths.loads}?dataset=${encodeURIComponent(data?.dataset_key ?? "")}`;
   const anotherLink = (
     <Anchor component={Link} to={another} size="sm">
@@ -127,10 +166,19 @@ export function DraftPage() {
       </Panel>
     );
   } else if (data?.status === "validated" && data.validation) {
+    const comparison = data.comparison;
+    const comparing = comparison?.state === "ready";
     body = (
       <Stack gap="lg">
+        {comparison && <ComparisonSummary comparison={comparison} />}
         <DraftSummary validation={data.validation} />
-        <IssuesList draftId={data.draft_id} validation={data.validation} />
+        {hasIssues && limits && (
+          <CorrectionUpload correction={correction} limits={limits} dragging={dragging} />
+        )}
+        <IssuesList draftId={data.draft_id} validation={data.validation} comparing={comparing} />
+        {comparing && comparison && (
+          <ClearedList draftId={data.draft_id} cleared={comparison.cleared} />
+        )}
       </Stack>
     );
   } else {
@@ -151,7 +199,7 @@ export function DraftPage() {
   }
 
   return (
-    <Box maw={960}>
+    <Box maw={960} className={classes.pageDrop} data-dragging={dragging || undefined} {...drop}>
       <Stack gap="lg">
         <Stack gap={4}>
           <LoadsHeading />

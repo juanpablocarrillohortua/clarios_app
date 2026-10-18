@@ -10,7 +10,7 @@
 import type { TFunction } from "i18next";
 import i18n from "i18next";
 
-import type { Issue } from "../api/drafts";
+import type { Issue, Reason } from "../api/drafts";
 import { formatBytes, formatCount } from "./formatBytes";
 
 type Lookup = (key: string, options?: Record<string, unknown>) => string;
@@ -63,6 +63,93 @@ export function issueMessage(t: TFunction, issue: Issue): string {
     return lookup(t)("loads.issues.unknownRule", { rule: issue.rule });
   }
   return lookup(t)(key, values(t, issue));
+}
+
+/** Where an issue is, as Excel names a cell ("C5"), or its column or row alone. */
+export function cellName(issue: Issue): string | null {
+  if (issue.column && issue.row !== null) return `${issue.column}${issue.row}`;
+  return issue.column ?? (issue.row !== null ? String(issue.row) : null);
+}
+
+/** Where an issue is, for the eye: the cell, the row alone, or the whole file. */
+export function cellLabel(t: TFunction, issue: Issue): string {
+  if (issue.column === null && issue.row !== null) {
+    return t("loads.issues.rowOnly", { row: issue.row });
+  }
+  return cellName(issue) ?? t("loads.issues.wholeFile");
+}
+
+/** An issue's most likely reason; a rule's own when the server gave none. */
+export function firstReason(issue: Issue): Reason {
+  return issue.reasons[0] ?? { reason: `default.${issue.rule}`, params: {} };
+}
+
+/** The other likely reasons, when there are any worth saying: never the rule's own. */
+export function otherReasons(issue: Issue): Reason[] {
+  return issue.reasons.slice(1).filter((reason) => !reason.reason.startsWith("default."));
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** The values a reason's sentences need: the issue's own, then the reason's. */
+function reasonValues(t: TFunction, issue: Issue, reason: Reason): Record<string, string | number> {
+  const read = lookup(t);
+  const written: Record<string, string | number> = {
+    cell: cellName(issue) ?? "",
+    row: issue.row !== null ? String(issue.row) : "",
+    column: issue.column ?? "",
+    header:
+      (typeof issue.params.header === "string" ? issue.params.header : issue.column_key) ?? "",
+    value: issue.value?.trim() ? issue.value : read("loads.issues.empty"),
+    ...values(t, issue),
+  };
+  for (const [name, value] of Object.entries(reason.params)) {
+    if (name === "characters" && Array.isArray(value)) {
+      written[name] = value.map((each) => named(t, `loads.characters.${each}`, each)).join(", ");
+    } else if (name === "difference" && typeof value === "string") {
+      written[name] = named(t, `loads.differences.${value}`, value);
+    } else if (name === "date" && typeof value === "string" && ISO_DATE.test(value)) {
+      written[name] = new Intl.DateTimeFormat("es", { dateStyle: "short", timeZone: "UTC" }).format(
+        new Date(`${value}T00:00:00Z`),
+      );
+    } else if (typeof value === "number") {
+      written[name] = formatCount(value);
+    } else {
+      written[name] = Array.isArray(value) ? value.join(", ") : value;
+    }
+  }
+  return written;
+}
+
+/**
+ * Why an issue probably happened. A detector's reason has a sentence of its
+ * own; a rule's own reason is the rule's message.
+ */
+export function reasonWhy(t: TFunction, issue: Issue, reason: Reason = firstReason(issue)): string {
+  const key = `loads.reasons.${reason.reason}.why`;
+  if (!i18n.exists(key)) return issueMessage(t, issue);
+  const all = reasonValues(t, issue, reason);
+  const why = lookup(t)(key, all);
+  const repaired = `loads.reasons.${reason.reason}.repaired`;
+  return typeof reason.params.repaired === "string" && i18n.exists(repaired)
+    ? `${why} ${lookup(t)(repaired, all)}`
+    : why;
+}
+
+/** What to do in Excel. A reason this app does not know falls back to its rule's own fix. */
+export function reasonFix(
+  t: TFunction,
+  issue: Issue,
+  reason: Reason = firstReason(issue),
+): string | null {
+  const all = reasonValues(t, issue, reason);
+  for (const key of [
+    `loads.reasons.${reason.reason}.fix`,
+    `loads.reasons.default.${issue.rule}.fix`,
+  ]) {
+    if (i18n.exists(key)) return lookup(t)(key, all);
+  }
+  return null;
 }
 
 /** A second line, when there is more to say: the format expected, or why a file cannot be read. */

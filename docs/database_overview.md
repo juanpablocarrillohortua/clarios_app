@@ -730,7 +730,9 @@ measures: [powerbi.md](powerbi.md).
 
 ## 6b. Staging: uploads while they are checked
 
-Created by [`0007_create_staging_schema.py`](../migrations/versions/0007_create_staging_schema.py).
+Created by [`0007_create_staging_schema.py`](../migrations/versions/0007_create_staging_schema.py);
+reasons and corrections added by
+[`0008_add_reasons_and_corrections.py`](../migrations/versions/0008_add_reasons_and_corrections.py).
 
 A person loading data through the web app uploads a file for one dataset
 ([dataset specs](dataset-specs.md)). The file becomes a **draft**: its original is
@@ -738,11 +740,19 @@ archived in object storage at once, under the key the Bronze loader uses, and th
 draft waits here while it is checked. Nothing reaches Bronze until a later
 increment confirms a load, so the layers are untouched by an upload.
 
+Every problem found carries its likely reasons and what to do in Excel. A file
+with problems is fixed in Excel and uploaded again as a **correction**: a draft
+of its own, which names the draft it corrects (`previous_draft_id`), so the two
+can be compared. Data is never edited here
+([ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)).
+
 ```mermaid
 erDiagram
     drafts ||--o{ draft_rows : "stages"
     drafts ||--o{ draft_issues : "lists"
     drafts ||--o{ draft_rule_counts : "counts"
+    drafts ||--o{ draft_reason_counts : "counts by reason"
+    drafts |o..o{ drafts : "corrected by (not enforced)"
     drafts {
         uuid draft_id PK
         text dataset_key
@@ -752,6 +762,8 @@ erDiagram
         text object_key "where it is archived"
         text created_by "the person, as Entra ID's subject"
         timestamptz expires_at "30 days after the last work"
+        uuid previous_draft_id "the draft it corrects"
+        char spec_digest "the spec it was checked against"
     }
     draft_rows {
         int source_row "the Excel row"
@@ -765,6 +777,9 @@ erDiagram
         int column_index
         text value
         jsonb params
+        jsonb reasons "likely reasons, most likely first"
+        text reason_id "the first"
+        text match_key "the row's identity"
     }
     draft_rule_counts {
         text rule_id
@@ -772,20 +787,34 @@ erDiagram
         bigint rows_affected "every row"
         int issues_listed "at most 1,000"
     }
+    draft_reason_counts {
+        text rule_id
+        text column_key
+        text reason_id
+        bigint rows_affected "every row"
+    }
 ```
 
 | Table | Holds |
 |---|---|
-| `drafts` | One upload: which dataset, which file, whose, where its original is archived, and what its last check found |
+| `drafts` | One upload: which dataset, which file, whose, where its original is archived, what its last check found and against which spec, and the draft it corrects, if any |
 | `draft_rows` | The rows of the file exactly as Bronze would land them, so a confirmed load lands what was checked |
-| `draft_issues` | The first 1,000 problems of each rule in each column, with row, column and the value found |
+| `draft_issues` | The first 1,000 problems of each rule in each column, with row, column, the value found, its likely reasons, and its row's identity |
 | `draft_rule_counts` | How many rows broke each rule in each column, every one of them |
+| `draft_reason_counts` | The same rows by their first reason |
 
 - **A draft is its owner's.** The API shows it to the person who uploaded it and
   to nobody else.
 - **Removing a draft removes everything staged for it.** `energy drafts purge`
   removes drafts not worked on for 30 days, and their original when nothing else
   needs it.
+- **A correction keeps its link when the earlier draft is purged.** The link is
+  not a foreign key, so the page can still say that the earlier file is gone.
+  Uploading a correction extends the earlier draft's 30 days too.
+- **Two issues are the same issue** in a draft and its correction when they
+  share rule, column and `match_key`: the row's natural key, ignoring case,
+  spaces and accents, with its occurrence among rows of the same key; or the
+  row number when the key is incomplete.
 - **Power BI's login cannot see this schema.**
 
 ---
@@ -824,7 +853,8 @@ flowchart LR
     m5["0005<br/>hypertables,<br/>compression, retention"]
     m6["0006<br/>reporting<br/>12 views for Power BI,<br/>role reporting_reader"]
     m7["0007<br/>staging<br/>4 tables: uploads<br/>while they are checked"]
-    m1 --> m2 --> m3 --> m4 --> m5 --> m6 --> m7
+    m8["0008<br/>staging<br/>reasons, corrections,<br/>1 table"]
+    m1 --> m2 --> m3 --> m4 --> m5 --> m6 --> m7 --> m8
 ```
 
 Revisions 0002, 0003 and 0004 were rewritten in place while the EQUS layers were
@@ -832,8 +862,8 @@ built. A database migrated before a rewrite is brought up to date by going down 
 the revision before the rewritten one and up again: for the Gold rewrite,
 `make db-downgrade` until `alembic current` says `0003`, then `make db-upgrade`.
 That leaves Bronze and Silver as they are, but it drops `gold`, closed months
-included. Revisions 0006 and 0007 were added as new files, so `make db-upgrade` applies
-them to any database already at the revision before.
+included. Revisions 0006, 0007 and 0008 were added as new files, so `make db-upgrade`
+applies them to any database already at the revision before.
 
 ---
 

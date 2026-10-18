@@ -4,11 +4,12 @@
 // byte is sent the server still has to finish storing the file, so the upload
 // shows "archiving" until the answer arrives. Cancelling works at any moment:
 // it aborts the request, the server removes what it had received, and the
-// chosen file stays chosen.
+// chosen file stays chosen. The same hook sends a new file and a corrected
+// one: only where it goes differs.
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "../api/client";
-import { type Draft, uploadDraft } from "../api/drafts";
+import { type Draft, type UploadTarget, uploadDraft } from "../api/drafts";
 import { SendAborted, SendBroken } from "../api/upload";
 import type { AuthClient } from "../auth/authClient";
 
@@ -62,7 +63,7 @@ export function useUpload({ auth, maxBytes, onUploaded }: UploadOptions) {
   useEffect(() => () => controller.current?.abort(), []);
 
   const start = useCallback(
-    async (datasetKey: string, file: File) => {
+    async (target: UploadTarget, file: File) => {
       controller.current?.abort();
       const current = new AbortController();
       controller.current = current;
@@ -71,7 +72,7 @@ export function useUpload({ auth, maxBytes, onUploaded }: UploadOptions) {
       try {
         const draft = await uploadDraft(
           auth,
-          datasetKey,
+          target,
           file,
           ({ sent, total }) => {
             if (current.signal.aborted) return;

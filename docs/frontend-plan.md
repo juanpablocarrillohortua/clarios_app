@@ -86,8 +86,10 @@ language and a build step for a small Python team. The plan keeps that cost down
 in three ways:
 
 - **A thin frontend.** Dataset definitions, validation and messages come from
-  the API (section 5). One generic form and one generic grid serve every dataset
-  type, so adding a dataset needs no frontend code.
+  the API (section 5), so adding a dataset needs no frontend code. (The plan
+  first had one generic form and one generic grid for every dataset; both were
+  dropped on 2026-10-18: data is entered and corrected in Excel,
+  [ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md).)
 - **No Next.js.** The app sits behind Caddy and talks to FastAPI, so server-side
   rendering buys nothing. A static build needs no extra server.
 - **Small, standard libraries** (below).
@@ -117,13 +119,14 @@ The backend plan in sections 5 to 7 is the same either way.
 | Texts | i18next with `react-i18next` | Spanish, in `frontend/src/i18n/es.json` |
 | Sign-in | `@azure/msal-browser` | Microsoft Entra ID. Used alone, behind an interface of the app's own ([ADR 0006](adr/0006-api-tokens-and-app-roles.md)); the plan first named `@azure/msal-react` |
 | Power BI | `powerbi-client` | Microsoft's embedding library. Used alone, behind an interface of the app's own ([ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md)); the plan first named its React wrapper, `powerbi-client-react` |
-| Grid | Decided by a short spike in increment 6 | See below |
+| Grid | None. The spike planned for increment 6 was dropped on 2026-10-18 with grid and form entry: data is entered and corrected in Excel ([ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)) | The options below are kept as the record of what was weighed |
 | Format and lint | Biome | One tool for both, as ruff is on the Python side |
 | Tests | Vitest with Testing Library | Runs in `make frontend-check` and in CI |
 | Packages and runtime | npm with a committed lockfile; Node 24 LTS | Pinned in `frontend/.nvmrc` |
 
-**Grid options.** The grid must paste a block from Excel, show an error on a
-cell, offer dropdowns and date and number formats, and scroll smoothly.
+**Grid options** (no longer needed: ADR 0009). The grid had to paste a block
+from Excel, show an error on a cell, offer dropdowns and date and number
+formats, and scroll smoothly.
 
 - **Glide Data Grid** and **RevoGrid** are MIT-licensed and support range
   selection and paste. One of them is the default, because it costs nothing.
@@ -137,7 +140,7 @@ cell, offer dropdowns and date and number formats, and scroll smoothly.
 flowchart TB
     subgraph browser["Browser: React app"]
         DASHP["Dashboard page<br/>powerbi-client"]
-        LOADP["Data loading pages<br/>upload, form, grid"]
+        LOADP["Data loading pages<br/>upload, issues, corrections"]
     end
 
     ENTRA["Microsoft Entra ID"]
@@ -175,10 +178,11 @@ flowchart TB
 ### The parts
 
 - **Frontend** (`frontend/`, new). It holds no business rule. It asks the API
-  which dataset types exist and what their columns are, and draws the form and
-  the grid from the answer.
+  which dataset types exist and what their columns are, and draws the loading
+  page and the issues from the answer. Data is entered and corrected in Excel
+  (ADR 0009).
 - **API** (`src/energy/api/`). New routers: `datasets` (the specs), `drafts`
-  (upload, edit, validate, commit), `me` (who is signed in and what they may
+  (upload, validate, correct, commit), `me` (who is signed in and what they may
   do) and `config` (the settings the app needs before sign-in). The `uploads`
   and `runs` placeholders are implemented for history and status. The `kpis`
   placeholders are not: no page of this plan calls them, and Phase 4 removes
@@ -193,8 +197,7 @@ flowchart TB
 - **Bronze write path.** The existing port `BronzeLandingRepository.land()`
   takes rows from any source, so a confirmed draft lands exactly as a workbook
   does: one run, one transaction. Details are in section 6.
-- **Jobs.** Small inputs (a form row, a pasted grid, a file of up to 5 MB) are
-  validated inside the request. Larger files are validated by a Prefect flow in
+- **Jobs.** Files of up to 5 MB are validated inside the request. Larger files are validated by a Prefect flow in
   the worker, and the page polls for progress. The commit and the Silver and
   Gold refresh are also flows. The same service code runs in both cases. The
   5 MB line comes from the memory a workbook needs (see "Files up to 300 MB" in
@@ -291,34 +294,35 @@ its own and asks the API for no figure.
 1. **Choose the dataset type.** The choice fixes the expected columns and the
    rules. The page shows a short description, the template to download, and when
    this dataset was last loaded.
-2. **Provide the data**, in one of three ways:
-   - **Upload** one or more `.xlsx` files of up to 300 MB each, by drag and
-     drop, with progress. A larger file is refused before it is sent.
-   - **Form:** one row, with one field per column, typed and with dropdowns.
-   - **Grid:** an editable table with the template's columns in the template's
-     order. Rows can be typed or pasted from Excel.
+2. **Upload the data**: an `.xlsx` file of up to 300 MB, the template or the
+   users' own workbook, by drag and drop, with progress. A larger file is
+   refused before it is sent. Every dataset is entered this way: the form and
+   the grid the plan first had were dropped on 2026-10-18 (ADR 0009).
 3. **Validate.** The server checks the data and returns a summary (rows read,
    rows with errors, rows with warnings) and the list of issues.
-4. **Fix.** The grid opens on the rows that have issues. Each bad cell is marked;
-   selecting it shows the rule, the likely reasons and the suggested fix. The
-   user edits cells and presses **Revalidate**. Nothing is uploaded again.
+4. **Fix in Excel.** Each issue names its cell as Excel does (`C5`), why it
+   probably happened and what to do in Excel. The user fixes the workbook and
+   uploads it again with **Subir archivo corregido** on the draft's page. The
+   corrected file is a draft of its own, linked to the earlier one, and the
+   page says first what was cleared, what remains and what is new. The app
+   never edits a cell (increment 6, decided 2026-10-18).
 5. **Confirm.** A summary shows what will be written: rows accepted, rows
    rejected, warnings, and for a catalogue the difference from the current
    version (rows added, changed, removed). Warnings must be ticked to proceed.
 6. **Done.** The page shows the load ID, the rows written, and a button to
    update the figures (Silver build and Gold refresh), with its progress.
 
-Two rules shape the three input modes:
+Two rules shape the loading of a file:
 
-- **Large exports are upload-only.** The production receipts are 138,773 rows
-  in a 33 MB file, and a file may be up to 300 MB, which is a full Excel sheet
-  of that shape (a million rows). After validation the grid shows only the rows with
-  issues, paged by the server, never the whole file. A file over 5 MB is
-  validated as a job, so the wizard shows its progress and can be left and
-  reopened.
-- **Catalogues are saved whole.** See "Snapshots" in section 6. For a catalogue,
-  the grid opens with the current version already filled in, and the form adds
-  one row to it.
+- **Large files are listed, never shown whole.** The production receipts are
+  138,773 rows in a 33 MB file, and a file may be up to 300 MB, which is a full
+  Excel sheet of that shape (a million rows). After validation the page lists
+  only the issues, paged by the server. A file over 5 MB is validated as a
+  job, so the wizard shows its progress and can be left and reopened.
+- **Catalogues are uploaded whole.** See "Snapshots" in section 6. A
+  catalogue's file is the whole new version: the template filled in, or the
+  current workbook changed in Excel. The confirmation shows the difference
+  from the current version.
 
 ## 5. Validation design
 
@@ -333,16 +337,21 @@ Each maps to an existing Bronze target; none needs a new table.
 | Product structures, formed | `qad_product_struc`, sheets `PASTA`, `PLACAS`, `BAT ENS`, `BAT FOR`, `BAT TERM` | Snapshot | 16,568 rows | Upload |
 | Product structures, decorated | `qad_product_struc`, sheet `Datos` | Snapshot | 31,907 rows | Upload |
 | Item master | `item_master` | Snapshot | Not delivered yet | Upload |
-| Plastic classification | `manual_sheets`, `clasif_poly` | Snapshot | 1,753 rows | Upload, grid, form |
-| Decoration elements | `manual_sheets`, `element_deco` | Snapshot | 1,751 rows | Upload, grid, form |
-| Production lines | `manual_sheets`, `lineas_produccion` | Snapshot | 64 rows | Upload, grid, form |
-| Lines by plant area | `manual_sheets`, `comparativo_lineas` | Snapshot | 50 rows | Upload, grid, form |
-| Conversion cost (new) | `manual_sheets`, new key `costo_conversion` | Movement, by month | None yet: `silver.costo_conversion` is empty | Grid, form |
+| Plastic classification | `manual_sheets`, `clasif_poly` | Snapshot | 1,753 rows | Upload |
+| Decoration elements | `manual_sheets`, `element_deco` | Snapshot | 1,751 rows | Upload |
+| Production lines | `manual_sheets`, `lineas_produccion` | Snapshot | 64 rows | Upload |
+| Lines by plant area | `manual_sheets`, `comparativo_lineas` | Snapshot | 50 rows | Upload |
+| Conversion cost (new) | `manual_sheets`, new key `costo_conversion` | Movement, by month | None yet: `silver.costo_conversion` is empty | Upload, from a template of its own (increment 12) |
 
 Notes on this list:
 
 - **Conversion cost** is the one new dataset. It needs no Bronze change, but the
-  Silver build must learn to read it (increment 12).
+  Silver build must learn to read it (increment 12). It was to be typed in a
+  grid or a form; since 2026-10-18 it gets a template and is uploaded like the
+  rest (ADR 0009).
+- **Every dataset is uploaded.** Grid and form entry were dropped on
+  2026-10-18 for catalogues and exports alike (ADR 0009); the specs say
+  `entry_modes: [upload]`.
 - **Left out on purpose:** sheet `INSTRUCC`, which holds notes (the rules of the
   equation are versioned in Silver and are never loaded from a file), and the
   optional sheet `L.PRODUCCION`.
@@ -356,14 +365,14 @@ guide to the format (version 1). It declares:
 
 - the Bronze target (`source_key`, one sheet, `dataset_key`, header row);
 - the kind (snapshot or movement), the natural key and the date column;
-- the input modes allowed;
+- how rows are entered: `upload`, the only mode since 2026-10-18 (ADR 0009);
 - each column: header text exactly as in the template, type, required or not,
   a pattern, allowed values (a list; a named lookup is increment 8), a range;
 - for each column, whether breaking its pattern, list or range is an error or
   a warning.
 
-The API serves the same file to the frontend (`GET /api/datasets`), so the form,
-the grid columns and the downloadable template are generated from it. Changing a
+The API serves the same file to the frontend (`GET /api/datasets`), so the
+loading page and the downloadable template are generated from it. Changing a
 rule is an edit to YAML and a test, with no frontend change.
 
 ### Rule catalog
@@ -378,6 +387,7 @@ rule is an edit to YAML and a test, with no frontend change.
 | Schema | Format: a pattern for codes, a date order, a number of decimals | Error |
 | Schema | Required value is empty | Error |
 | Schema | Value is not in the allowed list or lookup | Error or warning, by column |
+| Schema | Free text damaged by Excel or a paste: a code in scientific notation or with `.0`, invisible characters, text read in the wrong encoding (`cell.text_damaged`, increment 6). Measured on FY26 on 2026-10-18: no hit in the 14,458 invoice rows or the 64 production lines | Warning |
 | Within the load | Two rows share the natural key | Warning |
 | Existing data | Rows already landed with identical content (Bronze `content_hash`) | Info |
 | Existing data | Same natural key already exists with different values: a correction, or a mistake | Warning |
@@ -405,22 +415,32 @@ number of rows affected.
 ### How failure reasons are generated
 
 Every issue carries the row, the column, the rule, the value found and a list of
-**likely reasons with a fix**. Reasons come from small deterministic detectors,
-each a pure function in `domain/` that looks at the raw cell text and its
-neighbours. No model is involved, so the same input always gives the same
-explanation and each detector has a unit test.
+**likely reasons, each with a fix in Excel**, most likely first and always
+ending with the rule's own. Reasons come from small deterministic detectors,
+pure functions in `domain/draft_reasons.py` that look at the cell's text, its
+type as the workbook kept it, the column's spec, the row and the headers. No
+model is involved, so the same input always gives the same explanation, and
+each detector has a unit test. Built in increment 6; the fixes name the menus of
+Spanish-language Excel for Windows, the plant's (decided 2026-10-18).
 
-| What the detector sees | Reason shown | Suggested fix |
+| What the detector sees | Reason (`loads.reasons.<id>`) | Fix in Excel |
 |---|---|---|
-| A date column holding text like `10/12/2025` | The cell is text, not a date | Format the column as Date in Excel and re-enter, or fix it here |
-| A date column holding a number like `45992` | The cell lost its date format | Format the cell as Date |
-| A number written `1.234,56` or `12,5` | Decimal comma typed as text | Remove thousands separators and use a real number cell |
-| An item code like `2.31E+08`, or ending in `.0` | Excel turned a code into a number | Format the column as Text before pasting |
-| A value that differs from an allowed one only by case, spaces or accents | Probably meant the allowed value | Offer the closest allowed value |
-| Leading or trailing spaces, or non-breaking spaces | Invisible characters from a copy and paste | Trim |
-| A required header missing while a similar one exists | The header differs by an accent or a space | Rename the column, or map it |
-| Text like `DescripciÃ³n` | The file was saved in another encoding | Save as UTF-8, or upload the `.xlsx` |
-| A row whose cells repeat the headers | A header row pasted inside the data | Delete the row |
+| A date column holding text like `10/12/2025` | `date.typed_as_text`: the cell is text, not a date | Datos > Texto en columnas, Fecha DMA; or type the date again in a Fecha cell |
+| A date column holding a number like `45992` | `date.lost_format`: the date it stands for (01/12/2025) without its format | Inicio > Número > Fecha corta |
+| A number written `1.234,56` or `12,5` | `number.text_with_separators`: a number kept as text | "Convertir en número" from Excel's own warning, or Buscar y reemplazar the separators |
+| An item code like `2.31E+08`, ending in `.0`, or a number cell that lost its leading zeros | `code.scientific_notation`, `code.trailing_zero_decimal`, `code.lost_leading_zeros`: Excel turned a code into a number | Format the column as Texto and paste the codes again from the source |
+| A value that differs from an allowed one only by case, spaces or accents | `allowed.near_match`: probably meant that value | Type it exactly, or pick it from the template's drop-down list |
+| Non-breaking spaces, tabs, line breaks or zero-width characters (plain spaces at either end are trimmed as Silver trims them, so they never cause an issue) | `text.invisible_characters`, naming them | Buscar y reemplazar with Alt+0160; `=LIMPIAR()` for tabs and breaks |
+| A header that differs from the spec's by an accent, case or spaces; or a missing column close to an unknown one | `header.near_match` (saying which); `header.similar` ("probably") | Type the header exactly, best copied from the template |
+| Text like `DescripciÃ³n` | `text.wrong_encoding`, with what it should say | Open the CSV again with Datos > Desde el texto/CSV in UTF-8 and save as `.xlsx` |
+| A row whose cells repeat the headers | `row.header_repeated`, first on every issue of that row | Delete the row |
+
+Beyond the table: `text.lowercase` (a code the pattern wants in upper case),
+`sheet.near_match` (a missing sheet under another name) and the reasons a file
+cannot be read (macros, damage, not a workbook). Two defects cannot be told
+from the file alone: `1.234` meant as 1234 is a valid number, and a code that
+lost its leading zeros in a column without a pattern may be a real code. Both
+wait for increment 8's checks against existing data.
 
 ### Keeping the validator honest
 
@@ -455,15 +475,12 @@ row could pass in the app and arrive empty in Silver. Two measures:
    increment 5, 2026-10-17); an abandoned draft's original is purged with it
    unless something else needs it.
 2. Its rows are parsed once into `staging.draft_rows`, as payloads built by the
-   existing rules. Edits made in the grid change the staged row and keep the
-   original value beside it.
+   existing rules. The app never edits them: a corrected file is a new upload
+   and a new draft (increment 6, ADR 0009).
 3. On confirm, the commit:
-   1. when the rows did not come unchanged from a file, writes them as a
-      workbook that mirrors the template and archives it. For a form or grid
-      entry this is the only file; for an edited upload it sits beside the
-      original. An unedited upload needs none: its rows point at the original;
-   2. opens a run in `bronze.ingestion_runs`;
-   3. lands the staged rows through `BronzeLandingRepository.land()`, which
+   1. opens a run in `bronze.ingestion_runs`; its rows point at the original,
+      the only file there is, since every load is an upload (ADR 0009);
+   2. lands the staged rows through `BronzeLandingRepository.land()`, which
       inserts the rows and completes the run in one transaction.
 
 If the commit fails, no row is landed and the run is marked `failed`, exactly as
@@ -480,7 +497,7 @@ No new Bronze column is needed.
 | Timestamp | `raw_files.uploaded_at`, `ingestion_runs.started_at` / `finished_at`, and `ingested_at` on each row |
 | Original file name | `raw_files.filename` |
 | Dataset type | `ingestion_runs.source_key`, plus `sheet_name` or `dataset_key` on each row |
-| Source: file, form or grid | New key `input_mode` in `ingestion_runs.parameters` (JSON, so no migration) |
+| Source | Always a file since 2026-10-18 (ADR 0009); key `input_mode` in `ingestion_runs.parameters` records `upload` |
 | Validation result and accepted warnings | New key `validation` in `parameters`: counts, and who accepted which warnings |
 | Link to the draft and to the original file | New keys `draft_id` and `original_content_hash` in `parameters` |
 
@@ -505,9 +522,8 @@ entry means.
   of each natural key, so one corrected row replaces the old one.
 - **Snapshots** (structures, catalogues) are replaced whole: Silver reads only
   the latest completed load of each sheet. A load of one row would become the
-  entire catalogue. So for a snapshot, the form and the grid always submit the
-  full table, and the confirmation shows the difference from the current
-  version.
+  entire catalogue. So a snapshot's file is always the full table, and the
+  confirmation shows the difference from the current version.
 
 ### Rollback
 
@@ -552,7 +568,7 @@ What follows from them:
 | Place | Design |
 |---|---|
 | Limit | 300 MB per file, meaning 300 MiB (314,572,800 bytes, what Windows shows as "300 MB"), checked three times: by the browser before sending; by Caddy (`request_body max_size`, 300 MiB on the upload route, whose body is the file itself rather than a form, 10 MiB on every other route of the API); and by the API, which refuses a `Content-Length` over the limit, counts the bytes as they arrive and answers 413. Only the API's check cannot be bypassed |
-| Upload | One streamed request. The API never holds the file: it hands it to object storage in 16 MB parts and computes the SHA-256 on the way. If uploads prove fragile on the plant network, the fallback is an upload in resumable pieces; it is not built unless needed |
+| Upload | One streamed request. The API never holds the file: it hands it to object storage in 8 MiB parts and computes the SHA-256 on the way. If uploads prove fragile on the plant network, the fallback is an upload in resumable pieces; it is not built unless needed |
 | Object storage | The object is written under a temporary key, then copied to its final key, which contains the hash, once the hash is known. It is read back as a stream to a file, with the hash verified on the way |
 | Code that changes | `ObjectStorage.put()` and `get()`, `LoadRequest.data` and `WorkbookReader.open_workbook()` all pass the whole file as `bytes` today. Each gains a streaming variant; the existing ones stay for the command line |
 | Validation memory | A workbook needs about 16 MB of memory for each MB of file. The API validates files of up to 5 MB itself (about 80 MB of memory). The worker validates larger ones, one at a time, with a 6 GB limit on its container. Staged rows are written in batches, never held whole |
@@ -560,7 +576,7 @@ What follows from them:
 | Reader | It stays `python-calamine`. The way a cell becomes text decides every `content_hash` (`domain/landing.py`), so a lighter, streaming reader is not a drop-in replacement |
 | Timeouts | Caddy allows 30 minutes to receive a request body. A validation job may run 30 minutes, and one that reports no progress for 5 minutes is marked failed. The commit lands in one transaction, as today; its duration is measured in increment 12 |
 | Targets | 1 minute to validate today's 33 MB file and 10 minutes for a 300 MB file. Both are assumed until increment 12 measures them |
-| Sizing | The server needs about 16 GB of memory. Docker on the development PC has 8.3 GB, too little to validate a 300 MB file beside the database. An edited upload stores a generated file of similar size beside the original, written row by row. At the limit, two 300 MB exports a month, each edited once, add 1.2 GB of storage a month |
+| Sizing | The server needs about 16 GB of memory. Docker on the development PC has 8.3 GB, too little to validate a 300 MB file beside the database. At the limit, two 300 MB exports a month, each corrected once (a corrected file is a second original), add 1.2 GB of storage a month |
 
 ## 7. Security and access control
 
@@ -634,8 +650,8 @@ What follows from them:
   internal server with a host name and HTTPS (answered 2026-10-12); Caddy
   provides the certificate.
 - **Audit.** Every load is a row in `ingestion_runs` with who, when, what and
-  which warnings were accepted. Staged edits keep the original value. Voids are
-  recorded on the run.
+  which warnings were accepted. Nothing is edited in the app: every row comes
+  from an archived original. Voids are recorded on the run.
 
 ## 8. Build roadmap
 
@@ -649,13 +665,13 @@ Each increment is small enough to review and has one test of "done".
 | 3 | **Dashboard page.** The embedded report with token refresh. Section 10 plans it in detail. **Built 2026-10-13:** the page, the second token, the token's renewal and one message per cause of failure are proved by tests of the app, with stand-ins for Entra ID and Power BI, and the embedding library is run itself in a test browser. The three checks at the right need a signed-in browser and are the owner's | A signed-in user sees the report; it still works after the first token expires; a user without workspace access gets a clear message |
 | 4 | **Dataset specs.** YAML for two pilots, one catalogue (`lineas_produccion`) and one export (`qad_facturas`); `GET /api/datasets`; template download. **Built 2026-10-17:** the two specs carry every header of their workbooks (10 and 49), checked against the workbooks themselves; a malformed spec stops the API at start, every mistake named with its file and path, and `energy datasets check` reads them the same way; every template is read back by the Bronze reader in a test. No page shows them yet: that is the first step of the wizard, with increment 5 | Specs load at startup and fail loudly when malformed; the downloaded template has exactly the headers of the spec |
 | 5 | **Staging, upload and schema checks.** Migration for `staging`; a streaming upload endpoint with the 300 MB limit enforced by the browser, Caddy and the API; streaming variants of the storage and reader ports; file and schema rules; the issues list. A file over 5 MB is archived but answers "not built yet" to validation until increment 12. **Built 2026-10-17:** revision `0007` and `/api/drafts`; the file rules (zip limits included), the schema rules and the cell rules of the specs, every issue with its row, column and rule; the loading page and the issues list. A test finds every planted defect of a made-up broken file, the original at its hashed key, and Bronze unchanged; a 96 MiB upload passes through the API under a 64 MiB memory bound. Through Caddy, a 300 MiB file uploaded in 43 s while the api container used at most 47 MiB more than at rest, and less towards the end than at the start; a 301 MiB file was refused with 413 on its declared size. Seeing the pages as a signed-in user is the owner's check | A deliberately broken file shows every failure with row, column and rule; the original is archived; Bronze is unchanged; a 300 MB file uploads through Caddy with progress while the API's memory stays flat, and a larger one is refused with a clear message |
-| 6 | **Reasons, grid and revalidation.** Reason detectors; the grid spike and choice; cell editing | Each defect of the table in section 5 yields its reason and fix; fixing a cell and revalidating clears it without a new upload |
-| 7 | **Commit and history.** The write path of section 6; the confirmation summary; the history and detail pages | A validated draft lands with all the metadata of section 6; a double submit creates one run; the row counts match |
+| 6 | **Reasons and re-upload.** Reason detectors; the corrected file uploaded again and compared. The grid spike and cell editing were dropped on 2026-10-18: data is corrected in Excel ([ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)). **Built 2026-10-18:** revision `0008`; 34 reasons (18 from detectors, 16 that are each rule's own) and the warning rule `cell.text_damaged`, every one with its why and Excel fix in Spanish; `POST /api/drafts/{draft_id}/corrections` and `GET /api/drafts/{draft_id}/cleared`; the comparison by rule, column and row identity; the page's reasons, "Subir archivo corregido", the comparison verdict and "Copiar para Excel". Tests find every planted defect with its reason, and the exact cleared, remaining and new issues of a corrected file, against PostgreSQL and MinIO, with Bronze, Silver and Gold unchanged and the earlier original untouched. Through Caddy with a real token, the same: the 19 planted defects with their reasons, 14 cleared, 5 remaining and 1 new, both originals intact and the three layers unchanged. The owner's checks in a signed-in browser passed on 2026-10-18 | Each defect of the table in section 5 yields its reason and an Excel fix; fixing the file in Excel and uploading it again clears the fixed issues, and the page shows what was cleared, what remains and what is new |
+| 7 | **Commit and history.** The write path of section 6; the confirmation summary, with a catalogue's difference from the current version; the history and detail pages | A validated draft lands with all the metadata of section 6; a double submit creates one run; the row counts match |
 | 8 | **Checks against existing data.** Duplicates, key conflicts, references, ranges, periods, closed months; acknowledging warnings | Each rule has a test on the synthetic data of `tests/integration/test_equs_gold_rules.py`; a load with warnings cannot be written until they are accepted, and the acceptance is stored |
-| 9 | **Form and grid entry.** The single-row form; pasting into the grid; whole-snapshot saves with the difference shown | 500 rows pasted from Excel arrive intact; a row added to a catalogue produces a complete new version that the Silver build reads |
+| 9 | **Removed (2026-10-18, [ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)).** It was form and grid entry. Every dataset is uploaded: the form and the grid are gone, a catalogue's difference from the current version is part of increment 7's confirmation, and conversion cost's spec and template join increment 12. The number is kept so the others do not move | — |
 | 10 | **Update the figures.** The job for Silver and Gold with its progress; the Power BI dataset refresh | After a load, the dashboard shows the new data with no command line |
 | 11 | **Rollback.** Voiding a load; the Silver rule for movements | A voided load no longer affects Silver or the live Gold figures after a refresh; its Bronze rows remain; closed months are unchanged |
-| 12 | **Remaining datasets and large files.** Specs for every type of section 5; validation as a job in the worker, with progress and a memory limit (the worker runs the stock Prefect image today and must run this project's); CSV if still wanted | Every dataset type has a spec and tests; the 33 MB receipts file validates within 1 minute and a generated 300 MB workbook within 10 minutes, inside the worker's memory limit and with progress shown; the measured figures replace the estimates of section 6 |
+| 12 | **Remaining datasets and large files.** Specs for every type of section 5, including a template for conversion cost; validation as a job in the worker, with progress and a memory limit (the worker runs the stock Prefect image today and must run this project's); CSV if still wanted | Every dataset type has a spec and tests; the 33 MB receipts file validates within 1 minute and a generated 300 MB workbook within 10 minutes, inside the worker's memory limit and with progress shown; the measured figures replace the estimates of section 6 |
 | 13 | **Hardening.** End-to-end tests in a browser; accessibility; the runbook and user guide | The end-to-end suite passes against `make up`, and the guide covers each flow |
 
 ## 9. Decisions on the open questions
@@ -675,10 +691,10 @@ page, and the owner makes every change to the app registration.
 | 2 | Do the viewers have Power BI Pro licences, or is there a capacity? | In production the viewers will have Pro, so "embed for your organization" applies. Development runs on a 60-day Microsoft Fabric free trial started around 2026-10-12; its end, around 2026-12-11, is a project risk (ADR 0004) | 3, 10 |
 | 3 | Can the report be published to the Power BI Service, with a gateway to the database? | Yes. The report is published, with a gateway to the database that runs on the machine hosting the stack | 0, 3, 10 |
 | 4 | Where will the app be hosted? Today it is docker compose on one PC over HTTP | The same stack on an internal server with a host name and HTTPS | 1, 2 |
-| 5 | Which dataset types are in scope, and which may be typed by hand? | The table in section 5: exports are upload-only, catalogues allow form and grid | 4, 9, 12 |
+| 5 | Which dataset types are in scope, and which may be typed by hand? | The table in section 5. None is typed by hand: every dataset is uploaded as an `.xlsx`, the template or the users' own workbook (2026-10-18, ADR 0009; catalogues first allowed form and grid) | 4, 12 |
 | 6 | Should exports loaded through the app pass the validation gate? The CLI loads them ungated today | Yes: errors block, known tolerated defects are warnings; the CLI is unchanged | 5, 8 |
 | 7 | Is saving a catalogue as a whole new version acceptable? | Yes, because Silver already reads snapshots that way | 9 |
-| 8 | Is there a budget for a grid licence? Does the app serve commercial operation? | No budget, so an MIT-licensed grid | 6 |
+| 8 | Is there a budget for a grid licence? Does the app serve commercial operation? | No budget. No grid is needed since 2026-10-18 (ADR 0009) | — |
 | 9 | Which language is the interface in? The repository rule is English only | Spanish labels and messages from translation files; code and docs in English | 1, 6 |
 | 10 | May `api/deps.py` import adapters, as an exception to the layer rule? | Yes, by ADR 0005; the alternative was to run every validation as a job | 0, 2, 5 |
 | 11 | Are energy readings in scope? `ingestion_runs.source_key` accepts only the five EQUS keys | No, EQUS data only for now | 4 |

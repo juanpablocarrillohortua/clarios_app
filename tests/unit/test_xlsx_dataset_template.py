@@ -33,7 +33,7 @@ def made_up(header_row: int = 1, allowed: list[str] | None = None) -> DatasetSpe
             "kind": "snapshot",
             "label": "datasets.example.name",
             "description": "datasets.example.description",
-            "entry_modes": ["upload", "grid", "form"],
+            "entry_modes": ["upload"],
             "bronze": {
                 "source_key": "manual_sheets",
                 "sheet": "Hoja de prueba",

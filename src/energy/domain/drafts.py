@@ -108,6 +108,9 @@ class ValidationSummary:
         rows_with_warnings: rows with at least one warning.
         counts: for each rule and column, how many rows broke it and how many
             of those issues are listed.
+        spec_digest: the digest of the spec the file was checked against
+            (:func:`energy.domain.dataset_spec.spec_digest`); ``None`` for a
+            validation older than revision 0008.
     """
 
     sheet_name: str
@@ -116,6 +119,7 @@ class ValidationSummary:
     rows_with_errors: int
     rows_with_warnings: int
     counts: tuple[RuleCount, ...]
+    spec_digest: str | None = None
 
     @property
     def blocking(self) -> bool:
@@ -148,6 +152,9 @@ class Draft:
         expires_at: when an abandoned draft is purged.
         failure_code: why the upload failed, for a ``failed`` draft.
         validation: what the last validation found; ``None`` before one.
+        previous_draft_id: the draft whose file this one corrects, if it was
+            uploaded as a correction. The earlier draft may since have
+            expired or been purged.
     """
 
     draft_id: UUID
@@ -169,6 +176,7 @@ class Draft:
     expires_at: datetime
     failure_code: str | None
     validation: ValidationSummary | None
+    previous_draft_id: UUID | None = None
 
 
 def clean_filename(raw: str) -> str:

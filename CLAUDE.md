@@ -55,7 +55,10 @@ signed-in browser. Increment 4 (the dataset specs, `GET /api/datasets` and the
 template of each) is built; [docs/dataset-specs.md](docs/dataset-specs.md) is
 its guide. Increment 5 (staging, the streaming upload, the checks of a file and
 the issues list, `/api/drafts` and the "Carga de datos" page) is built, and
-waits for the owner's checks in a signed-in browser. The decisions are in
+waits for the owner's checks in a signed-in browser. Increment 6 (the reasons
+and Excel fix of every issue, the corrected file uploaded again and compared)
+is built, and passed the owner's checks in a signed-in browser on 2026-10-18;
+grid and form entry were dropped for every dataset, and increment 9 with them. The decisions are in
 [ADR 0004](docs/adr/0004-react-spa-entra-and-embedded-power-bi.md) (stack, Entra
 ID sign-in, embedded Power BI),
 [ADR 0005](docs/adr/0005-api-composition-root.md) (`api/deps.py` may import
@@ -65,7 +68,9 @@ the API accepts, roles and permissions),
 reach people through Power BI only; the API's KPI endpoints are removed when
 Phase 4 starts) and
 [ADR 0008](docs/adr/0008-embedding-the-report-in-the-dashboard.md) (how the
-dashboard embeds the report). [docs/sign-in.md](docs/sign-in.md) is
+dashboard embeds the report) and
+[ADR 0009](docs/adr/0009-data-is-entered-and-corrected-in-excel.md) (data is
+entered and corrected in Excel: no grid and no form). [docs/sign-in.md](docs/sign-in.md) is
 the guide to sign-in, and [docs/api.md](docs/api.md) the guide to the API: a
 part in plain words for readers who do not write code, and a technical
 reference with every endpoint. Read the plan before touching `frontend/`.
@@ -81,8 +86,8 @@ Definition-of-Done item is verified against a running stack.
 |---|---|
 | `make up` | **Exit 0 - all 7 services healthy** (api, caddy, dash, db, minio, prefect-server, prefect-worker) |
 | Port policy | Only caddy publishes (8080/8443); everything else internal. One opt-in exception: `reporting-bridge` (profile `reporting`, `make powerbi`) on 127.0.0.1:5433 |
-| `make db-upgrade` | **Exit 0** - Alembic at head `0007` against live TimescaleDB |
-| Schemas / tables | `bronze, gold, reference, reporting, silver, staging`; 46 tables (8 + 9 + 4 + 21 + 4), 2 materialized views, 15 views and 8 functions in `gold`, 12 views and 1 function in `reporting` |
+| `make db-upgrade` | **Exit 0** - Alembic at head `0008` against live TimescaleDB |
+| Schemas / tables | `bronze, gold, reference, reporting, silver, staging`; 47 tables (8 + 9 + 4 + 21 + 5), 2 materialized views, 15 views and 8 functions in `gold`, 12 views and 1 function in `reporting` |
 | Extensions | timescaledb **2.30.1**, pgcrypto 1.3 |
 | Hypertables | All 5 registered: `raw_readings, readings, kpi_hourly, kpi_daily, plant_daily_summary` |
 | Timescale policies | 3 compression + 1 retention job created (no warnings) |
@@ -91,11 +96,11 @@ Definition-of-Done item is verified against a running stack.
 | `/api/ready` payload | `degraded` (connectivity+extensions healthy, Silver empty) - correct, returns 200 not 503 |
 | Placeholder endpoint | `/api/kpis/summary` -> **501** with `code=not_implemented` for a signed-in caller (in the tests); 401 without a token |
 | `X-Request-Id` | Present and propagated |
-| `make check` | **Exit 0**, the whole chain as one command, on the code of increment 5 (2026-10-18): format, lint, mypy strict (127 files), bandit, pip-audit, `frontend-check`, tests (28 minutes) |
-| `make frontend-check` | **Exit 0** (2026-10-18, inside `make check`) - Biome on 85 files, `tsc`, 308 Vitest tests in 15 files, production build of two pages (`preview.html` is not built), with the Power BI library in a file of its own (229 kB) |
+| `make check` | **Exit 0**, the whole chain as one command, on the code of increment 6 (2026-10-18): format, lint, mypy strict (129 files), bandit, pip-audit, `frontend-check`, tests (30 minutes) |
+| `make frontend-check` | **Exit 0** (2026-10-18, inside `make check`) - Biome on 89 files, `tsc`, 332 Vitest tests in 15 files, production build of two pages (`preview.html` is not built), with the Power BI library in a file of its own (229 kB) |
 | Dashboard (2026-10-13) | With the two IDs empty, `GET /api/config` answers `"powerbi": null` and sign-in asks for the API's scope only. With them set, it carries the `powerbi` object, and a signed-out headless browser reaches Microsoft's sign-in page with both scopes and no error, from `:8080` and from the dev server. The built embedding module, run in headless Edge with made-up IDs and a text that is no token, loads Power BI's frame and receives its refusal. Caddy's headers are unchanged. **Not done by a session:** seeing the report as a signed-in user |
-| `make test` | **1,165 passed, 39 skipped** (28 minutes with the workbooks present, 2026-10-18, inside `make check`) |
-| Coverage | **95.72%** (threshold 70%) |
+| `make test` | **1,339 passed, 39 skipped** (30 minutes with the workbooks present, 2026-10-18, inside `make check`) |
+| Coverage | **95.95%** (threshold 70%) |
 | `make test-integration` | **118 passed** against real TimescaleDB and MinIO, with the workbooks present (2026-10-07; not re-run on its own since) |
 | `make powerbi` | **Exit 0** in the stack: the bridge healthy on 127.0.0.1:5433; the login reads the reporting views from Windows through it, is refused on gold/silver and with a wrong password; `make powerbi-down` closes the port without touching the db container |
 | No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer. Two deliberate exceptions: `docs/equs_calculation_explained.es.md`, the Spanish translation of the non-technical explanation (asked for on 2026-10-08), and `frontend/src/i18n/es.json`, the texts of the web app's interface (decided on 2026-10-12, ADR 0004) |
@@ -115,7 +120,9 @@ the routes were checked again with the report configured and not. On
 and passed again. With staging and the upload added (increment 5), it
 passed that day, then failed twice on 2026-10-18 on two tests that passed
 alone (a fixture whose bytes held the time, and the race described under
-"Tests" of the web app), and passed whole once both were fixed: the `make
+"Tests" of the web app), and passed whole once both were fixed. With the reasons and the corrected
+file added (increment 6), it failed once the same day, on the API guide not
+yet naming the two new routes, and passed whole once it did: the `make
 check`, `make frontend-check`, `make test` and coverage rows are from that
 run.
 
@@ -778,7 +785,8 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
   once (a ref guards strict mode).
 - **`frontend/preview.html` is for the dev server only:** the loading pages with
   stand-ins for sign-in, the API and the upload (`src/preview/stage.ts`,
-  `?scenario=broken|clean|many|large|busy|refused`). `vite build` does not
+  `?scenario=broken|clean|many|large|busy|refused`, and for a correction
+  `corrected|same|allFixed|rulesChanged|previousGone`). `vite build` does not
   build it, `checks/previewPage.test.ts` keeps it so, and `:8080` answers 404.
 - **Synthetic files:** `uv run python scripts/make_test_workbooks.py <folder>
   [--large]` writes broken files with their manifest, and padded packages of
@@ -788,7 +796,64 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
   tests rely on it, and one failed in a full run before it was so. The
   builders are `tests/fixtures/*.py`: `.gitignore` ignores everything else in
   that folder (generated files), and until 2026-10-18 ignored them too, which
-  no local run could show.
+  no local run could show. ruff respects `.gitignore`, so it never linted them
+  either: the committed `c7ab29e` fails `ruff check .` on them (fixed in the
+  tree on 2026-10-18).
+
+**Reasons and corrections** (increment 6, built 2026-10-18; revision `0008`,
+[ADR 0009](docs/adr/0009-data-is-entered-and-corrected-in-excel.md)):
+
+- **Data is entered and corrected in Excel.** No cell is edited in the app, and
+  there is no grid and no form for any dataset: `EntryMode` has `upload` only,
+  and the spec checker refuses `grid` and `form`. A file with problems is fixed
+  in Excel and uploaded as a *correction* (`POST /api/drafts/{draft_id}/corrections`):
+  a draft of its own, with its own archived original, whose
+  `previous_draft_id` names the draft it corrects. That link is not a foreign
+  key, so a correction still knows it had an earlier file after the purge.
+  Uploading a correction extends the earlier draft's expiry.
+- **Every issue has reasons, most likely first, ending with its rule's own**
+  (`default.<rule>`). Detectors are pure functions in
+  `domain/draft_reasons.py`, deterministic, from the file and the spec alone;
+  `draft_rules.py` calls them where the cell, its type, the row and the
+  headers are in hand, and `IssueCollector` gives an issue without reasons its
+  rule's own and counts every issue by its first reason
+  (`draft_reason_counts`). 34 reasons: 18 from detectors, 16 rules' own.
+- **Texts:** `loads.reasons.<id>.why` and `.fix` in `es.json`. A rule's own
+  reason has a `fix` only; its "why" is the rule's message. The fixes name
+  Spanish-language Excel for Windows (decided 2026-10-18).
+  `tests/unit/test_draft_reasons.py` fails for a reason without its texts.
+  In the app, `loads/texts.ts` (`reasonWhy`, `reasonFix`) is the one place
+  that reads them.
+- **`cell.text_damaged` is a warning:** a code in scientific notation or with
+  `.0`, invisible characters (a line break is allowed in free text), or text
+  read in the wrong encoding, in a text cell no other rule judged. The FY26
+  scan of 2026-10-18 found none in the 14,458 invoice rows or the 64 lines.
+  Its test run on every text cell of every workbook of `data/raw_excels`
+  (3.9 million) found one: a non-breaking space inside a description, cell B9
+  of sheet `Clasif_Poly`, which has no spec yet. Expect that warning when it
+  gets one.
+- **An escape such as backslash-u-00a0, written through the editing tools,
+  lands as the real character.** Build invisible characters with `chr()` in
+  Python, as `tests/fixtures/workbooks.py` (`NBSP`) does, and check with ruff
+  (RUF001, PLE2515).
+- **Matching a correction's issues:** same rule, column and `match_key`. The
+  key is the row's natural key loosened (case, spaces, accents and
+  non-breaking spaces ignored, so fixing those keeps the row) with its
+  occurrence among rows of that key, or `row:<n>` when the key is
+  incomplete. A rule and column over the 1,000 cap on both sides is compared
+  by count only (`by_count_only`), never folded into cleared, remaining and
+  new, which are therefore exact. `domain/draft_comparison.py` holds the
+  arithmetic; the repository's SQL and the in-memory stand-in apply the same
+  `compared_by_row` test.
+- **The spec's digest** (`spec_digest`) is stored at validation. Validating a
+  correction validates the earlier draft again when it was judged by another
+  spec; `previous_revalidated` is read from the two validation times, nothing
+  stored. If that cannot be done, the comparison's state is `rules_changed`.
+- **The draft page validates a draft it arrives at once, per draft** (a ref
+  holding the draft's ID): a correction moves the same page to a new draft.
+- **jsdom has no `scrollIntoView`;** `src/test/setup.ts` stubs it. Mantine's
+  select opens from the keyboard in tests (focus, ArrowDown, Enter); a click
+  does not open it in jsdom.
 
 **EQUS Bronze loader** (built 2026-10-07):
 
@@ -950,9 +1015,10 @@ The web app has its own roadmap, in section 8 of
 [docs/frontend-plan.md](docs/frontend-plan.md): fourteen increments, of which 0
 to 2 are done, 3 (the dashboard page, with the embedded Power BI report) is
 built and waits for the owner's browser checks, 4 (the dataset specs) is
-built, and 5 (staging, upload and the checks of a file) is built and waits for
-the owner's checks signed in. Increment 6 is the reasons, the grid and
-revalidation.
+built, 5 (staging, upload and the checks of a file) is built and waits for
+the owner's checks signed in, and 6 (the reasons and the corrected file) is
+built and passed them on 2026-10-18. Increment 9 (form and grid entry) was removed on 2026-10-18 (ADR 0009);
+its number is kept. Increment 7 is the commit and the history.
 
 When implementing a placeholder: read its docstring first (it is the spec), keep
 and update the docstring, remove the `Implemented in: Phase N` line, and un-skip

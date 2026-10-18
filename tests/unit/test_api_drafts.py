@@ -14,7 +14,12 @@ from uuid import uuid4
 
 import pytest
 from tests.fixtures.drafts import InMemoryDraftRepository
-from tests.fixtures.workbooks import lines_broken, lines_good
+from tests.fixtures.workbooks import (
+    lines_broken,
+    lines_defects,
+    lines_defects_corrected,
+    lines_good,
+)
 
 from energy.adapters.calamine_workbook import CalamineWorkbookReader
 from energy.adapters.local_storage import LocalObjectStorage
@@ -208,6 +213,7 @@ def test_validating_a_broken_file_lists_every_issue(
         "column": "Almac",
         "rows": 1,
         "listed": 1,
+        "reasons": [{"reason": "default.cell.pattern", "rows": 1}],
     } in (validation["counts"])
     issues = client.get(f"/drafts/{draft['draft_id']}/issues", headers=headers).json()
     assert issues["total"] == len(manifest)
@@ -223,6 +229,8 @@ def test_validating_a_broken_file_lists_every_issue(
         "severity": "error",
         "value": "Tal vez",
         "params": {"allowed": ["Sí", "No"]},
+        "reasons": [{"reason": "default.cell.allowed", "params": {}}],
+        "change": None,
     }
 
 
@@ -321,3 +329,176 @@ async def test_the_request_body_never_returns_more_than_was_asked() -> None:
     while chunk := await anyio.to_thread.run_sync(body.read, 50_000):
         rest.append(chunk)
     assert b"".join(answers + rest) == b"".join(chunks)
+
+
+def _validated(client: TestClient, data: bytes, headers: dict[str, str]) -> dict[str, Any]:
+    """Upload a file and validate it; return the validated draft."""
+    draft_id = post(client, data, headers).json()["draft_id"]
+    response = client.post(f"/drafts/{draft_id}/validate", headers=headers)
+    assert response.status_code == 200
+    return response.json()  # type: ignore[no-any-return]
+
+
+def test_a_corrected_file_becomes_a_draft_compared_with_the_earlier_one(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    earlier = _validated(client, lines_defects()[0], headers)
+    corrected, expected = lines_defects_corrected()
+
+    response = post(client, corrected, headers, f"/drafts/{earlier['draft_id']}/corrections")
+    assert response.status_code == 201
+    correction = response.json()
+    assert response.headers["Location"].endswith(f"/drafts/{correction['draft_id']}")
+    assert correction["previous_draft_id"] == earlier["draft_id"]
+    assert correction["comparison"]["state"] == "not_validated"
+
+    validated = client.post(f"/drafts/{correction['draft_id']}/validate", headers=headers).json()
+
+    comparison = validated["comparison"]
+    assert comparison["state"] == "ready"
+    assert {name: comparison[name] for name in ("cleared", "remaining", "new")} == expected
+    assert comparison["previous"]["draft_id"] == earlier["draft_id"]
+    assert comparison["by_count_only"] == []
+    assert (
+        client.get(f"/drafts/{correction['draft_id']}", headers=headers).json()["comparison"]
+        == comparison
+    )
+
+
+def test_the_issues_of_a_correction_say_what_became_of_them(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    earlier = _validated(client, lines_defects()[0], headers)
+    path = f"/drafts/{earlier['draft_id']}/corrections"
+    correction_id = post(client, lines_defects_corrected()[0], headers, path).json()["draft_id"]
+    client.post(f"/drafts/{correction_id}/validate", headers=headers)
+
+    issues = client.get(f"/drafts/{correction_id}/issues?limit=500", headers=headers).json()
+    new = client.get(f"/drafts/{correction_id}/issues?change=new", headers=headers).json()
+    cleared = client.get(f"/drafts/{correction_id}/cleared?limit=500", headers=headers).json()
+
+    assert sorted(item["change"] for item in issues["items"]) == ["new"] + ["remaining"] * 5
+    assert [(item["row"], item["column"], item["rule"]) for item in new["items"]] == [
+        (3, "D", "cell.range")
+    ]
+    assert cleared["total"] == 14
+    allowed = next(item for item in cleared["items"] if item["rule"] == "cell.allowed")
+    assert allowed["value"] == "si"
+    assert allowed["reasons"][0] == {
+        "reason": "allowed.near_match",
+        "params": {"suggestion": "Sí"},
+    }
+
+
+def test_every_issue_carries_its_reasons_and_the_counts_carry_them_too(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    draft = _validated(client, lines_defects()[0], headers)
+
+    issues = client.get(f"/drafts/{draft['draft_id']}/issues?limit=500", headers=headers).json()
+    by_reason = client.get(
+        f"/drafts/{draft['draft_id']}/issues?reason=code.lost_leading_zeros", headers=headers
+    ).json()
+
+    assert all(item["reasons"] for item in issues["items"])
+    assert all(item["change"] is None for item in issues["items"])
+    assert [(item["row"], item["column"]) for item in by_reason["items"]] == [(5, "B")]
+    almac = next(
+        count
+        for count in draft["validation"]["counts"]
+        if (count["rule"], count["column"]) == ("cell.pattern", "Almac")
+    )
+    assert sum(entry["rows"] for entry in almac["reasons"]) == almac["rows"]
+
+
+def test_another_persons_draft_cannot_be_corrected_nor_compared(
+    client: TestClient, headers: dict[str, str], repository: InMemoryDraftRepository
+) -> None:
+    theirs = repository.create(
+        NewDraft(
+            "lineas_produccion", "manual_sheets", "1515", "a.xlsx", XLSX_MEDIA_TYPE, 9, "x", None
+        )
+    )
+
+    corrected = post(client, lines_good(), headers, f"/drafts/{theirs.draft_id}/corrections")
+    cleared = client.get(f"/drafts/{theirs.draft_id}/cleared", headers=headers)
+
+    for response in (corrected, cleared):
+        assert response.status_code == 404
+        assert response.json()["code"] == "unknown_draft"
+
+
+def test_a_draft_whose_file_never_arrived_answers_409(
+    client: TestClient, headers: dict[str, str], repository: InMemoryDraftRepository
+) -> None:
+    subject = "00000000-0000-4000-8000-00000000abcd"
+    arriving = repository.create(
+        NewDraft(
+            "lineas_produccion",
+            "manual_sheets",
+            "1515",
+            "a.xlsx",
+            XLSX_MEDIA_TYPE,
+            9,
+            subject,
+            None,
+        )
+    )
+
+    response = post(client, lines_good(), headers, f"/drafts/{arriving.draft_id}/corrections")
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "draft_busy"
+
+
+@pytest.mark.parametrize(
+    ("changes", "body", "code", "status"),
+    [
+        ({"X-File-Name": "libro.csv"}, b"PK\x03\x04", "unsupported_file_format", 415),
+        ({}, b"", "empty_file", 415),
+        ({}, b"not a zip at all", "unsupported_file_format", 415),
+    ],
+)
+def test_a_correction_is_refused_as_any_upload_is(
+    client: TestClient,
+    headers: dict[str, str],
+    changes: dict[str, str],
+    body: bytes,
+    code: str,
+    status: int,
+) -> None:
+    earlier = post(client, lines_good(), headers).json()
+
+    response = post(
+        client, body, {**headers, **changes}, f"/drafts/{earlier['draft_id']}/corrections"
+    )
+
+    assert response.status_code == status
+    assert response.json()["code"] == code
+
+
+def test_a_correction_without_a_size_answers_411(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    earlier = post(client, lines_good(), headers).json()
+
+    def chunks() -> Any:
+        yield b"PK\x03\x04"
+
+    response = client.post(
+        f"/drafts/{earlier['draft_id']}/corrections", content=chunks(), headers=headers
+    )
+
+    assert response.status_code == 411
+
+
+def test_the_cleared_list_of_a_draft_that_corrects_nothing_answers_404(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    draft = _validated(client, lines_good(), headers)
+
+    response = client.get(f"/drafts/{draft['draft_id']}/cleared", headers=headers)
+
+    assert response.status_code == 404
+    assert draft["comparison"] is None
+    assert draft["previous_draft_id"] is None

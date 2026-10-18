@@ -40,7 +40,7 @@ def catalogue_spec() -> dict[str, Any]:
         "kind": "snapshot",
         "label": "datasets.example.name",
         "description": "datasets.example.description",
-        "entry_modes": ["upload", "grid", "form"],
+        "entry_modes": ["upload"],
         "bronze": {"source_key": "manual_sheets", "sheet": "Hoja1", "dataset_key": "example"},
         "silver": {"table": "silver.example"},
         "natural_key": ["Código"],
@@ -102,7 +102,7 @@ def test_a_catalogue_is_read_whole() -> None:
     assert spec.key == "example"
     assert spec.kind is DatasetKind.SNAPSHOT
     assert spec.origin is DatasetOrigin.CATALOGUE
-    assert spec.entry_modes == (EntryMode.UPLOAD, EntryMode.GRID, EntryMode.FORM)
+    assert spec.entry_modes == (EntryMode.UPLOAD,)
     assert spec.bronze.sheet == "Hoja1"
     assert spec.bronze.dataset_key == "example"
     assert spec.bronze.header_row == 1
@@ -214,7 +214,7 @@ MISTAKES = [
     pytest.param(
         changed(catalogue_spec, "entry_modes", to=["upload", "excel"]),
         "entry_modes[1]",
-        "'excel' is not one of upload, grid, form",
+        "'excel' is not one of upload",
         id="entry-mode",
     ),
     pytest.param(
@@ -224,10 +224,16 @@ MISTAKES = [
         id="entry-mode-twice",
     ),
     pytest.param(
-        changed(export_spec, "entry_modes", to=["upload", "grid"]),
-        "entry_modes",
-        "a QAD export is only ever uploaded",
-        id="export-typed-by-hand",
+        changed(catalogue_spec, "entry_modes", to=["upload", "grid"]),
+        "entry_modes[1]",
+        "'grid' is not one of upload",
+        id="grid-entry-dropped",
+    ),
+    pytest.param(
+        changed(export_spec, "entry_modes", to=["form"]),
+        "entry_modes[0]",
+        "'form' is not one of upload",
+        id="form-entry-dropped",
     ),
     # Bronze
     pytest.param(

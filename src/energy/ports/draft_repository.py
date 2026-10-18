@@ -15,6 +15,11 @@ Responsibility:
     refused rather than queued, and a validation that fails leaves the old
     results in place.
 
+    A draft can be the correction of an earlier one (increment 6). The
+    repository matches the issues of the two by rule, column and row
+    identity, for the rules and columns
+    :func:`energy.domain.draft_comparison.compared_by_row` allows.
+
 Depends on:
     ``energy.domain``, standard library typing only.
 """
@@ -25,11 +30,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
     from contextlib import AbstractContextManager
     from datetime import datetime
     from uuid import UUID
 
+    from energy.domain.draft_comparison import GroupKey, IssueChange
+    from energy.domain.draft_reasons import ReasonId
     from energy.domain.draft_rules import Issue, IssueSeverity, RuleId
     from energy.domain.drafts import Draft, ValidationSummary
     from energy.domain.landing import LandingRow
@@ -48,6 +55,7 @@ class NewDraft:
         declared_bytes: the size the upload announced.
         created_by: the person, as the identity provider's subject.
         created_by_name: their name, for display.
+        previous_draft_id: the draft whose file this one corrects, if any.
     """
 
     dataset_key: str
@@ -58,6 +66,7 @@ class NewDraft:
     declared_bytes: int
     created_by: str
     created_by_name: str | None
+    previous_draft_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,11 +94,15 @@ class IssueFilter:
         severity: one severity.
         rule: one rule.
         column_key: one column, by payload key.
+        reason: one first reason.
+        change: for a correction, only new or only remaining issues.
     """
 
     severity: IssueSeverity | None = None
     rule: RuleId | None = None
     column_key: str | None = None
+    reason: ReasonId | None = None
+    change: IssueChange | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,10 +113,14 @@ class IssuePage:
         total: how many listed issues match the filter.
         items: this page of them, ordered by row, then column, with the
             file's and the header's own issues first.
+        changes: for a correction, what became of each item, in the same
+            order: new, remaining, or ``None`` where its rule and column are
+            compared by count only. Empty for any other draft.
     """
 
     total: int
     items: tuple[Issue, ...]
+    changes: tuple[IssueChange | None, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +162,11 @@ class DraftRepository(Protocol):
     """Interface for keeping drafts."""
 
     def create(self, draft: NewDraft) -> Draft:
-        """Record a draft in state ``receiving`` and commit it."""
+        """Record a draft in state ``receiving`` and commit it.
+
+        For a correction, the earlier draft's expiry moves to the new one's:
+        working on a correction is working on both.
+        """
         ...
 
     def mark_uploaded(self, draft_id: UUID, archived: ArchivedFile) -> Draft:
@@ -182,12 +203,34 @@ class DraftRepository(Protocol):
         ...
 
     def issues(
-        self, draft_id: UUID, owner: str, wanted: IssueFilter, offset: int, limit: int
+        self,
+        draft_id: UUID,
+        owner: str,
+        wanted: IssueFilter,
+        offset: int,
+        limit: int,
+        previous_id: UUID | None = None,
     ) -> IssuePage:
         """Return a page of a draft's listed issues.
 
+        With ``previous_id``, each item says whether the earlier draft had it.
+
         Raises:
             UnknownDraftError: if ``owner`` has no live draft of that ID.
+        """
+        ...
+
+    def matched(self, draft_id: UUID, previous_id: UUID) -> Mapping[GroupKey, int]:
+        """Return, per rule and column, how many issues of a draft the earlier one had.
+
+        Only rules and columns compared row by row are counted.
+        """
+        ...
+
+    def cleared(self, draft_id: UUID, previous_id: UUID, offset: int, limit: int) -> IssuePage:
+        """Return a page of the earlier draft's listed issues the correction no longer has.
+
+        Only rules and columns compared row by row are listed.
         """
         ...
 

@@ -134,7 +134,13 @@ EXPECTED_TABLES: dict[str, set[str]] = {
     BRONZE_SCHEMA: {"raw_readings", "ingestion_runs", "raw_files", *LANDING_TABLES},
     SILVER_SCHEMA: {*ENERGY_SILVER_TABLES, *EQUS_SILVER_TABLES},
     GOLD_SCHEMA: {"kpi_hourly", "kpi_daily", "plant_daily_summary", *EQUS_GOLD_TABLES},
-    STAGING_SCHEMA: {"drafts", "draft_rows", "draft_issues", "draft_rule_counts"},
+    STAGING_SCHEMA: {
+        "drafts",
+        "draft_rows",
+        "draft_issues",
+        "draft_rule_counts",
+        "draft_reason_counts",
+    },
 }
 
 # Index name -> the payload key it is built on. The keys are header texts of the
@@ -180,7 +186,7 @@ def test_migrations_apply_to_head(migrated_engine: Engine) -> None:
         version = connection.execute(
             text("SELECT version_num FROM public.alembic_version")
         ).scalar_one()
-    assert version == "0007"
+    assert version == "0008"
 
 
 def test_all_schemas_exist(migrated_engine: Engine) -> None:
@@ -1066,7 +1072,7 @@ class TestReportingRevision:
 
 
 class TestStagingRevision:
-    """Revision 0007: drafts of the web app, a working area beside the medallion."""
+    """Revisions 0007 and 0008: drafts of the web app, a working area beside the medallion."""
 
     DRAFT = (
         "INSERT INTO staging.drafts (dataset_key, source_key, plant_code, filename,"
@@ -1075,14 +1081,15 @@ class TestStagingRevision:
         " RETURNING draft_id, status, expires_at - created_at AS kept"
     )
 
-    def test_holds_the_four_tables_and_no_view(self, gold_engine: Engine) -> None:
-        """Drafts, their rows, their issues, and the counts of every issue."""
+    def test_holds_the_five_tables_and_no_view(self, gold_engine: Engine) -> None:
+        """Drafts, their rows, their issues, and the counts of every issue by rule and reason."""
         inspector = inspect(gold_engine)
         assert set(inspector.get_table_names(schema=STAGING_SCHEMA)) == {
             "drafts",
             "draft_rows",
             "draft_issues",
             "draft_rule_counts",
+            "draft_reason_counts",
         }
         assert inspector.get_view_names(schema=STAGING_SCHEMA) == []
         assert {
@@ -1109,6 +1116,10 @@ class TestStagingRevision:
             "source_key = 'elsewhere'",
             "filename = ''",
             "declared_bytes = 0",
+            "input_mode = 'grid'",
+            "input_mode = 'form'",
+            "spec_digest = 'not a digest'",
+            "previous_draft_id = draft_id",
         ],
     )
     def test_checks_refuse_what_a_draft_cannot_be(self, gold_engine: Engine, change: str) -> None:
@@ -1147,15 +1158,71 @@ class TestStagingRevision:
                 ),
                 parameters,
             )
+            connection.execute(
+                text(
+                    "INSERT INTO staging.draft_reason_counts"
+                    " (draft_id, rule_id, reason_id, rows_affected)"
+                    " VALUES (:d, 'cell.type', 'date.lost_format', 1)"
+                ),
+                parameters,
+            )
             connection.execute(text("DELETE FROM staging.drafts WHERE draft_id = :d"), parameters)
             left = connection.execute(
                 text(
                     "SELECT (SELECT count(*) FROM staging.draft_rows)"
                     " + (SELECT count(*) FROM staging.draft_issues)"
                     " + (SELECT count(*) FROM staging.draft_rule_counts)"
+                    " + (SELECT count(*) FROM staging.draft_reason_counts)"
                 )
             ).scalar_one()
         assert left == 0
+
+    @pytest.mark.parametrize(
+        ("columns", "values"),
+        [
+            ("reasons", "'{}'::jsonb"),
+            ("reason_id", "'Not A Reason'"),
+        ],
+    )
+    def test_an_issue_keeps_its_reasons_as_a_list_of_known_shape(
+        self, gold_engine: Engine, columns: str, values: str
+    ) -> None:
+        """Reasons are an array; a reason's ID is dotted lowercase words."""
+        with gold_engine.connect() as connection:
+            draft_id = connection.execute(text(self.DRAFT)).one().draft_id
+            with pytest.raises(IntegrityError):
+                # Both are this test's own literals.
+                connection.execute(
+                    text(
+                        "INSERT INTO staging.draft_issues (draft_id, rule_id, severity, "  # noqa: S608
+                        f"{columns}) VALUES (:d, 'cell.type', 'error', {values})"
+                    ),
+                    {"d": draft_id},
+                )
+            connection.rollback()
+
+    def test_a_correction_keeps_its_link_when_the_earlier_draft_goes(
+        self, gold_engine: Engine
+    ) -> None:
+        """No foreign key: a correction still knows it had an earlier file once that is purged."""
+        with gold_engine.begin() as connection:
+            earlier = connection.execute(text(self.DRAFT)).one().draft_id
+            correction = connection.execute(text(self.DRAFT)).one().draft_id
+            connection.execute(
+                text("UPDATE staging.drafts SET previous_draft_id = :e WHERE draft_id = :c"),
+                {"e": earlier, "c": correction},
+            )
+            connection.execute(
+                text("DELETE FROM staging.drafts WHERE draft_id = :e"), {"e": earlier}
+            )
+            link = connection.execute(
+                text("SELECT previous_draft_id FROM staging.drafts WHERE draft_id = :c"),
+                {"c": correction},
+            ).scalar_one()
+            connection.execute(
+                text("DELETE FROM staging.drafts WHERE draft_id = :c"), {"c": correction}
+            )
+        assert link == earlier
 
     def test_the_reporting_reader_gets_nothing_here(self, gold_engine: Engine) -> None:
         """Drafts are not figures: the BI login cannot even see the schema."""
@@ -1206,7 +1273,54 @@ def test_gold_downgrades_to_silver_and_up_again(database_url: str) -> None:
             version = connection.execute(
                 text("SELECT version_num FROM public.alembic_version")
             ).scalar_one()
-        assert version == "0007"
+        assert version == "0008"
+    finally:
+        with engine.begin() as connection:
+            for schema in reversed(ALL_SCHEMAS):
+                connection.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+            connection.execute(text("DROP TABLE IF EXISTS public.alembic_version"))
+        engine.dispose()
+        if previous is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous
+
+
+def test_staging_reasons_downgrade_to_0007_and_up_again(database_url: str) -> None:
+    """Revision 0008 alone goes down and up; down, a draft may be typed in again."""
+    import os  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from alembic import command  # noqa: PLC0415
+    from alembic.config import Config  # noqa: PLC0415
+
+    previous = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = database_url
+    root = Path(__file__).resolve().parent.parent.parent
+    config = Config(toml_file=str(root / "pyproject.toml"))
+    config.set_main_option("script_location", str(root / "migrations"))
+
+    engine = create_engine(database_url, future=True)
+    try:
+        command.upgrade(config, "head")
+        command.downgrade(config, "0007")
+        inspector = inspect(engine)
+        assert "draft_reason_counts" not in inspector.get_table_names(schema=STAGING_SCHEMA)
+        issue_columns = {c["name"] for c in inspector.get_columns("draft_issues", STAGING_SCHEMA)}
+        draft_columns = {c["name"] for c in inspector.get_columns("drafts", STAGING_SCHEMA)}
+        assert not {"reasons", "reason_id", "match_key"} & issue_columns
+        assert not {"previous_draft_id", "spec_digest"} & draft_columns
+        checks = {
+            check["name"]: check["sqltext"]
+            for check in inspector.get_check_constraints("drafts", STAGING_SCHEMA)
+        }
+        assert "grid" in str(checks["ck_drafts_input_mode"])
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            version = connection.execute(
+                text("SELECT version_num FROM public.alembic_version")
+            ).scalar_one()
+        assert version == "0008"
     finally:
         with engine.begin() as connection:
             for schema in reversed(ALL_SCHEMAS):

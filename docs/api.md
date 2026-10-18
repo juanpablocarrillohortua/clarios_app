@@ -208,6 +208,7 @@ flowchart LR
 | **Works** | The settings the app reads when it starts: where users sign in, and which report the dashboard shows |
 | **Works** | The kinds of data the app knows how to load ("dataset specs"), and an empty template of each to download. Two so far: production lines and invoice lines. Built on 2026-10-17 |
 | **Works** | Uploading a file of up to 300 MB from the web app, and checking a file of up to 5 MB against its dataset's spec: every problem, with its row, column and rule. The file is kept; nothing reaches the database's evidence (Bronze) yet. Built on 2026-10-17; seeing it as a signed-in user is still to be checked in a browser |
+| **Works** | Every problem says why it probably happened and what to do about it in Excel. The corrected file is uploaded again from the same page, and the page says which problems it cleared, which remain and which are new. Data is never typed or edited in the app: it is entered and corrected in Excel. Built on 2026-10-18; seeing it as a signed-in user is still to be checked in a browser |
 | **Works, outside the API** | Loading the exports and calculating the figures, by commands on the server |
 | **Works, outside the API** | Power BI reading the equivalent batteries through the reporting views |
 | **Planned** | Confirming an upload, so that it lands in the database, and the list of past loads. Checking files over 5 MB |
@@ -321,12 +322,14 @@ refused, and how the app and Entra ID take part.
 | `GET /api/runs/{run_id}` | `loads:write` | Placeholder, Phase 3 | One run in detail |
 | `GET /api/runs/{run_id}/quarantine` | `loads:write` | Placeholder, Phase 3 | The rows a run rejected, and why |
 | `POST /api/runs/{run_id}/retry` | `loads:write` | Placeholder, Phase 3 | 202 with the ID of the new run |
-| `GET /api/datasets` | `loads:write` | Built | Every dataset spec: its kind, where it comes from, how rows may be entered, its sheet, natural key, period column and columns; and `limits`, the largest file accepted and the largest validated now |
+| `GET /api/datasets` | `loads:write` | Built | Every dataset spec: its kind, where it comes from, how rows are entered (by upload, the only way: [ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md)), its sheet, natural key, period column and columns; and `limits`, the largest file accepted and the largest validated now |
 | `GET /api/datasets/{dataset_key}/template` | `loads:write` | Built | The dataset's empty `.xlsx` template, named `<dataset_key>.xlsx`: its sheet, with exactly the spec's headers. 404 with `code` `unknown_dataset` for a key no spec has |
 | `POST /api/drafts` | `loads:write` | Built | Takes one `.xlsx` as the raw body (query `dataset_key`, headers `Content-Length` and `X-File-Name`), streams it to object storage and answers 201 with the new draft and its `Location`; 200 with the earlier draft when the same person sends the same bytes for the same dataset again. 411, 413, 415 and 400 refuse it before or while it arrives |
-| `GET /api/drafts/{draft_id}` | `loads:write`, the draft's owner only | Built | The draft, and what its last validation found: rows read, rows with errors and with warnings, whether it can be loaded, and how often each rule broke in each column. 404 `unknown_draft` for anyone else's |
+| `GET /api/drafts/{draft_id}` | `loads:write`, the draft's owner only | Built | The draft, and what its last validation found: rows read, rows with errors and with warnings, whether it can be loaded, and how often each rule broke in each column, by first reason. For a correction, `previous_draft_id` and `comparison`: how many issues it cleared, kept and added. 404 `unknown_draft` for anyone else's |
 | `POST /api/drafts/{draft_id}/validate` | `loads:write`, the draft's owner only | Built | Checks the file against its dataset spec, replacing earlier results, and answers the draft. 409 `draft_busy` while it is arriving or being validated; 501 `not_implemented` for a file over 5 MiB |
-| `GET /api/drafts/{draft_id}/issues` | `loads:write`, the draft's owner only | Built | A page of the issues found (`offset`, `limit` up to 500), filtered by `severity`, `rule` and `column`: each with its row, column, rule, severity, value and the values its sentence needs |
+| `GET /api/drafts/{draft_id}/issues` | `loads:write`, the draft's owner only | Built | A page of the issues found (`offset`, `limit` up to 500), filtered by `severity`, `rule`, `column`, first `reason` and, for a correction, `change` (`new` or `remaining`): each with its row, column, rule, severity, value, the values its sentence needs, and its likely `reasons`, most likely first |
+| `POST /api/drafts/{draft_id}/corrections` | `loads:write`, the draft's owner only | Built | Takes the corrected `.xlsx` exactly as `POST /api/drafts` takes a file, for the dataset of that draft, and answers 201 with the new draft, linked to it by `previous_draft_id`; 200 with an existing draft for the same bytes again (the draft itself, when nothing changed). 404 `unknown_draft` for anyone else's, 409 `draft_busy` for a draft whose own file never arrived, and the refusals of an upload |
+| `GET /api/drafts/{draft_id}/cleared` | `loads:write`, the draft's owner only | Built | For a correction, a page of the issues of the earlier file it no longer has (`offset`, `limit` up to 500), each with the value it had. 404 for a draft that is no correction, or one that cannot be compared |
 | `POST /api/ingest/readings` | Devices. Not enforced yet | Placeholder, Phase 3 | The accepted and rejected counts of a batch |
 | `GET /api/ingest/watermark/{plant_code}/{source_key}` | Devices. Not enforced yet | Placeholder, Phase 3 | The newest timestamp held for a plant and source |
 
@@ -420,7 +423,7 @@ A person without a role gets the same shape with `"roles": []` and
       "origin": "catalogue",
       "label": "datasets.example_catalogue.name",
       "description": "datasets.example_catalogue.description",
-      "entry_modes": ["upload", "grid", "form"],
+      "entry_modes": ["upload"],
       "sheet": "Hoja1",
       "header_row": 1,
       "natural_key": ["Código"],
@@ -466,7 +469,8 @@ catalogue of `tests/fixtures/workbooks.py` as the body and
   "filename": "Líneas rotas.xlsx",
   "declared_bytes": 5422,
   "size_bytes": 5422,
-  "content_hash": "1dfec722923b25a122f8acfdffcef9c0a7e3b556b5cb059bd8d2d4f915f48997",
+  "content_hash": "1dfec722923b25a122f8acfdffcef9c0a7e3b556b5cb059bd8d2d4f915f48997
+",
   "created_at": "2026-10-17T18:50:45.076485Z",
   "uploaded_at": "2026-10-17T18:50:45.193724Z",
   "expires_at": "2026-11-16T18:50:45.193724Z",
@@ -516,6 +520,90 @@ counts; three shown)
 }
 ```
 
+`GET /api/drafts/{draft_id}/issues` of the synthetic file of every defect of
+the plan's section 5 (`lines_defects` of `tests/fixtures/workbooks.py`), two of
+its 19 issues: a warehouse code that lost its leading zero, and a cell of a
+header row pasted inside the data
+
+```json
+{
+  "total": 19,
+  "offset": 0,
+  "limit": 2,
+  "items": [
+    {"row": 5, "column": "B", "column_key": "Almac", "rule": "cell.pattern",
+     "severity": "error", "value": "101", "params": {"pattern": "^[0-9]{4}$"},
+     "reasons": [
+       {"reason": "code.lost_leading_zeros", "params": {"digits": 4}},
+       {"reason": "default.cell.pattern", "params": {}}
+     ],
+     "change": null},
+    {"row": 8, "column": "D", "column_key": "Planificación de Unidades por Hora",
+     "rule": "cell.type", "severity": "error",
+     "value": "Planificación de Unidades por Hora", "params": {"type": "decimal"},
+     "reasons": [
+       {"reason": "row.header_repeated", "params": {}},
+       {"reason": "default.cell.type", "params": {}}
+     ],
+     "change": null}
+  ]
+}
+```
+
+`POST /api/drafts/{draft_id}/corrections` with the same file corrected in part
+(`lines_defects_corrected`), then `POST .../validate` of the new draft: the
+comparison (two of five counts shown)
+
+```json
+{
+  "draft_id": "224ae955-8b3e-4774-8bd3-1a12b226928f",
+  "status": "validated",
+  "filename": "Líneas corregidas.xlsx",
+  "validation": {
+    "rows_read": 10,
+    "rows_with_errors": 3,
+    "rows_with_warnings": 1,
+    "blocking": true,
+    "counts": [
+      {"rule": "cell.pattern", "severity": "error", "column": "Almac", "rows": 2, "listed": 2,
+       "reasons": [{"reason": "code.lost_leading_zeros", "rows": 1},
+                   {"reason": "code.scientific_notation", "rows": 1}]},
+      {"rule": "cell.text_damaged", "severity": "warning",
+       "column": "Método de cantidad de transacción", "rows": 1, "listed": 1,
+       "reasons": [{"reason": "text.invisible_characters", "rows": 1}]}
+    ]
+  },
+  "previous_draft_id": "c56ff81d-9747-4af7-a3ed-766bddfbf839",
+  "comparison": {
+    "state": "ready",
+    "previous": {"draft_id": "c56ff81d-9747-4af7-a3ed-766bddfbf839",
+                 "filename": "Líneas con defectos.xlsx",
+                 "validated_at": "2026-10-18T05:23:36.568100Z"},
+    "previous_revalidated": false,
+    "cleared": 14,
+    "remaining": 5,
+    "new": 1,
+    "by_count_only": []
+  }
+}
+```
+
+`GET /api/drafts/{draft_id}/issues` of that correction, with `change=new`
+
+```json
+{
+  "total": 1,
+  "offset": 0,
+  "limit": 100,
+  "items": [
+    {"row": 3, "column": "D", "column_key": "Planificación de Unidades por Hora",
+     "rule": "cell.range", "severity": "error", "value": "-1", "params": {"min": "0"},
+     "reasons": [{"reason": "default.cell.range", "params": {}}],
+     "change": "new"}
+  ]
+}
+```
+
 - **The body is the file itself,** not a form: the API streams it to object
   storage a part (8 MiB) at a time and never holds it whole. A form would be
   parsed into a temporary file before the handler could start. The file's
@@ -539,6 +627,22 @@ counts; three shown)
 - **A draft is its owner's.** Anyone else gets 404, as for a draft that does
   not exist. A draft not worked on for 30 days is purged
   (`energy drafts purge`).
+- **Reasons are IDs and values too.** The app keeps, for each reason, why it
+  happened and what to do in Excel (`loads.reasons.<id>` of `es.json`); a
+  rule's own reason, `default.<rule>`, is always the last, and its "why" is
+  the rule's sentence. `counts[].reasons` counts every issue by its first
+  reason, listed or not: they add up to `rows`.
+- **A correction is a draft of its own,** with its own archived original; the
+  earlier draft and its file are never changed, and both live while either is
+  worked on. Two issues are the same issue when they break the same rule in
+  the same column of the same row, a row being known by its natural key,
+  ignoring case, spaces and accents, so a row that moved stays the same row.
+- **The three numbers are exact.** A rule and column with more issues than
+  the list holds on both sides is compared by count alone, in
+  `by_count_only`, and kept out of them. When the dataset's spec changed
+  between the two validations, validating the correction validates the earlier
+  file again under the current one (`previous_revalidated`); when that cannot
+  be done, `state` is `rules_changed` and nothing is matched.
 
 ### 3. The three parties
 
@@ -729,11 +833,11 @@ developer; the app shows its own texts and reads only the status and the
 | Status | `code` | When | Body |
 |---|---|---|---|
 | 200, 201, 202 | | Success. 201: a draft was created, and `Location` names it. 202 means "accepted, follow the run" | The endpoint's model |
-| 400 | The error's own, for example `invalid_time_window`, `invalid_filename`, `incomplete_upload` or `entry_mode_not_allowed` | A rule of the domain refused the request: any `EnergyError` without a row of its own | Envelope |
+| 400 | The error's own, for example `invalid_time_window`, `invalid_filename` or `incomplete_upload` | A rule of the domain refused the request: any `EnergyError` without a row of its own | Envelope |
 | 401 | `unauthenticated` | No token, or a token that failed a check of section 5 | Envelope, with a fixed message and empty `details` |
 | 403 | `forbidden` | A valid token without the permission the route needs | Envelope; `details.permission` names it |
-| 404 | `entity_not_found`, or `unknown_dataset` and `unknown_draft` | A lookup by identifier found nothing. A draft of someone else answers the same | Envelope |
-| 409 | `draft_busy` | A draft still arriving, failed, or being validated by another request | Envelope |
+| 404 | `entity_not_found`, or `unknown_dataset` and `unknown_draft` | A lookup by identifier found nothing. A draft of someone else answers the same, and so does the cleared list of a draft that is no correction to compare | Envelope |
+| 409 | `draft_busy` | A draft still arriving, failed, or being validated by another request; or a correction of a draft whose own file never arrived | Envelope |
 | 411 | `length_required` | An upload without `Content-Length` | Envelope |
 | 413 | `file_too_large` | An upload over 300 MiB: announced by `Content-Length`, or counted as it arrives | Envelope. Caddy refuses a body over its limit itself, before the API: 413 with an empty body, or a cut connection |
 | 415 | `unsupported_file_format`, `empty_file` | An upload whose name, declared type or first bytes are not an `.xlsx`, or that is empty | Envelope |
@@ -784,7 +888,7 @@ docker compose logs api | grep <request id>
 |---|---|
 | [`frontend/src/api/client.ts`](../frontend/src/api/client.ts) | `createApi(auth)`: `get(path)`, `post(path)` and `download(path)` ask the sign-in client for a token, call `/api` + `path` with `Authorization: Bearer`, and throw `ApiError(status, code)` for an answer that is not a success. `download` returns the file and the name the API gave it |
 | [`frontend/src/api/datasets.ts`](../frontend/src/api/datasets.ts) | `fetchDatasets(api)`: `GET /api/datasets`, the specs and the upload `limits`. `downloadTemplate(api, key)` |
-| [`frontend/src/api/drafts.ts`](../frontend/src/api/drafts.ts) | `uploadDraft(...)`: `POST /api/drafts` through `upload.ts`, with a token asked for just before sending. `fetchDraft`, `validateDraft` and `fetchIssues` for the other three |
+| [`frontend/src/api/drafts.ts`](../frontend/src/api/drafts.ts) | `uploadDraft(auth, target, ...)`: `POST /api/drafts`, or `POST /api/drafts/{draft_id}/corrections` for a corrected file, through `upload.ts`, with a token asked for just before sending. `fetchDraft`, `validateDraft`, `fetchIssues` and `fetchCleared` for the others |
 | [`frontend/src/api/upload.ts`](../frontend/src/api/upload.ts) | The only file that uses `XMLHttpRequest`, because `fetch` reports no upload progress. It sends the file as the raw body with its name percent-encoded in `X-File-Name`, and stops on an `AbortSignal` |
 | [`frontend/src/api/config.ts`](../frontend/src/api/config.ts) | `fetchClientConfig()`: `GET /api/config`, without a token. Its answer also names the report of the dashboard |
 | [`frontend/src/api/me.ts`](../frontend/src/api/me.ts) | `fetchMe(api)`: `GET /api/me`, with the token |
@@ -826,8 +930,13 @@ API helper, and the answer of `/api/me`.
   aborts the request; the API removes what it had received. Once the draft
   exists the page moves to `/loads/drafts/<id>`, asks once for its validation,
   and pages through its issues. That address survives a reload or a new
-  sign-in. The sentences of the rules are the app's (`loads.rules.*` of
-  `es.json`); the API sends their IDs and values.
+  sign-in. The sentences of the rules and of their reasons are the app's
+  (`loads.rules.*` and `loads.reasons.*` of `es.json`); the API sends their
+  IDs and values.
+- **A corrected file goes up from the draft's page,** by its button or dropped
+  anywhere on the page, to `POST /api/drafts/{draft_id}/corrections`. The page
+  then moves to the new draft, validates it once, and shows its `comparison`
+  first. The cleared issues are asked for only when the person opens them.
 - **The dashboard asks the API for nothing more.** Once it knows which report
   to show, it talks to Entra ID and to Power BI (section 9, "The report inside
   the web app").
@@ -1037,6 +1146,20 @@ curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/drafts/$DRA
 
 A file of more than 5 MB answers 201 and then 501 to the validation; one of
 more than 300 MB answers 413 (with `--large`, the script writes one of each).
+
+**A correction.** The script also writes `defectos_lineas.xlsx`, every defect
+of the plan's section 5 with the reason each must give
+(`defectos_lineas.manifest.tsv`), and `defectos_lineas_corregido.xlsx`, the same
+file after some of the fixes (`defectos_lineas_corregido.expected.tsv`: 14
+cleared, 5 remaining, 1 new). Upload and validate the first as above, then:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN"   -H "Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"   -H "X-File-Name: defectos_lineas_corregido.xlsx" --data-binary @defectos_lineas_corregido.xlsx   "http://localhost:8080/api/drafts/$DRAFT/corrections"
+CORRECTION=<the draft_id of the answer>
+curl -s -X POST -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/drafts/$CORRECTION/validate
+curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/drafts/$CORRECTION/issues?change=new"
+curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/drafts/$CORRECTION/cleared"
+```
 Remove a draft and its original at once with
 `energy drafts purge --draft-id $DRAFT`; `energy drafts purge --dry-run` says
 what the purge of expired drafts would remove.
@@ -1062,9 +1185,10 @@ ticket, a chat or this repository.
 | `tests/unit/test_settings.py` | The settings, among them the two that name the report: empty means not configured, and a value that is not a GUID is refused |
 | `tests/unit/test_api_datasets.py` | The two dataset routes: who may call them, the specs described, the template read back, the 404, and a malformed spec stopping the app from being built |
 | `tests/unit/test_dataset_spec.py`, `test_yaml_dataset_specs.py`, `test_dataset_specs_committed.py`, `test_xlsx_dataset_template.py` | What a spec may hold, one case per kind of mistake; reading them from their folder; the committed specs against the loader's routes, the Silver build's SQL, the translation file and the real workbooks; every template read back by the Bronze reader |
-| `tests/unit/test_api_drafts.py` | The four draft routes through the API with the real service, an in-memory repository and a directory archive: 201 and 200, every refusal (400, 404, 411, 413, 415), owner only, validation, the 409 and the 501, issues filtered and paged |
+| `tests/unit/test_api_drafts.py` | The six draft routes through the API with the real service, an in-memory repository and a directory archive: 201 and 200, every refusal (400, 404, 411, 413, 415), owner only, validation, the 409 and the 501, issues filtered and paged, reasons, a correction and its comparison, the cleared list |
+| `tests/unit/test_draft_reasons.py`, `test_draft_comparison.py` | Every defect of the plan's section 5 through a real workbook, with its first reason; what each detector must not say; every reason's texts in `es.json`; counts by reason past the list's cap; the comparison's arithmetic and the spec's digest |
 | `tests/unit/test_drafts.py`, `test_draft_rules.py`, `test_zip_package.py`, `test_draft_service.py`, `test_caddyfile.py` | The limits and the upload guard; each rule, with the Silver build's own number and the sentences of `es.json`; the archive's limits and a lying archive; the use cases, including a client that goes away and the purge; the Caddyfile's limits against the API's |
-| `tests/integration/test_drafts_end_to_end.py` | Against PostgreSQL and MinIO: every planted issue found, the original archived under its hash, Bronze unchanged, and a 96 MiB upload through the API under a memory bound |
+| `tests/integration/test_drafts_end_to_end.py` | Against PostgreSQL and MinIO: every planted issue found, with its reason; the original archived under its hash; a correction compared in SQL to the exact counts, with every table of Bronze, Silver and Gold unchanged and the earlier original untouched; a correction outliving the purge of its earlier draft; and a 96 MiB upload through the API under a memory bound |
 | `frontend/src/loads/*.test.tsx`, `frontend/src/api/upload.test.ts` | The loading pages: datasets, template, the checks before sending, progress, cancel, every refusal, the validation and the issues list, with a stand-in for `XMLHttpRequest` |
 | `frontend/src/pages/DashboardPage.test.tsx`, `frontend/src/powerbi/*.test.ts` | The dashboard: the report shown, its token replaced, and each message, with stand-ins for sign-in and for Power BI. One file runs Microsoft's embedding library itself, in a test browser that loads nothing |
 
@@ -1094,7 +1218,19 @@ ticket, a chat or this repository.
 - **A file over 5 MiB is kept, not validated.** Its validation answers 501
   until the worker validates large files (increment 12 of the frontend plan).
 - **A draft is its owner's only,** whatever the role. Nobody else can see it,
-  validate it or list its issues.
+  validate it, correct it or list its issues.
+- **Nothing is typed or edited in the app** (ADR 0009). A mistake is fixed in
+  Excel and the file uploaded again as a correction.
+- **A correction is compared with the draft it corrects only,** not with any
+  earlier one. A row is matched by its natural key; fixing a key cell itself
+  makes the row's other issues read as cleared and new, a row without a
+  complete key is matched by its row number, and rows sharing a key pair up
+  in order. A rule and column over the list's cap on both sides is compared
+  by count alone.
+- **Two defects cannot be told from the file alone:** `1.234` meant as 1234 is
+  a valid number, and a code that lost its leading zeros in a column without
+  a pattern may be a real code. They wait for the checks against existing
+  data (increment 8).
 - **Nothing reaches Bronze from a draft yet.** Confirming a load is increment 7.
 - **No figure comes from the API.** The KPI endpoints are placeholders that
   Phase 4 removes

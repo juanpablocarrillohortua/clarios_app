@@ -18,7 +18,17 @@ Responsibility:
       information;
     * **cell** - for every row: a required value is there; a value has its
       column's type; it matches the pattern, is one of the allowed values and
-      lies within the range.
+      lies within the range. A text value no other rule judged is checked for
+      damage a paste or Excel leaves (``cell.text_damaged``, a warning): a
+      code written as a number, invisible characters, text read in the wrong
+      encoding.
+
+    Every issue carries its likely reasons, most specific first, ending with
+    its rule's own (:mod:`energy.domain.draft_reasons`), and the identity of
+    its row: the row's natural key, loosened, with its occurrence among rows
+    of the same key, or the row number when the key is incomplete. The
+    identity lets the issues of a corrected file be matched with those of the
+    file it corrects, even after rows moved.
 
     The checks read the rows exactly as Bronze would keep them
     (:func:`energy.domain.landing.sheet_payloads`) and judge the payload text
@@ -30,20 +40,20 @@ Responsibility:
 
     A file broken on every row must not fill the memory or the issues list:
     :class:`IssueCollector` keeps the first issues of each rule in each column
-    and counts every affected row exactly.
+    and counts every affected row exactly, and by its first reason.
 
     The module is pure.
 
 Depends on:
     ``energy.domain.dataset_spec``, ``energy.domain.landing``,
-    ``energy.domain.drafts`` (constants only), standard library only.
+    ``energy.domain.draft_reasons``, standard library only.
 """
 
 from __future__ import annotations
 
+import json
 import re
-import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
@@ -51,6 +61,17 @@ from itertools import chain
 from typing import TYPE_CHECKING, Final
 
 from energy.domain.dataset_spec import ColumnType
+from energy.domain.draft_reasons import (
+    Reason,
+    ReasonId,
+    cell_reasons,
+    header_reasons,
+    loose,
+    ranked,
+    repeats_headers,
+    sheet_reasons,
+    text_damage,
+)
 from energy.domain.landing import (
     LandingRow,
     canonical_json,
@@ -108,6 +129,7 @@ class RuleId(StrEnum):
     CELL_PATTERN = "cell.pattern"
     CELL_ALLOWED = "cell.allowed"
     CELL_RANGE = "cell.range"
+    CELL_TEXT_DAMAGED = "cell.text_damaged"
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +146,11 @@ class Issue:
             column the spec does not know; ``None`` for the file as a whole.
         value: the text found, at most :data:`VALUE_SHOWN_LENGTH` characters.
         params: what the message needs: the pattern, the allowed values ...
+        reasons: why it probably happened, most specific first; the last is
+            always the rule's own. :class:`IssueCollector` fills it for an
+            issue its check gave none.
+        match_key: the identity of the issue's row, to match it with the same
+            issue in a corrected file; ``None`` for the file or its header.
     """
 
     rule: RuleId
@@ -133,6 +160,8 @@ class Issue:
     column_key: str | None
     value: str | None
     params: Mapping[str, ParamValue]
+    reasons: tuple[Reason, ...] = ()
+    match_key: str | None = None
 
     @property
     def column_letter(self) -> str | None:
@@ -150,6 +179,8 @@ class RuleCount:
         column_key: the column; ``None`` for the file as a whole.
         rows: every row that broke it; one for a file or header problem.
         listed: how many of those issues are kept to be listed.
+        reasons: how many of them have each first reason, most first. They
+            add up to ``rows``.
     """
 
     rule: RuleId
@@ -157,6 +188,20 @@ class RuleCount:
     column_key: str | None
     rows: int
     listed: int
+    reasons: tuple[ReasonCount, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ReasonCount:
+    """How many issues of one rule in one column have one first reason.
+
+    Attributes:
+        reason: the reason.
+        rows: how many issues it comes first in.
+    """
+
+    reason: ReasonId
+    rows: int
 
 
 class IssueCollector:
@@ -174,18 +219,28 @@ class IssueCollector:
         self._listed_per_column = listed_per_column
         self._tally: dict[tuple[RuleId, str | None], list[int]] = {}
         self._severity: dict[tuple[RuleId, str | None], IssueSeverity] = {}
+        self._by_reason: dict[tuple[RuleId, str | None], dict[ReasonId, int]] = {}
         self._pending: list[Issue] = []
         self.rows_with_errors = 0
         self.rows_with_warnings = 0
 
     def add(self, issue: Issue) -> None:
-        """Count one issue, and keep it if its rule and column are not full."""
+        """Count one issue, and keep it if its rule and column are not full.
+
+        An issue without reasons gets its rule's own.
+        """
+        if not issue.reasons:
+            issue = replace(issue, reasons=ranked(issue.rule, issue.params, ()))
         key = (issue.rule, issue.column_key)
         tally = self._tally.get(key)
         if tally is None:
             tally = self._tally[key] = [0, 0]
             self._severity[key] = issue.severity
+            self._by_reason[key] = {}
         tally[0] += 1
+        first = issue.reasons[0].id
+        by_reason = self._by_reason[key]
+        by_reason[first] = by_reason.get(first, 0) + 1
         if tally[1] < self._listed_per_column:
             tally[1] += 1
             self._pending.append(issue)
@@ -215,7 +270,20 @@ class IssueCollector:
     def counts(self) -> tuple[RuleCount, ...]:
         """Return how often each rule was broken in each column."""
         return tuple(
-            RuleCount(rule, self._severity[(rule, column)], column, rows, listed)
+            RuleCount(
+                rule,
+                self._severity[(rule, column)],
+                column,
+                rows,
+                listed,
+                tuple(
+                    ReasonCount(reason, count)
+                    for reason, count in sorted(
+                        self._by_reason[(rule, column)].items(),
+                        key=lambda item: (-item[1], item[0].value),
+                    )
+                ),
+            )
             for (rule, column), (rows, listed) in sorted(
                 self._tally.items(), key=lambda item: (item[0][0], item[0][1] or "")
             )
@@ -229,15 +297,13 @@ def sheet_issue(spec: DatasetSpec, sheet_names: Sequence[str]) -> Issue | None:
     """Return the issue of a workbook that lacks the spec's sheet, or ``None``."""
     if spec.bronze.sheet in sheet_names:
         return None
-    return Issue(
-        RuleId.FILE_SHEET_MISSING,
-        IssueSeverity.ERROR,
-        None,
-        None,
-        None,
-        None,
-        {"sheet": spec.bronze.sheet, "sheets": tuple(sheet_names[:_SHEETS_LISTED])},
-    )
+    rule = RuleId.FILE_SHEET_MISSING
+    params: dict[str, ParamValue] = {
+        "sheet": spec.bronze.sheet,
+        "sheets": tuple(sheet_names[:_SHEETS_LISTED]),
+    }
+    reasons = ranked(rule, params, sheet_reasons(spec.bronze.sheet, sheet_names))
+    return Issue(rule, IssueSeverity.ERROR, None, None, None, None, params, reasons)
 
 
 # -----------------------------------------------------------------------------
@@ -294,13 +360,6 @@ def _column(spec: ColumnSpec, offset: int, file_key: str, first_column: int) -> 
     )
 
 
-def loose(text: str) -> str:
-    """Return text as compared ignoring case, spaces and accents."""
-    decomposed = unicodedata.normalize("NFKD", text)
-    bare = "".join(char for char in decomposed if not unicodedata.combining(char))
-    return "".join(bare.casefold().split())
-
-
 def _is_blank(cell: CellValue) -> bool:
     """Return whether a header cell holds nothing but spaces."""
     text = cell_text(cell)
@@ -338,49 +397,59 @@ def _match_header(
     for offset, key in enumerate(found):
         if offset not in taken and offset not in blank:
             candidates.setdefault(loose(key), []).append(offset)
+    missing: list[ColumnSpec] = []
     for spec_column in unmatched:
         offsets = candidates.get(loose(spec_column.key))
-        if offsets:
-            offset = offsets.pop(0)
-            taken.add(offset)
-            columns.append(_column(spec_column, offset, found[offset], first_column))
-            collector.add(
-                Issue(
-                    RuleId.SCHEMA_HEADER_MISMATCH,
-                    IssueSeverity.ERROR,
-                    row,
-                    first_column + offset,
-                    spec_column.key,
-                    found[offset],
-                    {"found": found[offset], "expected": spec_column.header},
-                )
-            )
+        if not offsets:
+            missing.append(spec_column)
             continue
-        collector.add(
-            Issue(
-                RuleId.SCHEMA_COLUMN_MISSING,
-                IssueSeverity.ERROR if spec_column.required else IssueSeverity.WARNING,
-                row,
-                None,
-                spec_column.key,
-                None,
-                {"header": spec_column.header},
-            )
-        )
+        offset = offsets.pop(0)
+        taken.add(offset)
+        columns.append(_column(spec_column, offset, found[offset], first_column))
+        collector.add(_mismatch(row, first_column + offset, spec_column, found[offset]))
+
+    # A missing column is often one of the unknown ones under another name.
+    unknown = [
+        (offset, key)
+        for offset, key in enumerate(found)
+        if offset not in taken and offset not in blank
+    ]
+    unknown_headers = [key for _, key in unknown]
+    for spec_column in missing:
+        collector.add(_missing(row, spec_column, unknown_headers))
 
     reported: set[str] = set()
-    for offset, key in enumerate(found):
-        if offset not in taken and offset not in blank:
-            collector.add(_unknown(row, first_column + offset, key))
-            reported.add(key)
+    for offset, key in unknown:
+        collector.add(_unknown(row, first_column + offset, key))
+        reported.add(key)
     return columns, reported
+
+
+def _mismatch(row: int, index: int, spec_column: ColumnSpec, found: str) -> Issue:
+    """Return the issue of a header that equals the spec's only once loosened."""
+    rule = RuleId.SCHEMA_HEADER_MISMATCH
+    params: dict[str, ParamValue] = {"found": found, "expected": spec_column.header}
+    reasons = ranked(rule, params, header_reasons(rule, spec_column.header, found))
+    return Issue(rule, IssueSeverity.ERROR, row, index, spec_column.key, found, params, reasons)
+
+
+def _missing(row: int, spec_column: ColumnSpec, unknown_headers: Sequence[str]) -> Issue:
+    """Return the issue of a column of the spec the file lacks."""
+    rule = RuleId.SCHEMA_COLUMN_MISSING
+    params: dict[str, ParamValue] = {"header": spec_column.header}
+    specific = header_reasons(rule, spec_column.header, None, unknown_headers)
+    severity = IssueSeverity.ERROR if spec_column.required else IssueSeverity.WARNING
+    return Issue(
+        rule, severity, row, None, spec_column.key, None, params, ranked(rule, params, specific)
+    )
 
 
 def _unknown(row: int, index: int, key: str) -> Issue:
     """Return the issue of a column the spec does not know."""
-    return Issue(
-        RuleId.SCHEMA_COLUMN_UNKNOWN, IssueSeverity.INFO, row, index, key, key, {"header": key}
-    )
+    rule = RuleId.SCHEMA_COLUMN_UNKNOWN
+    params: dict[str, ParamValue] = {"header": key}
+    reasons = ranked(rule, params, header_reasons(rule, None, key))
+    return Issue(rule, IssueSeverity.INFO, row, index, key, key, params, reasons)
 
 
 # -----------------------------------------------------------------------------
@@ -431,7 +500,7 @@ def _broken_rule(column: _Column, value: str, cell: CellValue) -> _Broken | None
 
 
 def _check_cell(column: _Column, kept: SheetRow) -> Issue | None:
-    """Return the first rule one cell breaks, or ``None``."""
+    """Return the first rule one cell breaks, with its reasons, or ``None``."""
     text = kept.payload.get(column.file_key)
     value = text.strip(" ") if text else ""
     if not value:
@@ -441,19 +510,79 @@ def _check_cell(column: _Column, kept: SheetRow) -> Issue | None:
     cell = kept.cells[column.offset] if column.offset < len(kept.cells) else None
     broken = _broken_rule(column, value, cell)
     if broken is None:
-        return None
+        if column.spec.type is not ColumnType.TEXT or text_damage(text or "") is None:
+            return None
+        broken = RuleId.CELL_TEXT_DAMAGED, IssueSeverity.WARNING, {}
     rule, severity, params = broken
-    return column.issue(rule, severity, kept.source_row, text, **params)
+    issue = column.issue(rule, severity, kept.source_row, text, **params)
+    spec = column.spec
+    specific = cell_reasons(rule, spec.type.value, text or "", cell, spec.pattern, spec.allowed)
+    return replace(issue, reasons=ranked(rule, issue.params, specific))
 
 
-def _check_row(columns: Sequence[_Column], kept: SheetRow) -> list[Issue]:
-    """Return what one row breaks: at most one issue per column."""
+def _check_row(columns: Sequence[_Column], kept: SheetRow, identity: str) -> list[Issue]:
+    """Return what one row breaks: at most one issue per column.
+
+    A row that repeats the header row explains all its issues at once, so
+    that reason comes first in each.
+    """
     issues: list[Issue] = []
     for column in columns:
         issue = _check_cell(column, kept)
         if issue is not None:
             issues.append(issue)
-    return issues
+    if not issues:
+        return issues
+    first: tuple[Reason, ...] = ()
+    cells = ((kept.payload.get(column.file_key), column.spec.header) for column in columns)
+    if repeats_headers(cells):
+        first = (Reason(ReasonId.ROW_HEADER_REPEATED),)
+    return [
+        replace(
+            issue,
+            reasons=ranked(issue.rule, issue.params, issue.reasons, first),
+            match_key=identity,
+        )
+        for issue in issues
+    ]
+
+
+def _key_columns(spec: DatasetSpec, columns: Sequence[_Column]) -> tuple[str | None, ...]:
+    """Return the file's key of each natural-key column, ``None`` where it is missing."""
+    by_spec = {column.spec.key: column.file_key for column in columns}
+    return tuple(by_spec.get(key) for key in spec.natural_key)
+
+
+def row_identity(key_columns: Sequence[str | None], kept: SheetRow, seen: dict[str, int]) -> str:
+    """Return the identity of a row, to match it across two files of a dataset.
+
+    The identity is the row's natural key, loosened (case, spaces, accents and
+    invisible characters ignored, so fixing those keeps it), with the key's
+    occurrence among the rows read so far, so rows that share a key pair up
+    in order. A row whose key is incomplete is known by its row number.
+
+    Args:
+        key_columns: the file's key of each natural-key column.
+        kept: the row.
+        seen: how often each key was met so far; updated.
+
+    Returns:
+        ``key:`` and a digest, or ``row:`` and the row number.
+    """
+    values: list[str] = []
+    for file_key in key_columns:
+        text = kept.payload.get(file_key) if file_key is not None else None
+        value = loose(text) if text else ""
+        if not value:
+            return f"row:{kept.source_row}"
+        values.append(value)
+    if not values:
+        return f"row:{kept.source_row}"
+    key = json.dumps(values, ensure_ascii=False)
+    occurrence = seen.get(key, 0)
+    seen[key] = occurrence + 1
+    digest = sha256_hex(json.dumps([*values, occurrence], ensure_ascii=False).encode("utf-8"))
+    return f"key:{digest[:32]}"
 
 
 # -----------------------------------------------------------------------------
@@ -505,10 +634,12 @@ def check_sheet(
 
     columns, known = _match_header(spec, header, first_column, collector)
     known.update(column.file_key for column in columns)
+    key_columns = _key_columns(spec, columns)
+    seen: dict[str, int] = {}
     rows_read = 0
     for kept in sheet_payloads(chain([header], remaining), header_row, first_column, header_row):
         rows_read += 1
-        collector.add_row(_check_row(columns, kept))
+        collector.add_row(_check_row(columns, kept, row_identity(key_columns, kept, seen)))
         for key in kept.payload:
             if key not in known:
                 # A column with data and no header, or past the header's end.

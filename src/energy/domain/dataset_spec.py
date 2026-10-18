@@ -7,7 +7,8 @@ Responsibility:
     spec describes one sheet of one Bronze source: the columns a file must have
     and their order, the type and rules of each column, how the rows are kept
     (a ``snapshot`` replaced whole, or ``movement`` rows that add up) and how
-    they may be entered (``upload``, ``grid``, ``form``). The API serves the
+    they may be entered: ``upload`` only, since every dataset is entered and
+    corrected in Excel (ADR 0009). The API serves the
     specs to the web app and builds the template of each; increment 5 checks
     uploaded files against them.
 
@@ -36,6 +37,9 @@ Depends on:
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import json
 import re
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -85,11 +89,14 @@ class DatasetOrigin(StrEnum):
 
 
 class EntryMode(StrEnum):
-    """How rows may be entered: a file, the editable grid, or a one-row form."""
+    """How rows may be entered: only by uploading a workbook.
+
+    The grid and the one-row form the plan once had were dropped (ADR 0009):
+    data is entered and corrected in Excel. The field stays in the format, so
+    the specs keep saying how their rows arrive.
+    """
 
     UPLOAD = "upload"
-    GRID = "grid"
-    FORM = "form"
 
 
 class ColumnType(StrEnum):
@@ -464,10 +471,8 @@ def _parse_silver(value: object, problems: _Problems) -> str | None:
     return None
 
 
-def _parse_entry_modes(
-    value: object, origin: DatasetOrigin | None, problems: _Problems
-) -> tuple[EntryMode, ...] | None:
-    """Return how rows may be entered. A QAD export is only ever uploaded."""
+def _parse_entry_modes(value: object, problems: _Problems) -> tuple[EntryMode, ...] | None:
+    """Return how rows may be entered: ``[upload]``, the only mode there is."""
     if not isinstance(value, list) or not value:
         problems.add("entry_modes", f"must be a non-empty list, not {_describe(value)}")
         return None
@@ -480,9 +485,6 @@ def _parse_entry_modes(
             problems.add(f"entry_modes[{index}]", f"{mode!r} is listed twice")
             return None
         modes.append(EntryMode(mode))
-    if origin is DatasetOrigin.EXPORT and set(modes) != {EntryMode.UPLOAD}:
-        problems.add("entry_modes", "a QAD export is only ever uploaded: [upload]")
-        return None
     return tuple(modes)
 
 
@@ -763,11 +765,7 @@ def _parse_spec(raw: object, expected_key: str | None, problems: _Problems) -> D
     if source is not None:
         qad = source.source_system == SOURCE_SYSTEM_QAD
         origin = DatasetOrigin.EXPORT if qad else DatasetOrigin.CATALOGUE
-    modes = (
-        _parse_entry_modes(fields["entry_modes"], origin, problems)
-        if "entry_modes" in fields
-        else None
-    )
+    modes = _parse_entry_modes(fields["entry_modes"], problems) if "entry_modes" in fields else None
     silver = _parse_silver(fields["silver"], problems) if "silver" in fields else None
     columns = _parse_columns(fields["columns"], problems) if "columns" in fields else None
     natural_key = (
@@ -804,6 +802,22 @@ def _parse_spec(raw: object, expected_key: str | None, problems: _Problems) -> D
         period_column=period.column,
         columns=columns,
     )
+
+
+def spec_digest(spec: DatasetSpec) -> str:
+    """Return the SHA-256 of a spec's every field: equal specs, equal digests.
+
+    A draft records the digest of the spec it was validated against, so a
+    later validation can tell whether the rules changed in between.
+    """
+    canonical = json.dumps(
+        dataclasses.asdict(spec),
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def build_catalogue(specs: Mapping[str, DatasetSpec], origin: str) -> DatasetCatalogue:
@@ -856,4 +870,5 @@ __all__ = [
     "Severity",
     "build_catalogue",
     "parse_dataset_spec",
+    "spec_digest",
 ]

@@ -281,6 +281,35 @@ lists them.
 - **Keep it bounded.** Report through `IssueCollector`, which lists the first
   1,000 issues of each rule in each column and counts the rest, so a file
   broken on every row costs counters, not memory.
+- **Give it its own reason.** A new rule needs `default.<rule id>` in
+  `ReasonId` (`src/energy/domain/draft_reasons.py`) and a `fix` for it in
+  `es.json`; a test fails for a rule without one.
+
+### Adding a reason detector
+
+A reason says why an issue probably happened and what to do about it in Excel.
+Detectors are pure functions in `src/energy/domain/draft_reasons.py`, called
+by the checks of `draft_rules.py`, which hold the cell, its type as the
+workbook kept it, the column's spec, the row and the headers.
+
+- **Deterministic, from the file and the spec alone.** No model, no lookup of
+  data already loaded: the same file always gets the same reasons. A reason
+  that needs existing data waits for the checks of increment 8.
+- **Give it an ID in `ReasonId`,** `<group>.<name>`, and return a `Reason`
+  with the values its sentences need (`params`), never prose.
+- **Write two sentences in `frontend/src/i18n/es.json`,** under
+  `loads.reasons.<group>.<name>`: `why` it happened, and the `fix`, as actions
+  in Spanish-language Excel for Windows ("Inicio > Número > Texto"), naming
+  the cell with `{{cell}}` where it helps. A guess says "probablemente". A
+  test fails for a reason without both.
+- **Rank it.** `ranked()` puts the row's reasons first, then the cell's, then
+  the rule's own; a detector that explains more goes earlier.
+- **Test both ways** in `tests/unit/test_draft_reasons.py`: a file that shows
+  the defect gives the reason first, and the nearest sound value gives none.
+  Add the defect to `lines_defects()` or `invoices_defects()` of
+  `tests/fixtures/workbooks.py`, with its line in the manifest.
+- **Measure it on real data** before it ships, read-only, as `cell.text_damaged`
+  was: a detector that fires on sound rows teaches people to ignore reasons.
 
 ### Changing the web app
 

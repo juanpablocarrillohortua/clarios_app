@@ -67,7 +67,7 @@
       "templateFailed": "No se pudo descargar la plantilla. Intente de nuevo.",
       "loading": "Cargando los conjuntos de datos…",
       "failed": "No se pudo obtener la lista de conjuntos de datos.",
-      "none": "Todavía ningún conjunto de datos se carga desde un archivo."
+      "none": "Todavía no hay conjuntos de datos para cargar."
     },
     "file": {
       "heading": "Archivo",
@@ -140,6 +140,7 @@
       "detail": "Detalle",
       "severity": "Gravedad",
       "wholeFile": "Archivo",
+      "rowOnly": "Fila {{row}}",
       "empty": "vacío",
       "expected": "Formato esperado: {{pattern}}",
       "range": "{{from}}–{{to}} de {{total}}",
@@ -150,7 +151,16 @@
       "clearFilters": "Quitar filtros",
       "failed": "No se pudo obtener la lista de problemas.",
       "capped": "En la columna «{{column}}», «{{rule}}» afecta a {{rows}} filas; se muestran las primeras {{listed}}.",
-      "unknownRule": "Regla {{rule}}"
+      "unknownRule": "Regla {{rule}}",
+      "cell": "Celda",
+      "causeAndFix": "Causa y solución",
+      "otherCauses_one": "Otra causa posible",
+      "otherCauses_other": "Otras {{count}} causas posibles",
+      "new": "Nuevo",
+      "change": "Cambio",
+      "anyChange": "Todos",
+      "changeNew": "Nuevos",
+      "changeRemaining": "Pendientes"
     },
     "severity": {
       "error": "Error",
@@ -239,7 +249,223 @@
         "range": {
           "name": "Fuera de rango",
           "message": "El valor debe estar {{range}}."
+        },
+        "text_damaged": {
+          "name": "Texto dañado",
+          "message": "El texto parece dañado por Excel o por un copiar y pegar."
         }
+      }
+    },
+    "characters": {
+      "nbsp": "espacio de no separación",
+      "tab": "tabulación",
+      "zero_width": "carácter de ancho cero",
+      "line_break": "salto de línea",
+      "control": "carácter de control"
+    },
+    "differences": {
+      "case": "las mayúsculas",
+      "accent": "una tilde",
+      "spaces": "los espacios",
+      "several": "mayúsculas, tildes o espacios"
+    },
+    "reasons": {
+      "row": {
+        "header_repeated": {
+          "why": "La fila {{row}} repite los encabezados: es una fila de títulos pegada dentro de los datos.",
+          "fix": "Elimine la fila {{row}} completa: clic derecho en el número de la fila y Eliminar."
+        }
+      },
+      "date": {
+        "typed_as_text": {
+          "why": "La fecha está escrita como texto, no como una fecha de Excel.",
+          "fix": "Seleccione la columna {{column}} y use Datos > Texto en columnas > Siguiente > Siguiente, elija «Fecha: DMA» y Finalizar. O escriba la fecha de nuevo en una celda con formato Fecha."
+        },
+        "lost_format": {
+          "why": "El número {{value}} es la fecha {{date}} sin formato de fecha.",
+          "fix": "Seleccione la columna {{column}} y elija Inicio > Número > Fecha corta."
+        }
+      },
+      "number": {
+        "text_with_separators": {
+          "why": "El número está guardado como texto, con separadores de miles o con coma decimal.",
+          "fix": "Seleccione las celdas, haga clic en el aviso «Número almacenado como texto» y elija «Convertir en número». Si el aviso no aparece, use Inicio > Buscar y seleccionar > Reemplazar para quitar los separadores de miles."
+        }
+      },
+      "code": {
+        "scientific_notation": {
+          "why": "Excel convirtió el código en número y lo muestra en notación científica: los últimos dígitos ya se perdieron.",
+          "fix": "Dé formato Texto a la columna {{column}} (Inicio > Número > Texto) y vuelva a pegar los códigos desde el sistema de origen. Cambiar solo el formato no recupera los dígitos perdidos."
+        },
+        "trailing_zero_decimal": {
+          "why": "Excel convirtió el código en número y le agregó «.0» al final.",
+          "fix": "Dé formato Texto a la columna {{column}} (Inicio > Número > Texto) y escriba el código sin «.0», o péguelo de nuevo desde el sistema de origen."
+        },
+        "lost_leading_zeros": {
+          "why": "Excel convirtió el código en número y le quitó los ceros a la izquierda: el código lleva {{digits}} dígitos.",
+          "fix": "Dé formato Texto a la columna {{column}} (Inicio > Número > Texto) y escriba de nuevo el código completo, con sus ceros a la izquierda."
+        }
+      },
+      "text": {
+        "lowercase": {
+          "why": "El valor está en minúsculas y esta columna usa mayúsculas.",
+          "fix": "Escríbalo en mayúsculas. Para muchas celdas, use =MAYUSC({{cell}}) en una columna auxiliar y pegue el resultado con Pegado especial > Valores."
+        },
+        "invisible_characters": {
+          "why": "El valor tiene caracteres invisibles que deja un copiar y pegar: {{characters}}.",
+          "fix": "Use Inicio > Buscar y seleccionar > Reemplazar: en «Buscar», mantenga presionada la tecla Alt y escriba 0160 en el teclado numérico; deje «Reemplazar con» vacío y elija «Reemplazar todos». Para tabulaciones y saltos de línea, use =LIMPIAR({{cell}}) en una columna auxiliar y pegue como valores."
+        },
+        "wrong_encoding": {
+          "why": "El texto se leyó con otra codificación: por eso aparecen signos como «Ã³» en lugar de letras como «ó».",
+          "repaired": "Debería decir «{{repaired}}».",
+          "fix": "El texto pasó por un archivo CSV abierto con otra codificación. Ábralo de nuevo con Datos > Obtener datos > Desde el texto/CSV, elija «65001: Unicode (UTF-8)» en «Origen del archivo», cargue los datos y guarde el libro como .xlsx."
+        }
+      },
+      "allowed": {
+        "near_match": {
+          "why": "Probablemente quiso escribir «{{suggestion}}»: solo cambian las mayúsculas, los espacios o las tildes.",
+          "fix": "Escriba «{{suggestion}}» exactamente, o elíjalo en la lista desplegable de la columna; la plantilla la trae."
+        }
+      },
+      "header": {
+        "near_match": {
+          "why": "El encabezado «{{found}}» se diferencia de «{{expected}}» solo en {{difference}}, y con otro nombre la columna no se usaría.",
+          "fix": "Escriba el encabezado de la celda {{cell}} exactamente como «{{expected}}». Lo más seguro es copiarlo de la plantilla."
+        },
+        "similar": {
+          "why": "Probablemente es la columna «{{found}}», con el encabezado mal escrito.",
+          "fix": "Corrija el encabezado «{{found}}» para que diga exactamente «{{header}}». Lo más seguro es copiarlo de la plantilla."
+        }
+      },
+      "sheet": {
+        "near_match": {
+          "why": "Probablemente es la hoja «{{found}}», con otro nombre.",
+          "fix": "Cambie el nombre de la hoja «{{found}}» a «{{sheet}}»: doble clic en su pestaña, escriba el nombre y presione Enter."
+        }
+      },
+      "unreadable": {
+        "macros": {
+          "why": "El libro tiene macros.",
+          "fix": "Use Archivo > Guardar como, elija el tipo «Libro de Excel (*.xlsx)» y suba ese archivo."
+        },
+        "corrupt": {
+          "why": "El archivo está dañado o incompleto.",
+          "fix": "Ábralo en Excel; si ofrece repararlo, acepte. Luego use Archivo > Guardar como > «Libro de Excel (*.xlsx)» y súbalo de nuevo."
+        },
+        "not_a_spreadsheet": {
+          "why": "El archivo es un documento de Office, pero no un libro de Excel.",
+          "fix": "Abra el libro con los datos en Excel y guárdelo con Archivo > Guardar como > «Libro de Excel (*.xlsx)»."
+        },
+        "not_a_zip": {
+          "why": "El archivo no es un libro .xlsx, aunque su nombre lo diga: puede ser un CSV o un libro antiguo (.xls) con el nombre cambiado.",
+          "fix": "Ábralo en Excel y use Archivo > Guardar como > «Libro de Excel (*.xlsx)»."
+        }
+      },
+      "default": {
+        "file": {
+          "unreadable": {
+            "fix": "Ábralo en Excel y guárdelo con Archivo > Guardar como > «Libro de Excel (*.xlsx)»."
+          },
+          "too_many_parts": {
+            "fix": "Pase la hoja de datos a un libro nuevo: clic derecho en su pestaña > Mover o copiar > «(nuevo libro)», marque «Crear una copia», y guarde ese libro como .xlsx."
+          },
+          "content_too_large": {
+            "fix": "Pase la hoja de datos a un libro nuevo (clic derecho en su pestaña > Mover o copiar > «(nuevo libro)»), quite las fórmulas con Pegado especial > Valores y guárdelo como .xlsx."
+          },
+          "shared_strings_too_large": {
+            "fix": "Pase la hoja de datos a un libro nuevo (clic derecho en su pestaña > Mover o copiar > «(nuevo libro)») y elimine las columnas de texto que no estén en la plantilla."
+          },
+          "sheet_missing": {
+            "fix": "Cambie el nombre de la hoja con los datos a «{{sheet}}» (doble clic en su pestaña), o copie los datos a la plantilla."
+          },
+          "header_row_empty": {
+            "fix": "Inserte o elimine filas para que los encabezados queden en la fila {{row}}, como en la plantilla."
+          },
+          "no_rows": {
+            "fix": "Pegue los datos debajo de los encabezados, desde la fila siguiente."
+          }
+        },
+        "schema": {
+          "header_mismatch": {
+            "fix": "Escriba el encabezado de la celda {{cell}} exactamente como «{{expected}}»."
+          },
+          "column_missing": {
+            "fix": "Agregue la columna «{{header}}» con ese encabezado exacto; puede copiarla de la plantilla."
+          },
+          "column_unknown": {
+            "fix": "Si la columna sobra, elimínela: clic derecho en la letra {{column}} > Eliminar. Si es una columna de la plantilla, corrija su encabezado."
+          }
+        },
+        "cell": {
+          "required": {
+            "fix": "Escriba el valor en la celda {{cell}}."
+          },
+          "type": {
+            "fix": "Escriba en la celda {{cell}} {{type}}, sin letras ni símbolos que sobren."
+          },
+          "pattern": {
+            "fix": "Escriba el valor de la celda {{cell}} con el mismo formato que las demás filas de la columna."
+          },
+          "allowed": {
+            "fix": "Escriba en la celda {{cell}} uno de los valores permitidos: {{allowed}}. La lista desplegable de la plantilla los trae."
+          },
+          "range": {
+            "fix": "Corrija el valor de la celda {{cell}}: debe estar {{range}}."
+          },
+          "text_damaged": {
+            "fix": "Revise la celda {{cell}} y escriba de nuevo su valor."
+          }
+        }
+      }
+    },
+    "correction": {
+      "upload": "Subir archivo corregido",
+      "hint": "Corrija el archivo en Excel y súbalo de nuevo: se compara con este y verá qué se corrigió.",
+      "dropping": "Suelte el archivo para subirlo como corrección",
+      "same": "Es el mismo archivo que subió antes: no cambió nada."
+    },
+    "comparison": {
+      "cleared_one": "Se corrigió {{n}} problema",
+      "cleared_other": "Se corrigieron {{n}} problemas",
+      "noneCleared": "No se corrigió ningún problema",
+      "remaining_one": "queda {{n}}",
+      "remaining_other": "quedan {{n}}",
+      "new_one": "{{n}} nuevo",
+      "new_other": "{{n}} nuevos",
+      "allFixed_one": "Se corrigió el problema del archivo anterior.",
+      "allFixed_other": "Se corrigieron los {{n}} problemas del archivo anterior.",
+      "unchanged": "Los problemas son los mismos que en el archivo anterior.",
+      "clearedLabel": "Corregidos",
+      "remainingLabel": "Pendientes",
+      "newLabel": "Nuevos",
+      "against": "Comparado con «{{name}}», validado el {{when}}.",
+      "revalidated": "El archivo anterior se volvió a validar con las reglas actuales.",
+      "byCount": "En la columna «{{column}}», «{{rule}}»: antes {{before}}, ahora {{after}}. Son demasiados para compararlos uno a uno.",
+      "previousGone": "El archivo anterior ya no está disponible: se muestran solo los problemas de este archivo.",
+      "previousNotValidated": "El archivo anterior no se validó, así que no hay con qué comparar.",
+      "rulesChanged": "Las reglas cambiaron desde el archivo anterior y no se pudo validar de nuevo: los problemas no se comparan uno a uno.",
+      "showCleared_one": "Ver el problema corregido",
+      "showCleared_other": "Ver los {{n}} problemas corregidos",
+      "hideCleared": "Ocultar los problemas corregidos",
+      "clearedHeading": "Problemas corregidos",
+      "clearedFailed": "No se pudo obtener la lista de problemas corregidos.",
+      "before": "Antes"
+    },
+    "copy": {
+      "button": "Copiar para Excel",
+      "copying": "Copiando…",
+      "done_one": "Copiado: {{n}} problema. Péguelo en una hoja nueva de Excel.",
+      "done_other": "Copiado: {{n}} problemas. Péguelo en una hoja nueva de Excel.",
+      "failed": "No se pudo copiar. Intente de nuevo.",
+      "columns": {
+        "severity": "Gravedad",
+        "cell": "Celda",
+        "column": "Columna",
+        "value": "Valor",
+        "rule": "Regla",
+        "cause": "Causa",
+        "fix": "Solución",
+        "change": "Cambio"
       }
     }
   },

@@ -4,7 +4,9 @@
   later. Point 2: the app uses `@azure/msal-browser` alone
   ([ADR 0006](0006-api-tokens-and-app-roles.md)). Point 3: it uses
   `powerbi-client` alone
-  ([ADR 0008](0008-embedding-the-report-in-the-dashboard.md))
+  ([ADR 0008](0008-embedding-the-report-in-the-dashboard.md)). Point 1: there
+  is no grid, and no form either; data is entered and corrected in Excel
+  ([ADR 0009](0009-data-is-entered-and-corrected-in-excel.md), 2026-10-18)
 - **Date:** 2026-10-12
 - **Deciders:** Platform team
 

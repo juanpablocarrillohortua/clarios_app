@@ -47,7 +47,7 @@ export function LoadsHeading() {
   return wide ? <VisuallyHidden>{title}</VisuallyHidden> : title;
 }
 
-function StopLine({ stop, file, max }: { stop: UploadStop; file: File; max: number }) {
+export function StopLine({ stop, file, max }: { stop: UploadStop; file: File; max: number }) {
   const { t } = useTranslation();
   const text = {
     cancelled: () => t("loads.upload.cancelled"),
@@ -183,7 +183,9 @@ export function LoadsPage() {
                             />
                           )}
                           <Group>
-                            <Button onClick={() => void upload.start(chosen.key, file)}>
+                            <Button
+                              onClick={() => void upload.start({ datasetKey: chosen.key }, file)}
+                            >
                               {file.size > limits.validated_in_request_bytes
                                 ? t("loads.file.uploadOnly")
                                 : t("loads.file.upload")}
