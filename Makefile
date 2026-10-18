@@ -58,22 +58,28 @@ endif
 # `make equs-load EQUS_DIR=/some/other/dir`. On the host, ENERGY can name another
 # interpreter, for example ENERGY="python -m energy".
 EQUS_DIR ?= $(CURDIR)/data/raw_excels
+# The SCADA exports the energy-EQ cross reads (`make cruce`), mounted the same way.
+SCADA_DIR ?= $(CURDIR)/data
 ifeq ($(RUNNER),host)
 ENERGY ?= $(PY) energy
 EQUS_REPORT ?= $(PY) equs-report
 ENERGY_EXCELS = $(ENERGY)
 EXCELS_DIR = $(EQUS_DIR)
+ENERGY_SCADA = $(ENERGY)
+SCADA_RUN_DIR = $(SCADA_DIR)
 else
 ENERGY ?= $(DC) run --rm --no-deps api energy
 EQUS_REPORT ?= $(DC) run --rm --no-deps -T api equs-report
 ENERGY_EXCELS = $(DC) run --rm --no-deps -v "$(EQUS_DIR):/app/data/raw_excels:ro" api energy
 EXCELS_DIR = /app/data/raw_excels
+ENERGY_SCADA = $(DC) run --rm --no-deps -v "$(SCADA_DIR):/app/data:ro" api energy
+SCADA_RUN_DIR = /app/data
 endif
 
 .PHONY: help install up down logs restart format format-check lint typecheck \
         security test test-unit test-integration check db-upgrade db-downgrade \
         db-revision db-reset seed equs-load equs-silver refresh refresh-all resumen \
-        daily close report clean
+        daily cruce close report clean
 
 # -----------------------------------------------------------------------------
 # Meta
@@ -197,6 +203,11 @@ resumen: ## Column H of a month: MONTH=YYYY-MM [FORMAT=json|csv] [SOURCE=closed]
 daily: ## EQUS BATT by day: MONTH=YYYY-MM or START= END= [FREQUENCY=month] [PROCESS=] [AREA=] [FORMAT=]
 	@test -n "$(MONTH)" || test -n "$(START)" -a -n "$(END)" || { echo "error: MONTH or START and END are required, for example: make daily MONTH=2026-09" >&2; exit 1; }
 	$(ENERGY) equs daily $(if $(MONTH),--month $(MONTH)) $(if $(START),--start $(START)) $(if $(END),--end $(END)) $(if $(FREQUENCY),--frequency $(FREQUENCY)) $(foreach p,$(PROCESS),--process "$(p)") $(foreach a,$(AREA),--area "$(a)") $(if $(FORMAT),--format $(FORMAT))
+
+# AREA takes one or more names separated by spaces; only F&A has energy so far.
+cruce: ## SCADA kWh against EQ: START=YYYY-MM-DD END=YYYY-MM-DD [FREQUENCY=day|month] [AREA=] [FORMAT=]
+	@test -n "$(START)" -a -n "$(END)" || { echo "error: START and END are required, for example: make cruce START=2026-07-02 END=2026-09-30" >&2; exit 1; }
+	$(ENERGY_SCADA) equs cruce --start $(START) --end $(END) --data-dir $(SCADA_RUN_DIR) $(if $(FREQUENCY),--frequency $(FREQUENCY)) $(foreach a,$(AREA),--area "$(a)") $(if $(FORMAT),--format $(FORMAT))
 
 close: ## Freeze a month's close: MONTH=YYYY-MM [ACCEPT_WARNINGS=1] [RECLOSE=1]
 	@test -n "$(MONTH)" || { echo "error: MONTH is required, for example: make close MONTH=2026-09" >&2; exit 1; }

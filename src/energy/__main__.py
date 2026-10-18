@@ -20,9 +20,10 @@ Responsibility:
     its result: a table, CSV or JSON that can be piped.
 
     Exit codes of the EQUS Gold commands (``refresh-gold``, ``resumen-equ``,
-    ``close-month``, ``daily``, ``equs-report``): 0 success; 1 invalid
-    arguments, or a request refused (a month already closed, a blocking
-    data-quality check, days that do not add up to their month);
+    ``close-month``, ``daily``, ``cruce``, ``equs-report``): 0 success; 1 invalid
+    arguments, an unreadable export, or a request refused (a month already
+    closed, a blocking data-quality check, days that do not add up to their
+    month);
     2 a database error; 3 the refresh lock was not released in time. A
     malformed command line exits 1 too, rather than Click's usual 2, so that 2
     always means the database.
@@ -45,6 +46,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final
 import typer
 
 from energy.core.logging import configure_from_settings
+from energy.domain.energy_cross import cross_csv_rows, cross_json, describe_cross
 from energy.domain.equs_gold import (
     COLUMN_H_FIELDS,
     REPORT_SOURCES,
@@ -69,6 +71,7 @@ from energy.domain.exceptions import (
     RepositoryError,
 )
 from energy.domain.landing import DEFAULT_PLANT_CODE, LANDING_SOURCES, parse_sheet_spec
+from energy.pipelines.flows.energy_cross import DEFAULT_DATA_DIRECTORY, energy_cross
 from energy.pipelines.flows.equs_bronze_load import (
     DEFAULT_DIRECTORY,
     RouteOutcome,
@@ -814,6 +817,74 @@ def equs_daily(
         raise typer.Exit(code=EXIT_INVALID)
 
 
+def equs_cruce(
+    start: Annotated[
+        str | None, typer.Option("--start", help="First day, YYYY-MM-DD, included.")
+    ] = None,
+    end: Annotated[
+        str | None, typer.Option("--end", help="Last day, YYYY-MM-DD, included.")
+    ] = None,
+    frequency: Annotated[str, typer.Option("--frequency", help="day or month.")] = "day",
+    area: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--area",
+            help="Keep only this plant area. Repeat for several. Only F&A has energy so far.",
+        ),
+    ] = None,
+    data_dir: Annotated[
+        Path,
+        typer.Option(
+            "--data-dir",
+            help="Directory holding the SCADA exports.",
+            file_okay=False,
+            dir_okay=True,
+        ),
+    ] = DEFAULT_DATA_DIRECTORY,
+    output_format: Annotated[str, typer.Option("--format", help="table, json or csv.")] = "table",
+) -> None:
+    """Print the kWh of each plant area against its equivalent batteries.
+
+    Read-only: the SCADA exports are read from the data directory and the EQ
+    from the database, live. F&A sets its three rectifiers against FORMACION +
+    DECORADO. A day is a local day; a frozen counter leaves its days without
+    kWh but keeps its energy in the month and the range. kWh/EQ is always the
+    ratio of the sums. Exits 1, after printing, when the daily EQ does not add
+    up to its months.
+    """
+    try:
+        if not start or not end:
+            raise InvalidPeriodError("give both --start and --end as YYYY-MM-DD")
+        period = DateRange(parse_day(start, name="--start"), parse_day(end, name="--end"))
+        chosen = _choice(frequency, FREQUENCIES, "--frequency")
+        output = _choice(output_format, _TABLE_FORMATS, "--format")
+        series = energy_cross(
+            period,
+            frequency="month" if chosen == "month" else "day",
+            areas=area or (),
+            data_dir=data_dir,
+        )
+    except EnergyError as error:
+        raise _stop(error) from error
+
+    if output == "json":
+        typer.echo(json.dumps(cross_json(series), ensure_ascii=False, indent=2))
+    elif output == "csv":
+        buffer = io.StringIO()
+        csv.writer(buffer, lineterminator="\n").writerows(cross_csv_rows(series))
+        typer.echo(buffer.getvalue(), nl=False)
+    else:
+        for line in describe_cross(series):
+            typer.echo(line)
+    if series.eq_mismatches:
+        typer.secho(
+            "error: the daily EQ does not add up to gold.v_resumen_equ",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=EXIT_INVALID)
+
+
 def build_app() -> typer.Typer:
     """Build the Typer application with every implemented command.
 
@@ -823,8 +894,9 @@ def build_app() -> typer.Typer:
         ``energy equs build-silver`` builds Silver from what was landed,
         ``energy equs refresh-gold`` brings Gold up to date,
         ``energy equs resumen-equ`` prints column H of a month,
-        ``energy equs close-month`` freezes a month and
-        ``energy equs daily`` prints the EQ of EQUS BATT day by day.
+        ``energy equs close-month`` freezes a month,
+        ``energy equs daily`` prints the EQ of EQUS BATT day by day and
+        ``energy equs cruce`` sets the SCADA energy against the EQ.
     """
     app = typer.Typer(
         name="energy",
@@ -846,6 +918,7 @@ def build_app() -> typer.Typer:
     equs.command("resumen-equ")(equs_resumen_equ)
     equs.command("close-month")(equs_close_month)
     equs.command("daily")(equs_daily)
+    equs.command("cruce")(equs_cruce)
     app.add_typer(equs, name="equs")
     return app
 

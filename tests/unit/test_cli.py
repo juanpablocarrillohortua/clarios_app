@@ -826,3 +826,150 @@ def test_daily_fails_when_the_days_do_not_add_up(daily: dict[str, Any]) -> None:
     assert result.exit_code == 1
     assert "1 of 1 driver-months of 2026-09 do not add up" in result.output
     assert "error: the days do not add up to gold.v_resumen_equ" in result.output
+
+
+# -----------------------------------------------------------------------------
+# Energy-EQ cross: cruce
+# -----------------------------------------------------------------------------
+def _cross(*, mismatches: int = 0) -> Any:
+    """Return a cross of F&A over two days, built as the real one is."""
+    from decimal import Decimal  # noqa: PLC0415
+
+    from energy.domain.energy_cross import (  # noqa: PLC0415
+        AreaCross,
+        AreaEnergy,
+        CrossRow,
+        EnergyCrossSeries,
+        EnergySpan,
+    )
+    from energy.domain.equs_gold import DateRange  # noqa: PLC0415
+
+    period = DateRange(date(2026, 9, 1), date(2026, 9, 2))
+    spans = tuple(
+        EnergySpan(day, day, Decimal(20_900), Decimal(1), 1)
+        for day in (date(2026, 9, 1), date(2026, 9, 2))
+    )
+    total = EnergySpan(period.start, period.end, Decimal(41_800), Decimal(1), 2)
+    energy = AreaEnergy("F&A", "SCADA-Base de datos F&A.xlsx", "day", period,
+                        ("RECTIFICADOR 1",), spans, (total,), total)  # fmt: skip
+
+    def row(span: EnergySpan) -> CrossRow:
+        eq = Decimal(1000) * span.days
+        return CrossRow("F&A", span.start, span.end, span.kwh, span.coverage, span.measured_days,
+                        eq, {"FORMACION": eq / 2, "DECORADO": eq / 2})  # fmt: skip
+
+    area = AreaCross(energy, ("FORMACION", "DECORADO"), tuple(row(s) for s in spans), row(total),
+                     eq_mismatches=mismatches)  # fmt: skip
+    return EnergyCrossSeries(period, "day", (area,))
+
+
+@pytest.fixture
+def cruce(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Replace the cross flow, recording how it is called."""
+    recorded: dict[str, Any] = {"mismatches": 0}
+
+    def fake_energy_cross(period: Any, **options: Any) -> Any:
+        recorded["call"] = (period, options)
+        if "raise" in recorded:
+            raise recorded["raise"]
+        return _cross(mismatches=recorded["mismatches"])
+
+    monkeypatch.setattr(cli, "energy_cross", fake_energy_cross)
+    return recorded
+
+
+def test_help_lists_the_cruce_command() -> None:
+    result = runner.invoke(cli.build_app(), ["equs", "--help"])
+
+    assert result.exit_code == 0
+    assert "cruce" in result.output
+
+
+def test_cruce_prints_a_table_per_area(cruce: dict[str, Any]) -> None:
+    """By day by default, every area, the exports of data/."""
+    from pathlib import Path  # noqa: PLC0415
+
+    result = runner.invoke(
+        cli.build_app(), ["equs", "cruce", "--start", "2026-09-01", "--end", "2026-09-02"]
+    )
+
+    assert result.exit_code == 0, result.output
+    period, options = cruce["call"]
+    assert (period.start, period.end) == (date(2026, 9, 1), date(2026, 9, 2))
+    assert options == {"frequency": "day", "areas": (), "data_dir": Path("data")}
+    assert "kWh against equivalent batteries by day, 2026-09-01 to 2026-09-02" in result.output
+    assert "against FORMACION + DECORADO" in result.output
+    assert "20.90" in result.output
+
+
+def test_cruce_passes_its_options_and_writes_json_and_csv(
+    cruce: dict[str, Any], tmp_path: Path
+) -> None:
+    as_json = runner.invoke(
+        cli.build_app(),
+        ["equs", "cruce", "--start", "2026-09-01", "--end", "2026-09-02", "--frequency", "Month",
+         "--area", "F&A", "--data-dir", str(tmp_path), "--format", "json"],
+    )  # fmt: skip
+    assert as_json.exit_code == 0, as_json.output
+    _, options = cruce["call"]
+    assert options == {"frequency": "month", "areas": ["F&A"], "data_dir": tmp_path}
+    payload = json.loads(as_json.output)
+    assert payload["areas"][0]["total"]["kwh_por_eq"] == 20.9
+
+    as_csv = runner.invoke(
+        cli.build_app(),
+        ["equs", "cruce", "--start", "2026-09-01", "--end", "2026-09-02", "--format", "csv"],
+    )
+    assert as_csv.exit_code == 0, as_csv.output
+    lines = as_csv.output.splitlines()
+    assert lines[0] == "area,periodo,desde,hasta,dias,dias_medidos,cobertura,kwh,eq,kwh_por_eq"
+    assert lines[1] == "F&A,2026-09-01,2026-09-01,2026-09-01,1,1,1,20900,1000,20.9"
+
+
+@pytest.mark.usefixtures("cruce")
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["equs", "cruce", "--start", "2026-09-01"],
+        ["equs", "cruce", "--start", "2026-09-31", "--end", "2026-10-01"],
+        ["equs", "cruce", "--start", "2026-09-30", "--end", "2026-09-01"],
+        ["equs", "cruce", "--start", "2026-09-01", "--end", "2026-09-02", "--frequency", "week"],
+        ["equs", "cruce", "--start", "2026-09-01", "--end", "2026-09-02", "--format", "xml"],
+    ],
+)
+def test_cruce_refuses_invalid_arguments(arguments: list[str]) -> None:
+    """Exit 1, with the reason."""
+    result = runner.invoke(cli.build_app(), arguments)
+
+    assert result.exit_code == 1
+    assert "error:" in result.output
+
+
+@pytest.mark.parametrize(("error", "code"), [("database", 2), ("refused", 1), ("export", 1)])
+def test_cruce_exit_code_says_what_went_wrong(cruce: dict[str, Any], error: str, code: int) -> None:
+    """2 for the database, 1 for a question without an answer or an unreadable export."""
+    from energy.domain.exceptions import (  # noqa: PLC0415
+        InvalidPeriodError,
+        SourceUnavailableError,
+    )
+
+    cruce["raise"] = {
+        "database": RepositoryError("could not reach the database"),
+        "refused": InvalidPeriodError("no energy source for this area"),
+        "export": SourceUnavailableError("SCADA export cannot be read"),
+    }[error]
+    result = runner.invoke(
+        cli.build_app(), ["equs", "cruce", "--start", "2026-09-01", "--end", "2026-09-02"]
+    )
+
+    assert result.exit_code == code, result.output
+
+
+def test_cruce_fails_when_the_daily_eq_does_not_add_up(cruce: dict[str, Any]) -> None:
+    cruce["mismatches"] = 1
+    result = runner.invoke(
+        cli.build_app(), ["equs", "cruce", "--start", "2026-09-01", "--end", "2026-09-02"]
+    )
+
+    assert result.exit_code == 1
+    assert "error: the daily EQ does not add up to gold.v_resumen_equ" in result.output
