@@ -26,6 +26,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from energy.core.constants import (
     ENTRA_API_SCOPE_NAME,
     ENTRA_LOGIN_HOST,
+    MAX_CHAT_HISTORY,
     POWERBI_API_URL,
     POWERBI_SERVICE_URL,
 )
@@ -470,15 +471,18 @@ class ChatSettings(BaseSettings):
     An empty key means "not configured": the platform starts and works, and the
     assistant says it is not available. The key is a secret: it reaches no log
     and no browser. See ``docs/chatbot-plan.md``.
+
+    An empty variable counts as unset, so compose can pass every ``CHAT_*``
+    variable through as ``${VAR:-}`` and an unset one keeps its default here.
     """
 
-    model_config = _BASE_CONFIG
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_ignore_empty=True)
 
     api_key: SecretStr | None = Field(default=None, validation_alias="CHAT_API_KEY")
     model: str = Field(default="gpt-4.1-mini", min_length=1, validation_alias="CHAT_MODEL")
     # How many earlier messages go with each question.
     context_window_limit: int = Field(
-        default=20, ge=0, le=200, validation_alias="CHAT_CONTEXT_WINDOW_LIMIT"
+        default=20, ge=0, le=MAX_CHAT_HISTORY, validation_alias="CHAT_CONTEXT_WINDOW_LIMIT"
     )
     # How long one answer may take, in seconds, before the model counts as unavailable.
     timeout_seconds: float = Field(

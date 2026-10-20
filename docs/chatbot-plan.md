@@ -10,7 +10,8 @@ is adapted here in three phases:
 2. **It answers from data**, with read-only SQL over the `reporting` views.
    When the data a question needs has no table yet, it says so. *Built on
    2026-10-19, on simulated data: the real database is one setting away.*
-3. **People use it from the web app**, in an accordion on the dashboard.
+3. **People use it from the web app**, from a round button on the dashboard.
+   *Built on 2026-10-19; the owner's check in a signed-in browser is to come.*
 
 Decisions taken with the owner on 2026-10-19:
 
@@ -66,7 +67,8 @@ The package was dissolved into the layers of the hexagon, so
 | LangChain's agent on OpenAI, the prompt file | `adapters/langchain_chat_model.py`, `adapters/prompts/system_prompt.txt` |
 | The use case: `ChatService.answer(history, question)`, stateless | `services/chat_service.py` |
 | Wiring for the command line and Streamlit | `pipelines/flows/chat.py` (`build_chat_service()`) |
-| Wiring for the API (phase 3) | `api/deps.py`, the API's composition root (ADR 0005) |
+| Wiring for the API (phase 3) | `api/deps.py`, the API's composition root (ADR 0005): `get_chat_service()` |
+| The adapters both roots build | `adapters/chat_wiring.py` |
 | The development page | `scripts/chat_streamlit.py`, run by `make chat-ui` |
 
 A context is, in this order: the notes (the date and time at the plant), the
@@ -304,68 +306,194 @@ With the real model and simulated data:
 | "¿Cuánto gas usó RC el año pasado?" | The pending sentence, with no query |
 | "¿Y qué proceso aportó más EQ en ese mes de septiembre?" | OREC, 73,502.30, with the notice. Its first query named a column that does not exist; it corrected it from the error |
 
-## Phase 3: an accordion on the dashboard
+## Phase 3: a round button on the dashboard (built 2026-10-19)
 
 ### API
 
-`POST /api/chat`, mounted in `api/main.py` behind
+`POST /api/chat` (`api/routers/chat.py`), mounted in `api/main.py` behind
 `Depends(requires(Permission.CHAT_USE))`.
 
 - **Who may use it.** `chat:use` is new in `api/security.py`. In `GRANTS` it
-  goes to viewer, operator, engineer and admin, as `dashboard:view` does, and
-  the table's test restates it.
-- **The request.** Body `{history: [{role, content}], question}`. The history
-  holds at most `CHAT_CONTEXT_WINDOW_LIMIT` messages, and each text at most
-  4,000 characters; beyond that, 422.
-- **The answer.** `{answer}`.
-  - 503 `chat_not_configured` without a key or a prompt;
-  - 502 `chat_model_unavailable` when the model fails;
-  - 422 `empty_question`.
-- **Nothing is stored.**
-- **Tests that hold it:** `docs/api.md` gets its row and a sample answer, which
-  `tests/unit/test_api_reference.py` requires. `tests/unit/test_api_auth.py`
-  covers the 401.
-- The api image is rebuilt with the new dependencies (`make up`, on an idle
-  machine).
+  goes to viewer, operator, engineer and admin, as `dashboard:view` does. Its
+  tests restate it, and `GET /me` now lists it.
+- **The request** (`ChatRequest`, `api/schemas/requests.py`):
+  - the body is `{history: [{role, content}], question}`;
+  - `history` holds at most **200** messages (`MAX_CHAT_HISTORY` in
+    `core/constants.py`, also the ceiling of `CHAT_CONTEXT_WINDOW_LIMIT`), each
+    at most 20,000 characters, since an answer may be long;
+  - `question` is at most 4,000 characters;
+  - the service then keeps the last `CHAT_CONTEXT_WINDOW_LIMIT` messages;
+  - beyond any of these limits, or with an unknown role or field, FastAPI
+    answers 422.
+
+  The plan said "at most `CHAT_CONTEXT_WINDOW_LIMIT` messages, beyond that
+  422". A fixed cap is used instead, so the browser never has to know the
+  server's setting.
+- **The answer** is `{answer}`, plain text:
+  - **422 `empty_question`** for a blank question. The question has no minimum
+    length in the schema, so the refusal comes from the domain, in the API's
+    envelope;
+  - **502 `chat_model_unavailable`** when the model fails;
+  - **503 `chat_not_configured`** without a key, without instructions, or in
+    database mode without the reporting login.
+
+  The three are rows of `_STATUS_OF` in `api/main.py`. Before this phase they
+  answered 400.
+- **The handler is a plain `def`.** FastAPI runs it in its thread pool, off the
+  event loop, because an answer takes seconds.
+- **Wiring.** `api` may not import `pipelines`. The adapters that both
+  composition roots need therefore moved to `adapters/chat_wiring.py`:
+  - `reporting_login_url`;
+  - `build_reporting_query`;
+  - `require_chat_key`;
+  - `build_chat_model`.
+
+  `pipelines/flows/chat.py` imports them, and `api/deps.py` has
+  `get_chat_service`, which works like this:
+  - it checks the key first, so a refusal builds nothing;
+  - it builds the service on the first question and keeps it on the app, so
+    the simulation is built once;
+  - it never keeps a failure.
+- **Nothing is stored,** and nothing of a conversation is logged.
+- **Compose** passes `CHAT_API_KEY`, `CHAT_MODEL`, `CHAT_CONTEXT_WINDOW_LIMIT`,
+  `CHAT_TIMEOUT_SECONDS`, `CHAT_DATA_SOURCE`, `CHAT_SQL_ROW_LIMIT` and
+  `CHAT_SQL_TIMEOUT_SECONDS` to the api container as `${VAR:-}`.
+  - `ChatSettings` reads an empty variable as unset (`env_ignore_empty`), so
+    each keeps its default.
+  - `CHAT_SYSTEM_PROMPT_FILE`, `CHAT_DB_HOST` and `CHAT_DB_PORT` are host
+    settings and are not passed.
+  - With a key, the container needs outbound HTTPS to `api.openai.com`.
+- **Tests:**
+  - `tests/unit/test_api_chat.py` uses a fake model. It covers the
+    conversation in order, every refusal, 502, 503 with the real wiring, and
+    the service built once and a failure not kept.
+  - `docs/api.md` has the endpoint's row, a sample answer and the status rows.
 
 ### Web app
 
-- **Where it shows.** `api/chat.ts` and `dashboard/ChatAccordion.tsx`, a Mantine
-  `Accordion` titled with an `es.json` key under `chat.*`. It is:
-  - closed by default;
-  - above the report's frame, which it never covers;
-  - shown only when `GET /me` lists `chat:use`.
-- **Where the conversation lives.** The component's state and `sessionStorage`:
-  a reload keeps it, and closing the tab clears it. The last
-  `CHAT_CONTEXT_WINDOW_LIMIT` messages go with each question. "Nueva
-  conversación" starts again.
-- **Answers are plain text, never HTML.**
-- **Sending.** "Enviar" is guarded against a double send, as "Confirmar carga"
-  is. A pending state appears after 300 ms; errors are said plainly (not
-  configured, no answer).
-- **Look.** Design tokens only (`styles/tokens.css`). No motion under
-  `prefers-reduced-motion`. It works at phone width.
+| Piece | File |
+|---|---|
+| The request | `src/api/chat.ts` (`askChat`, `MAX_HISTORY`, `MAX_QUESTION_CHARS`) |
+| The conversation | `src/chat/useChat.ts` |
+| The button and its panel | `src/chat/ChatLauncher.tsx`, `ChatLog.tsx`, `ChatComposer.tsx`, `chat.module.css` |
+| A wait shown only once it lasts | `src/hooks/useDelayed.ts`, moved out of the confirm panel |
+| The texts | `dashboard.chat.*` of `es.json` |
 
-### Tests (Vitest)
+- **Where it shows.** On `/dashboard` (`src/pages/DashboardPage.tsx`; there is
+  no `dashboard/` folder), as a round button fixed in the bottom-right corner,
+  over the report, which keeps its whole height:
+  - only when `GET /me` lists `chat:use`;
+  - whether or not the report is configured.
 
-- hidden without `chat:use`;
-- a question sent with the history trimmed to the limit;
-- a double click sends one request;
-- each error;
-- the conversation restored from `sessionStorage`.
+  The first version (2026-10-19) was a full-width accordion above the report.
+  The owner asked for a small circle instead on 2026-10-20.
+- **The button opens a panel** that sits above it, right edges aligned
+  (24 rem by up to 34 rem).
+  - **It is a parallel tool, not a dialog.** There is no scrim, the report
+    stays usable beside it, and a click elsewhere does not close it.
+  - **Closing it:** the button, Escape, or the panel's own ✕. Focus goes back
+    to the button.
+  - **Opening it** puts the cursor in the box. After a question is sent, the
+    cursor stays in the box.
+  - **While closed,** the panel is `inert` and `aria-hidden`.
+  - **The header** holds "Asistente", "Nueva conversación" (once there is a
+    conversation) and ✕.
+  - **An answer that lands while the panel is closed** puts a cyan dot on the
+    button, and a live region says "Hay una respuesta nueva". Opening the
+    panel clears both.
+  - **On a phone** (under 48 em) the panel is a sheet across the foot of the
+    screen, covering the button. Its ✕ closes it.
+- **Where the conversation lives.** In the hook's state, mirrored in
+  `sessionStorage` under `clarios.chat`:
+  - a reload keeps it, and closing the tab clears it;
+  - it is stored with the person's `subject`, so someone else signing in on
+    the same tab starts empty;
+  - at most 200 messages are kept and sent.
+
+  The state lives outside the panel, so closing the panel while a question is
+  on its way loses nothing.
+- **A question:**
+  - it shows at once, a little quieter until answered;
+  - it becomes part of the history only with its answer;
+  - one request at a time, guarded by a ref as "Confirmar carga" is;
+  - Enter sends and Shift+Enter starts a new line;
+  - the box is never locked: only "Enviar" waits.
+- **A failure:**
+  - it is said under the box: not configured, no answer, or anything else;
+  - the question goes back into the box, after anything typed meanwhile.
+- **Answers are plain text,** never HTML.
+- **"Nueva conversación"** clears the conversation without asking. The
+  conversation is a convenience, not a record.
+- **Before the first question,** three example questions. Choosing one fills
+  the box and sends nothing.
+- **A disclaimer** under the box: the answers are a model's, to be checked
+  against the report.
+- **Look** (designed with the `apple-design` skill), from the design tokens
+  only:
+  - **the button:** the view's one pink, with its glow. It shrinks on
+    pointer-down, and its bubble turns into a ✕ on the spring;
+  - **the panel:** the header's translucent material, with a panel's halo. It
+    grows out of the button (`transform-origin: bottom right`, from 0.85 scale
+    and 0.5 rem lower) and closes back into it along the same path, on the
+    app's critically damped spring. Its transitions follow `data-open`, so a
+    second press while it moves turns it round from where it is. Only
+    `transform` and `opacity` move;
+  - **the bubbles:** solid surfaces;
+  - **turns:** each rises into place;
+  - **the log:** its top edge fades. It follows a new message only when the
+    reader is at its foot, and the person's own question always brings it
+    down;
+  - **the typing indicator:** three dots, after 300 ms of waiting;
+  - **touch:** buttons are 44 px under a coarse pointer.
+
+  The preference settings are honoured:
+  - **reduced motion:** the panel and the turns fade in place, the button's
+    glyphs swap without turning, and the dots become the words "Pensando…";
+  - **reduced transparency or more contrast:** the panel is solid.
+- **Tests** (`src/chat/ChatLauncher.test.tsx`, 26):
+  - hidden without `chat:use`, closed with it, present without a report;
+  - the button opens the panel it controls, and the cursor lands in the box;
+  - closed, the panel is `inert` and `aria-hidden`;
+  - ✕, Escape and the button close it, and focus goes back to the button;
+  - an answer that arrives while it is closed is marked until it opens, and
+    one seen as it arrived is not;
+  - a question answered, and the next one carrying the conversation;
+  - the question shown before its answer;
+  - one request from three sends;
+  - blank refused, and Shift+Enter;
+  - the indicator only after 300 ms;
+  - HTML shown as text;
+  - each failure with the question back, and what was typed meanwhile kept;
+  - the examples fill the box only;
+  - the conversation restored, not shown to another subject, sent trimmed to
+    200, and cleared.
+
+  The test fixtures `viewer` and `operator` now carry `chat:use`, as the API
+  gives it. `src/test/setup.ts` stubs `document.fonts`, which Mantine's
+  growing textarea reads and jsdom lacks.
 
 ### Docs
 
-- a row in section 8 of `docs/frontend-plan.md`;
-- the assistant's path in `docs/architecture.md`;
-- in CLAUDE.md, the build state and the "Chat assistant" section.
+- **`docs/api.md`:** the endpoint row, a sample, the status rows, the
+  permission, the `CHAT_*` settings and the way in of section 9.
+- **`docs/sign-in.md`:** the permission table.
+- **`docs/frontend-plan.md`:** a row in section 8.
+- **`docs/architecture.md`:** "A question to the assistant".
+- **`CLAUDE.md`:** the build state and the chat section.
 
 ### Done when
 
-- `make check` and `make frontend-check` pass.
-- After `make up`, `/api/chat` answers 401 without a token.
-- The owner's check, signed in: the accordion on `/dashboard`, at desktop and
-  phone width, answers a figure and the pending case.
+- **Automated, done:**
+  - the backend gate on the changed files (ruff, mypy, bandit) and the unit
+    suite;
+  - the frontend's Biome lint, both `tsc` runs, every Vitest test and the
+    build.
+- **The stack, not yet:** after `make up` (the api image must be rebuilt:
+  phases 1 and 2 changed the lockfile), `/api/chat` answers 401 without a
+  token.
+- **The owner's check, signed in:** the panel on `/dashboard`, at desktop and
+  phone width, answers one figure, with the simulated notice, and the pending
+  case.
 
 ## Risks and open points
 

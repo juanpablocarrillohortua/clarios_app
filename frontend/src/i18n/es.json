@@ -16,6 +16,32 @@
     "reportTitle": "Informe de Power BI",
     "openInPowerBi": "Abrir en Power BI",
     "fullscreen": "Pantalla completa",
+    "chat": {
+      "open": "Pregunte al asistente",
+      "close": "Cerrar el asistente",
+      "heading": "Asistente",
+      "unread": "Hay una respuesta nueva",
+      "conversation": "Conversación con el asistente",
+      "question": "Su pregunta",
+      "placeholder": "Escriba su pregunta",
+      "send": "Enviar",
+      "newConversation": "Nueva conversación",
+      "pending": "Pensando…",
+      "you": "Usted",
+      "assistant": "Asistente",
+      "empty": "Pregunte por las baterías equivalentes de un mes, de un proceso o de un año fiscal. Por ejemplo:",
+      "examples": {
+        "equsMonth": "¿Cuántas EQ hubo en septiembre de 2026?",
+        "topProcess": "¿Qué proceso aportó más EQ el mes pasado?",
+        "trend": "¿Cómo cambiaron las EQ mes a mes en el año fiscal 2026?"
+      },
+      "disclaimer": "Las respuestas las escribe un modelo de IA a partir de los datos de la plataforma: confirme las cifras en el informe.",
+      "failure": {
+        "notConfigured": "El asistente no está configurado en el servidor. Avise a un administrador.",
+        "unavailable": "El asistente no respondió a tiempo. Intente de nuevo en un momento.",
+        "unknown": "No se pudo enviar la pregunta. Revise su conexión e intente de nuevo."
+      }
+    },
     "problem": {
       "code": "Código: {{code}}",
       "requestId": "Solicitud de Power BI: {{id}}",

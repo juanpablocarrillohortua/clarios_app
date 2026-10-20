@@ -166,7 +166,7 @@ def test_me_tells_a_viewer_what_they_may_do(client: TestClient, auth_headers: An
         "name": "Ada Lovelace",
         "username": "ada@example.test",
         "roles": ["viewer"],
-        "permissions": ["dashboard:view"],
+        "permissions": ["chat:use", "dashboard:view"],
         "plant_scope": ["1515"],
     }
 
@@ -176,7 +176,7 @@ def test_me_tells_who_may_load_data(client: TestClient, auth_headers: Any, role:
     payload = client.get("/me", headers=auth_headers(role)).json()
 
     assert payload["roles"] == [role]
-    assert payload["permissions"] == ["dashboard:view", "loads:write"]
+    assert payload["permissions"] == ["chat:use", "dashboard:view", "loads:write"]
 
 
 def test_me_answers_a_person_without_a_role_with_no_permission(

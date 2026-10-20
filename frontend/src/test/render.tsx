@@ -49,7 +49,7 @@ export const powerBiConfig: PowerBiConfig = {
 export const EMBED_URL =
   "https://app.powerbi.example.test/reportEmbed?reportId=55555555-5555-4555-8555-555555555555&config=abc";
 
-function person(roles: string[], permissions: string[]): Me {
+export function person(roles: string[], permissions: string[]): Me {
   return {
     subject: "00000000-0000-4000-8000-00000000abcd",
     name: ada.name,
@@ -63,8 +63,8 @@ function person(roles: string[], permissions: string[]): Me {
 // What GET /api/me answers for each kind of user. The permissions are written
 // out because the app must take them as given: it holds no rule that derives
 // them from a role.
-export const viewer = person(["viewer"], ["dashboard:view"]);
-export const operator = person(["operator"], ["dashboard:view", "loads:write"]);
+export const viewer = person(["viewer"], ["chat:use", "dashboard:view"]);
+export const operator = person(["operator"], ["chat:use", "dashboard:view", "loads:write"]);
 export const noRole = person([], []);
 
 export interface FakeAuthClient extends AuthClient {

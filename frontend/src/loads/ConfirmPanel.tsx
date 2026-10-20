@@ -17,7 +17,7 @@
 // as a quiet button, beside it.
 import { Anchor, Button, Checkbox, Group, List, Stack, Text, Title } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 
@@ -27,6 +27,7 @@ import type { LoadDetail } from "../api/loads";
 import { useSession } from "../auth/Session";
 import { Busy } from "../components/Busy";
 import { Panel } from "../components/Panel";
+import { useDelayed } from "../hooks/useDelayed";
 import { loadPath } from "../paths";
 import classes from "../styles/app.module.css";
 import { DifferenceList } from "./DifferenceList";
@@ -46,19 +47,6 @@ const AGAIN: Partial<Record<CommitFailure, "check" | "retry">> = {
   datasetBusy: "retry",
   failed: "retry",
 };
-
-function useDelayed(on: boolean, delay: number): boolean {
-  const [shown, setShown] = useState(false);
-  useEffect(() => {
-    if (!on) {
-      setShown(false);
-      return;
-    }
-    const timer = window.setTimeout(() => setShown(true), delay);
-    return () => window.clearTimeout(timer);
-  }, [on, delay]);
-  return shown;
-}
 
 interface ConfirmPanelProps {
   draft: Draft;

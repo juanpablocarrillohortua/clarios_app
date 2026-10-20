@@ -34,3 +34,12 @@ window.ResizeObserver = class {
 // Mantine's select scrolls the highlighted choice into view; jsdom lays out
 // nothing and has no such method.
 Element.prototype.scrollIntoView = () => {};
+
+// Mantine's growing textarea (the chat's box) sizes itself again when fonts
+// finish loading; jsdom loads no fonts and has no document.fonts.
+if (!("fonts" in document)) {
+  Object.defineProperty(document, "fonts", {
+    configurable: true,
+    value: { addEventListener: () => {}, removeEventListener: () => {} },
+  });
+}

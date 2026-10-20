@@ -113,7 +113,7 @@ to Microsoft with that account is usually not asked for the password again.
 
 | Role | May |
 |---|---|
-| `viewer` | See the dashboard |
+| `viewer` | See the dashboard, and ask the chat assistant on it |
 | `operator` | The above, and load data, see the history of every load (whoever made it, in the app or by a command), and read the dataset specs and download their templates. A file someone uploads is theirs alone until it is loaded: nobody else sees it, whatever their role |
 | `engineer`, `admin` | The same as `operator` today; more arrives with later features |
 | No role | Sign in, and nothing else. The app shows a page saying so |
@@ -219,6 +219,7 @@ flowchart LR
 | **Works, outside the API** | Loading the exports and calculating the figures, by commands on the server |
 | **Works, outside the API** | Power BI reading the equivalent batteries through the reporting views |
 | **Works** | Confirming a checked file, so that it lands in the database's evidence exactly once. A summary comes first: the rows, the period of an export, the warnings to accept and, for a catalogue, what changes from the version in force. Then the history of every load, the app's and the command line's, and each load in detail, with its original file to download. Built on 2026-10-18; seeing it as a signed-in user is still to be checked in a browser |
+| **Works** | Asking the chat assistant from the dashboard. It answers from simulated figures until the plant agrees to send real ones to OpenAI, and the API keeps nothing of a conversation. Built on 2026-10-19; seeing it as a signed-in user is still to be checked in a browser |
 | **Planned** | Checking files over 5 MB. Updating the figures after a load: until then Silver, Gold and the report are rebuilt by commands. Undoing a load, with a reason |
 | **Defined, not built** | Readings sent by the plant's devices |
 | **Built, outside the API** | The Power BI report shown inside the web app's dashboard. Built on 2026-10-13; seeing it as a signed-in user is still to be checked in a browser |
@@ -347,6 +348,7 @@ refused, and how the app and Entra ID take part.
 | `GET /api/loads` | `loads:write` | Built | A page of every load of the caller's plants, from the app or the command line: filtered by `dataset`, `state`, `user` (`me` or a subject), `origin` (`app` or `cli`), `period_from` and `period_to`, `from` and `to`; sorted by `started_at` or `rows`, `order` `desc` or `asc`; `offset`, `limit` up to 100. `people` names everyone who loaded, for the filter |
 | `GET /api/loads/{run_id}` | `loads:write` | Built | One load: what it wrote and each sheet's rows, the original file, its validation and the warnings accepted, a catalogue's difference, and `draft_available`, whether the caller can still open its draft. 404 `unknown_load` |
 | `GET /api/loads/{run_id}/original` | `loads:write` | Built | The file the load came from, streamed from object storage under the name it was uploaded with, its bytes checked against its hash on the way. 404 `unknown_load` when Bronze catalogues no file for the load |
+| `POST /api/chat` | `chat:use` | Built | The assistant's answer to one question (body: `history`, the earlier messages, at most 200, and `question`, at most 4,000 characters), as plain text. Nothing is stored. 422 `empty_question` for a blank question, 502 `chat_model_unavailable` when the model does not answer, 503 `chat_not_configured` without a key ([chatbot-plan.md](chatbot-plan.md)) |
 | `POST /api/ingest/readings` | Devices. Not enforced yet | Placeholder, Phase 3 | The accepted and rejected counts of a batch |
 | `GET /api/ingest/watermark/{plant_code}/{source_key}` | Devices. Not enforced yet | Placeholder, Phase 3 | The newest timestamp held for a plant and source |
 
@@ -421,7 +423,7 @@ refused, and how the app and Entra ID take part.
   "name": "Test Operator",
   "username": "operator@example.test",
   "roles": ["operator"],
-  "permissions": ["dashboard:view", "loads:write"],
+  "permissions": ["chat:use", "dashboard:view", "loads:write"],
   "plant_scope": ["1515"]
 }
 ```
@@ -886,6 +888,32 @@ it replaced (`sheets[].rows` is filled in the detail only)
   stops short of its length, so the browser reports a broken download rather
   than keeping it.
 
+`POST /api/chat`, with the body
+
+```json
+{
+  "history": [
+    { "role": "user", "content": "¿Cuántas EQ hubo en septiembre de 2026?" },
+    { "role": "assistant", "content": "En septiembre de 2026 hubo 196.712,47 EQ. (Datos simulados: no son cifras reales de la planta.)" }
+  ],
+  "question": "¿Cuánta energía consumió OREC en agosto?"
+}
+```
+
+```json
+{ "answer": "No encontrado: la tabla está pendiente de implementación." }
+```
+
+- **The conversation travels with each question.** The web app keeps it in
+  the tab (`sessionStorage`) and sends it whole, oldest first, without the
+  question; only the last `CHAT_CONTEXT_WINDOW_LIMIT` messages reach the
+  model. The API logs how many messages came and how long the answer took,
+  never their text.
+- **The handler is a plain function,** run in the thread pool: an answer takes
+  seconds, up to `CHAT_TIMEOUT_SECONDS`.
+- **The service is built on the first question and kept.** Without a key, each
+  question answers 503 and nothing is built.
+
 ### 3. The three parties
 
 ```mermaid
@@ -1037,6 +1065,7 @@ permissions              what the caller may do
 |---|---|---|
 | `dashboard:view` | `viewer`, `operator`, `engineer`, `admin` | The dashboard section of the app, and `/api/kpis/*` until Phase 4 removes it |
 | `loads:write` | `operator`, `engineer`, `admin` | `/api/datasets/*`, `/api/drafts/*`, `/api/loads/*`, the data-loading section of the app |
+| `chat:use` | `viewer`, `operator`, `engineer`, `admin` | `/api/chat`, and the assistant's panel on the dashboard |
 
 - **`dashboard:view` is navigation, not the protection of a figure.** It makes
   the app show the dashboard section. Who sees the report is decided in Power
@@ -1087,9 +1116,12 @@ developer; the app shows its own texts and reads only the status and the
 | 404 | | No such path | FastAPI's own: `{"detail": "Not Found"}` |
 | 422 | | A parameter or the body failed validation | FastAPI's own: `{"detail": [ … ]}`, one entry per problem |
 | 422 | `draft_blocked`, `warnings_not_accepted`, `nothing_to_load` | A commit refused because the draft cannot land as it is: it has errors, its warnings were not accepted, or it has no rows. Nothing was written | Envelope |
+| 422 | `empty_question` | A question to the assistant that is blank | Envelope |
 | 500 | `commit_count_mismatch` | The rows a commit landed are not the rows staged. It is a bug, and the transaction was rolled back | Envelope |
 | 500 | | An error nobody foresaw. The log line `request failed` has the traceback and the request ID | Plain text, without the `X-Request-ID` header |
 | 501 | `not_implemented` | A placeholder endpoint, or a feature not built for this input (the validation of a draft over 5 MiB). The message names the phase or increment | Envelope |
+| 502 | `chat_model_unavailable` | The assistant's model refused, timed out or could not be reached | Envelope |
+| 503 | `chat_not_configured` | A question to the assistant, and `CHAT_API_KEY` is not set, its instructions are missing, or database mode has no reporting login | Envelope |
 | 503 | `source_unavailable` | Object storage could not be reached, or refused to store a file | Envelope |
 | 503 | `auth_not_configured` | A token arrived, and `ENTRA_TENANT_ID` or `ENTRA_CLIENT_ID` is not set | Envelope |
 | 503 | `identity_provider_unavailable` | The signing keys could not be fetched and none are held | Envelope |
@@ -1209,7 +1241,7 @@ sections 3 to 6 protect that one only. These are all of them:
 | The command line: `energy …`, the `make` targets that call it (`equs-load`, `equs-silver`, `refresh`, `resumen`, `close`, `report`, `powerbi`) and Alembic (`db-upgrade`) | An engineer with a shell on the machine that runs the stack | The same role. Each command runs in a container of the `api` image, started by `docker compose run`. It is not an HTTP request | No. Whoever may run `docker compose` on that machine may run them |
 | `reporting-bridge`, for Power BI Desktop | Whoever holds the password of the login `powerbi`, on that machine | `SELECT` on the 12 views of schema `reporting`, in read-only sessions | No |
 | The same bridge, for the Power BI Service, through the on-premises data gateway | The people added to the gateway's connection | The same login | No |
-| The chat assistant's data tools, **only with `CHAT_DATA_SOURCE=database`**; the default, `simulated`, reads synthetic rows and touches no database ([chatbot-plan.md](chatbot-plan.md), ADR 0011) | Today, an engineer running `make chat-ui` on the machine; from phase 3, the web app's users through the API | The reporting login: `SELECT` on the 12 views, in read-only transactions that are rolled back, with a time limit per query | No |
+| The chat assistant's data tools, **only with `CHAT_DATA_SOURCE=database`**; the default, `simulated`, reads synthetic rows and touches no database ([chatbot-plan.md](chatbot-plan.md), ADR 0011) | An engineer running `make chat-ui` on the machine, and the web app's users through `POST /api/chat` | The reporting login: `SELECT` on the 12 views, in read-only transactions that are rolled back, with a time limit per query | No |
 
 Of the other containers, `dash` also receives the database's address, and its
 holding page asks nothing of it. The Prefect containers do not receive it.
@@ -1347,6 +1379,10 @@ embed tokens, and a secret on the server. It is not decided.
 | `API_CORS_ORIGINS` | `http://localhost` | Other origins allowed to call the API from a browser, separated by commas |
 | `API_KEY_HEADER` | `X-API-Key` | The header devices will present their key in |
 | `APP_ENV` | `local` | `staging` and `production` make the stand-in device key mandatory |
+| `CHAT_API_KEY` | empty | The OpenAI key of the chat assistant. A secret |
+| `CHAT_MODEL`, `CHAT_CONTEXT_WINDOW_LIMIT`, `CHAT_TIMEOUT_SECONDS` | `gpt-4.1-mini`, 20, 60 | The model, how many earlier messages reach it, how long an answer may take |
+| `CHAT_DATA_SOURCE` | `simulated` | Where the assistant's queries run: synthetic rows, or `database`, the real reporting views (only once the plant agrees, ADR 0011) |
+| `CHAT_SQL_ROW_LIMIT`, `CHAT_SQL_TIMEOUT_SECONDS` | 200, 15 | The rows and seconds one of its queries may take |
 
 - With either `ENTRA_*` value empty the stack still starts. The public routes
   answer, a request with a token gets 503 `auth_not_configured`, and the app
@@ -1359,6 +1395,11 @@ embed tokens, and a secret on the server. It is not decided.
 - The `api` container needs outbound HTTPS access to
   `login.microsoftonline.com`. It needs none to Power BI: the browser does.
 - `ENTRA_CLIENT_SECRET` is read by nothing, and no container receives it.
+- With `CHAT_API_KEY` empty the stack starts, `POST /api/chat` answers 503
+  `chat_not_configured`, and the app says the assistant is not configured.
+  An empty `CHAT_*` variable keeps its default: compose passes each one
+  through. With a key, the `api` container needs outbound HTTPS access to
+  `api.openai.com`.
 
 Where the Entra identifiers come from, and every setting of the app
 registration, is in [Sign-in and roles](sign-in.md#the-app-registration). Where
@@ -1468,6 +1509,7 @@ ticket, a chat or this repository.
 | `tests/unit/test_api_security.py` | The table `GRANTS`, and the mapping from a token to a principal |
 | `tests/unit/test_api_auth.py` | 401, 403 and 503 through the routes, `/me`, `/config`, and one test that calls every published operation without a token and fails for one that answers |
 | `tests/unit/test_api_reference.py` | This guide's endpoint table against the published schema |
+| `tests/unit/test_api_chat.py` | `POST /chat` on a fake model: the conversation passed in order, the refusals (422, 403, 401), 502 and 503, and the service built once |
 | `tests/unit/test_architecture.py` | That `api/deps.py`, and no other module of `api`, imports an adapter |
 | `tests/integration/test_health_endpoint.py` | `/health` and `/ready` against a real database, and the 501 of a placeholder |
 | `frontend/src/auth/Session.test.tsx`, `msalAuthClient.test.ts` | The app's start-up, each failure page, and the calls to MSAL, with stand-ins for both |

@@ -20,8 +20,9 @@ Responsibility:
       at the application database's address or at ``CHAT_DB_HOST`` and
       ``CHAT_DB_PORT``. Only once the plant agrees.
 
-    The API wires the same pieces in its own composition root from phase 3 of
-    ``docs/chatbot-plan.md``.
+    The adapters both roots need (the model, where the queries run) are built
+    by :mod:`energy.adapters.chat_wiring`; the API joins them to the same
+    services in its own composition root, ``api/deps.py``.
 
 Depends on:
     ``energy.adapters``, ``energy.services``, ``energy.core``, ``energy.domain``.
@@ -29,61 +30,16 @@ Depends on:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-from sqlalchemy.engine import make_url
-
-from energy.adapters.duckdb_reporting_query import DuckDBReportingQuery
-from energy.adapters.langchain_chat_model import load_system_prompt, openai_chat_model
-from energy.adapters.postgres_reporting_query import PostgresReportingQuery
+from energy.adapters.chat_wiring import (
+    build_chat_model,
+    build_reporting_query,
+    reporting_login_url,
+    require_chat_key,
+)
 from energy.adapters.yaml_chat_sources import load_chat_sources
 from energy.core.settings import Settings, get_settings
-from energy.domain.exceptions import ChatNotConfiguredError
 from energy.services.chat_data_service import ChatDataService
 from energy.services.chat_service import ChatService
-
-if TYPE_CHECKING:
-    from sqlalchemy.engine import URL
-
-    from energy.ports.reporting_query import ReportingQuery
-
-
-def reporting_login_url(settings: Settings) -> URL:
-    """Return the database address with the reporting login in place of the application's.
-
-    Args:
-        settings: the process's settings.
-
-    Returns:
-        The URL the assistant's queries use in database mode.
-
-    Raises:
-        ChatNotConfiguredError: if ``REPORTING_DB_PASSWORD`` is not set.
-    """
-    password = settings.reporting.db_password
-    if password is None or not password.get_secret_value():
-        msg = "the assistant's database mode needs the reporting login (REPORTING_DB_PASSWORD)"
-        raise ChatNotConfiguredError(msg)
-    url = make_url(settings.database.url).set(
-        username=settings.reporting.db_user, password=password.get_secret_value()
-    )
-    if settings.chat.db_host is not None:
-        url = url.set(host=settings.chat.db_host)
-    if settings.chat.db_port is not None:
-        url = url.set(port=settings.chat.db_port)
-    return url
-
-
-def build_reporting_query(settings: Settings | None = None) -> ReportingQuery:
-    """Return where the assistant's queries run, as ``CHAT_DATA_SOURCE`` says.
-
-    Raises:
-        ChatNotConfiguredError: in database mode, without the reporting login.
-    """
-    resolved = settings or get_settings()
-    if resolved.chat.data_source == "database":
-        return PostgresReportingQuery(reporting_login_url(resolved))
-    return DuckDBReportingQuery()
 
 
 def build_chat_data_service(settings: Settings | None = None) -> ChatDataService:
@@ -116,19 +72,16 @@ def build_chat_service(settings: Settings | None = None) -> ChatService:
             are missing or empty, or database mode has no reporting login.
     """
     resolved = settings or get_settings()
-    chat = resolved.chat
-    if chat.api_key is None:
-        msg = "the assistant has no model key (CHAT_API_KEY)"
-        raise ChatNotConfiguredError(msg)
+    require_chat_key(resolved)
     data = build_chat_data_service(resolved)
-    model = openai_chat_model(
-        api_key=chat.api_key,
-        model=chat.model,
-        timeout_seconds=chat.timeout_seconds,
-        system_prompt=load_system_prompt(chat.system_prompt_file),
-        tools=(data.list_sources, data.describe_reporting, data.run_sql),
+    model = build_chat_model(
+        resolved, tools=(data.list_sources, data.describe_reporting, data.run_sql)
     )
-    return ChatService(model, history_limit=chat.context_window_limit, notes=(data.sources_note(),))
+    return ChatService(
+        model,
+        history_limit=resolved.chat.context_window_limit,
+        notes=(data.sources_note(),),
+    )
 
 
 __all__ = [

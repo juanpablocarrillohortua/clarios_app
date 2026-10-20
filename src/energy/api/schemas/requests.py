@@ -24,10 +24,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+
+from energy.core.constants import MAX_CHAT_HISTORY
 
 Granularity = Literal["hour", "day", "week", "month"]
 
@@ -158,6 +160,42 @@ class CommitDraftRequest(StrictModel):
     base_run_id: UUID | None = None
 
 
+#: The longest question, in characters.
+MAX_QUESTION_CHARS: Final = 4_000
+#: The longest earlier message, in characters: an answer may be longer than a question.
+MAX_TURN_CHARS: Final = 20_000
+
+
+class ChatTurn(StrictModel):
+    """One earlier message of a conversation with the assistant.
+
+    Attributes:
+        role: who wrote it: the person (``user``) or the assistant.
+        content: its text.
+    """
+
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=MAX_TURN_CHARS)
+
+
+class ChatRequest(StrictModel):
+    """A question to the assistant, with the conversation so far.
+
+    The API stores nothing: the caller keeps the conversation and sends it
+    with each question. Only the last ``CHAT_CONTEXT_WINDOW_LIMIT`` messages
+    reach the model.
+
+    Attributes:
+        history: the earlier messages, oldest first, without the question.
+        question: what the person asks now. A blank one is refused with
+            ``empty_question`` (422) by the service, not here, so the refusal
+            has the API's error envelope.
+    """
+
+    history: list[ChatTurn] = Field(default_factory=list, max_length=MAX_CHAT_HISTORY)
+    question: str = Field(max_length=MAX_QUESTION_CHARS)
+
+
 def parse_query_window(start: datetime, end: datetime) -> TimeRangeRequest:
     """Build a validated time range from two loose datetimes.
 
@@ -179,7 +217,11 @@ def parse_query_window(start: datetime, end: datetime) -> TimeRangeRequest:
 
 
 __all__ = [
+    "MAX_QUESTION_CHARS",
+    "MAX_TURN_CHARS",
     "BackfillRequest",
+    "ChatRequest",
+    "ChatTurn",
     "CommitDraftRequest",
     "Granularity",
     "KPIQueryRequest",

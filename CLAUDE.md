@@ -49,7 +49,8 @@ is the guide.
 described in [docs/chatbot-plan.md](docs/chatbot-plan.md): phase 1 (it answers
 through a Streamlit development page, `make chat-ui`) and phase 2 (read-only SQL
 over the `reporting` views, on simulated data by default, `CHAT_DATA_SOURCE`)
-are built; phase 3 (an accordion on the dashboard, `POST /api/chat`) is planned.
+are built; phase 3 (a round button on the dashboard, `POST /api/chat`) is built
+and waits for the owner's check in a signed-in browser.
 
 **Web app.** `frontend/` is a React single-page app (TypeScript, Vite) that Caddy
 serves at `/`; Dash moved to `/dash/`. It is built in the increments of
@@ -943,7 +944,7 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
   committed synthetic catalogue becomes the current `lineas_produccion` at the
   next Silver build, and nothing voids a load until increment 11.
 
-**Chat assistant** (phase 1 built 2026-10-19; [docs/chatbot-plan.md](docs/chatbot-plan.md)):
+**Chat assistant** (phases 1 to 3 built 2026-10-19; [docs/chatbot-plan.md](docs/chatbot-plan.md)):
 
 - **The imported package `src/energy/agent/` was dissolved into the layers**
   (`domain/chat.py`, `ports/chat_model.py`, `adapters/langchain_chat_model.py`,
@@ -993,6 +994,44 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
   the adapter by the composition root, which wraps them with
   `StructuredTool.from_function` (name from the method, description from its
   docstring): the adapter imports no service.
+- **Phase 3 (built 2026-10-19): `POST /api/chat`, permission `chat:use`**
+  (viewer, operator, engineer, admin), and a panel on the dashboard.
+  - **Two composition roots.** `api` may not import `pipelines`, so what both
+    need is `adapters/chat_wiring.py` (`require_chat_key`,
+    `build_reporting_query`, `build_chat_model`). `api/deps.py`
+    `get_chat_service` builds the service on the first question and keeps it
+    on `app.state`; a failure is never kept.
+  - **Statuses:** 422 `empty_question`, 502 `chat_model_unavailable`, 503
+    `chat_not_configured`, rows of `_STATUS_OF`. The question has no
+    `min_length`, so a blank one is refused by the domain, in the envelope.
+  - **History:** at most `MAX_CHAT_HISTORY` (200, `core/constants.py`)
+    messages, each at most 20,000 characters; question at most 4,000. The
+    browser keeps and sends at most 200 (`MAX_HISTORY` in
+    `frontend/src/api/chat.ts`, kept equal by hand); the service trims to
+    `CHAT_CONTEXT_WINDOW_LIMIT`.
+  - **Compose passes the `CHAT_*` variables as `${VAR:-}`;** `ChatSettings`
+    has `env_ignore_empty`, so an empty one keeps its default. Not passed:
+    `CHAT_SYSTEM_PROMPT_FILE`, `CHAT_DB_HOST`, `CHAT_DB_PORT` (host settings).
+  - **In the app:** `src/chat/` (`useChat`, `ChatLauncher`, `ChatLog`,
+    `ChatComposer`, `chat.module.css`), shown on the dashboard when `GET /me`
+    lists `chat:use`. The conversation is in `sessionStorage` under
+    `clarios.chat` with the person's `subject`; a question shows at once and
+    joins the history only with its answer; a failure puts it back in the
+    box. Answers are plain text. `useDelayed` moved to `src/hooks/`.
+  - **Mantine's growing `Textarea` reads `document.fonts`,** which jsdom
+    lacks: `src/test/setup.ts` stubs it. The test fixtures `viewer` and
+    `operator` carry `chat:use`, as the API gives it; `person()` is exported
+    for a user without it.
+  - **The launcher** (2026-10-20, replacing a full-width accordion) is a
+    fixed round button bottom right; its panel grows out of it by CSS
+    transitions on `data-open` (interruptible), and is `inert` and
+    `aria-hidden` while closed, never unmounted, so the motion can close it.
+    It is a parallel tool: no scrim, no close on a click outside. A dot on
+    the button (and a live region beside it) marks an answer that landed
+    while it was closed. Under 48 em the panel is a bottom sheet.
+  - **After "Enviar" the focus goes back to the box:** the button turns
+    disabled while the answer comes, and a disabled button drops the focus to
+    the page, where Escape no longer reaches the panel.
 
 **EQUS Bronze loader** (built 2026-10-07):
 

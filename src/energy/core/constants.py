@@ -129,6 +129,14 @@ POWERBI_API_URL: Final = "https://api.powerbi.com/v1.0/myorg"
 # The Power BI Service, where a person opens the report.
 POWERBI_SERVICE_URL: Final = "https://app.powerbi.com"
 
+# -----------------------------------------------------------------------------
+# The chat assistant
+# -----------------------------------------------------------------------------
+# The most earlier messages a question may carry: the request's cap in the API
+# and the ceiling of CHAT_CONTEXT_WINDOW_LIMIT. The web app keeps at most this
+# many (MAX_HISTORY in frontend/src/api/chat.ts).
+MAX_CHAT_HISTORY: Final = 200
+
 __all__ = [
     "ALL_SCHEMAS",
     "BRONZE_SCHEMA",
@@ -143,6 +151,7 @@ __all__ = [
     "LAYER_BRONZE",
     "LAYER_GOLD",
     "LAYER_SILVER",
+    "MAX_CHAT_HISTORY",
     "MEDALLION_SCHEMAS",
     "POWERBI_API_URL",
     "POWERBI_REPORT_SCOPE",

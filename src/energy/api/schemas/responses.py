@@ -897,8 +897,20 @@ class IngestAcceptedResponse(ResponseModel):
     watermark_utc: AwareDatetime | None = None
 
 
+class ChatAnswerResponse(ResponseModel):
+    """The assistant's answer to one question.
+
+    Attributes:
+        answer: the text of the answer, plain text: the web app never renders
+            it as HTML.
+    """
+
+    answer: str
+
+
 __all__ = [
     "AuthClientConfig",
+    "ChatAnswerResponse",
     "CheckResponse",
     "ClientConfigResponse",
     "ColumnChangeResponse",

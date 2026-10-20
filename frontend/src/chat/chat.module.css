@@ -1,0 +1,368 @@
+/*
+ * The chat assistant: the round button, the panel it opens, and inside it the
+ * log, its bubbles, the typing indicator and the box. Every value comes from
+ * tokens.css. The panel is translucent; the bubbles on it are solid, because
+ * translucent on translucent loses its text.
+ */
+
+/* The button ------------------------------------------------------------------ */
+
+.launcher {
+  --launcher-size: 3.5rem;
+
+  position: fixed;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: calc(var(--app-shell-footer-offset, 0rem) + max(1rem, env(safe-area-inset-bottom)));
+  z-index: var(--mantine-z-index-popover);
+  display: grid;
+  place-items: center;
+  width: var(--launcher-size);
+  height: var(--launcher-size);
+  padding: 0;
+  border: 0;
+  border-radius: var(--ce-radius-pill);
+  background-color: var(--ce-accent);
+  color: var(--ce-text-on-accent);
+  box-shadow: var(--ce-glow-primary);
+  cursor: pointer;
+  /* Released: back to rest on the spring. */
+  transition:
+    transform var(--ce-duration-spring) var(--ce-ease-spring),
+    background-color var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+@media (hover: hover) {
+  .launcher:hover {
+    background-color: var(--ce-accent-hover);
+  }
+}
+
+/* Pressed: feedback on pointer-down, not on release. */
+.launcher:active {
+  transform: scale(var(--ce-press-scale));
+  transition-duration: var(--ce-duration-press);
+  transition-timing-function: var(--ce-ease-out);
+}
+
+.launcher:focus-visible {
+  outline: 2px solid var(--ce-focus);
+  outline-offset: 3px;
+}
+
+/* The two glyphs share the button: the bubble turns into the cross. */
+.glyph {
+  grid-area: 1 / 1;
+  width: 1.5rem;
+  height: 1.5rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition:
+    transform var(--ce-duration-spring) var(--ce-ease-spring),
+    opacity var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+.glyph[data-glyph="close"] {
+  opacity: 0;
+  transform: rotate(-90deg) scale(0.6);
+}
+
+.launcher[data-open] .glyph[data-glyph="bubble"] {
+  opacity: 0;
+  transform: rotate(90deg) scale(0.6);
+}
+
+.launcher[data-open] .glyph[data-glyph="close"] {
+  opacity: 1;
+  transform: none;
+}
+
+/* An answer arrived while the panel was closed. */
+.unread {
+  position: absolute;
+  top: 0.125rem;
+  right: 0.125rem;
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 2px solid var(--ce-canvas-bottom);
+  border-radius: var(--ce-radius-pill);
+  background-color: var(--ce-online);
+}
+
+/* The panel ------------------------------------------------------------------- */
+
+/* A floating layer that grows out of the button and closes back into it. */
+.panel {
+  position: fixed;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: calc(
+    var(--app-shell-footer-offset, 0rem) +
+    max(1rem, env(safe-area-inset-bottom)) +
+    3.5rem +
+    0.75rem
+  );
+  z-index: var(--mantine-z-index-popover);
+  display: flex;
+  flex-direction: column;
+  width: min(24rem, 100vw - 2rem);
+  height: min(34rem, 100dvh - 9rem);
+  padding: 0.25rem 0.75rem 0.75rem;
+  overflow: hidden;
+  border: 1px solid var(--ce-border);
+  border-radius: var(--ce-radius-md);
+  background-color: var(--ce-material);
+  backdrop-filter: var(--ce-material-blur);
+  box-shadow: var(--ce-glow-panel);
+  transform-origin: bottom right;
+  /* Closed: small, clear, and hidden once the spring has brought it home. */
+  opacity: 0;
+  transform: translateY(0.5rem) scale(0.85);
+  visibility: hidden;
+  transition:
+    transform var(--ce-duration-spring) var(--ce-ease-spring),
+    opacity var(--ce-duration-fade) var(--ce-ease-out),
+    visibility 0s linear var(--ce-duration-spring);
+}
+
+.panel[data-open] {
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.panelHeader {
+  flex: none;
+  padding-block: 0.25rem;
+}
+
+.panelTitle {
+  margin: 0;
+  font-size: var(--mantine-font-size-md);
+  font-weight: var(--ce-weight-title);
+  letter-spacing: var(--ce-tracking-title);
+  line-height: var(--ce-leading-title);
+}
+
+/* On a phone the panel is a sheet across the foot of the screen, and covers
+   the button it came from; its own cross closes it. */
+@media (max-width: 48em) {
+  .panel {
+    right: 0.5rem;
+    left: 0.5rem;
+    bottom: max(0.5rem, env(safe-area-inset-bottom));
+    width: auto;
+    height: min(80dvh, 40rem);
+  }
+
+  .launcher[data-open] {
+    visibility: hidden;
+  }
+}
+
+/* The log ------------------------------------------------------------------- */
+
+.log {
+  /* The panel's room between its header and the box. */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-block: 0.75rem 0.25rem;
+  /* The top edge fades instead of ending on a line. */
+  mask-image: linear-gradient(to bottom, transparent, black 0.75rem);
+}
+
+.turns {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Each turn rises into place on the spring, from where the box is. */
+.turn {
+  display: flex;
+  animation: rise var(--ce-duration-spring) var(--ce-ease-spring) both;
+}
+
+.turn[data-role="user"] {
+  justify-content: flex-end;
+}
+
+.bubble {
+  max-width: min(36rem, 85%);
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--ce-border);
+  border-radius: var(--ce-radius-md);
+  color: var(--ce-text);
+  font-size: var(--mantine-font-size-sm);
+  line-height: var(--ce-leading-body);
+  /* Plain text, as written: its line breaks kept, long words wrapped. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.turn[data-role="user"] .bubble {
+  border-end-end-radius: var(--ce-radius-xs);
+  background-color: var(--ce-surface-raised);
+}
+
+.turn[data-role="assistant"] .bubble {
+  border-end-start-radius: var(--ce-radius-xs);
+  background-color: var(--ce-surface-sunken);
+}
+
+/* A question on its way: shown at once, a little quieter until answered. */
+.turn[data-pending] .bubble {
+  opacity: 0.72;
+  transition: opacity var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(calc(2 * var(--ce-enter-offset)));
+  }
+}
+
+/* The assistant at work --------------------------------------------------- */
+
+.dots {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding-block: 0.4rem;
+}
+
+.dots > span {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: var(--ce-radius-pill);
+  background-color: var(--ce-text-muted);
+  animation: breathe var(--ce-duration-sweep) var(--ce-ease-out) infinite;
+}
+
+.dots > span:nth-child(2) {
+  animation-delay: calc(var(--ce-duration-sweep) / 6);
+}
+
+.dots > span:nth-child(3) {
+  animation-delay: calc(var(--ce-duration-sweep) / 3);
+}
+
+@keyframes breathe {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+/* Said in words for screen readers, and on screen when motion is reduced. */
+.thinkingText {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Before the first question ------------------------------------------------- */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.example {
+  height: auto;
+  min-height: var(--button-height);
+  white-space: normal;
+  text-align: start;
+}
+
+/* The box ------------------------------------------------------------------- */
+
+.composer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 0.5rem;
+}
+
+.form {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.box {
+  flex: 1;
+  min-width: 0;
+}
+
+.disclaimer {
+  line-height: var(--ce-leading-title);
+  letter-spacing: var(--ce-tracking-small);
+}
+
+/* A finger needs a larger target than a pointer. */
+@media (pointer: coarse) {
+  .send,
+  .example {
+    --button-height: 2.75rem;
+  }
+}
+
+/* Reduced motion: the panel and turns fade in place, the glyphs swap without
+   turning, and the dots give way to the words. */
+@media (prefers-reduced-motion: reduce) {
+  .panel,
+  .glyph,
+  .launcher[data-open] .glyph[data-glyph="bubble"],
+  .glyph[data-glyph="close"] {
+    transform: none;
+  }
+
+  /* The spring takes no time here: the fade sets when the panel is gone. */
+  .panel {
+    transition:
+      opacity var(--ce-duration-fade) var(--ce-ease-out),
+      visibility 0s linear var(--ce-duration-fade);
+  }
+
+  .turn {
+    animation: appear var(--ce-duration-fade) var(--ce-ease-out) both;
+  }
+
+  .dots {
+    display: none;
+  }
+
+  .thinkingText {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    color: var(--ce-text-secondary);
+  }
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+  }
+}
