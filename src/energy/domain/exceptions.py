@@ -167,6 +167,16 @@ class EmptyQuestionError(DomainRuleError):
     code = "empty_question"
 
 
+class QueryRefusedError(DomainRuleError):
+    """Raised when a query of the chat assistant is not one read-only statement.
+
+    ``details["reason"]`` says why: empty, too long, more than one statement, or
+    not a ``SELECT``. The reason goes back to the model, never to the person.
+    """
+
+    code = "query_refused"
+
+
 # -----------------------------------------------------------------------------
 # Chat assistant
 # -----------------------------------------------------------------------------
@@ -349,6 +359,32 @@ class DatabaseUnavailableError(RepositoryError):
     code = "database_unavailable"
 
 
+class MissingRelationError(RepositoryError):
+    """Raised when a query of the chat assistant names a table or view that does not exist.
+
+    The data the question needs has no table yet: the assistant answers that it
+    is pending implementation.
+    """
+
+    code = "relation_missing"
+
+
+class QueryTimeoutError(RepositoryError):
+    """Raised when a query of the chat assistant runs longer than it may."""
+
+    code = "query_timeout"
+
+
+class QueryFailedError(RepositoryError):
+    """Raised when the database refuses or cannot run a query of the chat assistant.
+
+    ``details["reason"]`` holds the database's first line, such as an unknown
+    column, so the model can correct its query.
+    """
+
+    code = "query_failed"
+
+
 # -----------------------------------------------------------------------------
 # Committing a draft (increment 7)
 # -----------------------------------------------------------------------------
@@ -527,6 +563,7 @@ __all__ = [
     "InvalidTimeWindowError",
     "LengthRequiredError",
     "LockTimeoutError",
+    "MissingRelationError",
     "NaiveDatetimeError",
     "NegativeEnergyError",
     "NotValidatedError",
@@ -535,6 +572,9 @@ __all__ = [
     "PermissionDeniedError",
     "PipelineError",
     "QuarantinedRowsError",
+    "QueryFailedError",
+    "QueryRefusedError",
+    "QueryTimeoutError",
     "RepositoryError",
     "SchemaValidationError",
     "SignInNotConfiguredError",

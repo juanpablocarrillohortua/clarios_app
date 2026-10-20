@@ -1209,6 +1209,7 @@ sections 3 to 6 protect that one only. These are all of them:
 | The command line: `energy …`, the `make` targets that call it (`equs-load`, `equs-silver`, `refresh`, `resumen`, `close`, `report`, `powerbi`) and Alembic (`db-upgrade`) | An engineer with a shell on the machine that runs the stack | The same role. Each command runs in a container of the `api` image, started by `docker compose run`. It is not an HTTP request | No. Whoever may run `docker compose` on that machine may run them |
 | `reporting-bridge`, for Power BI Desktop | Whoever holds the password of the login `powerbi`, on that machine | `SELECT` on the 12 views of schema `reporting`, in read-only sessions | No |
 | The same bridge, for the Power BI Service, through the on-premises data gateway | The people added to the gateway's connection | The same login | No |
+| The chat assistant's data tools, **only with `CHAT_DATA_SOURCE=database`**; the default, `simulated`, reads synthetic rows and touches no database ([chatbot-plan.md](chatbot-plan.md), ADR 0011) | Today, an engineer running `make chat-ui` on the machine; from phase 3, the web app's users through the API | The reporting login: `SELECT` on the 12 views, in read-only transactions that are rolled back, with a time limit per query | No |
 
 Of the other containers, `dash` also receives the database's address, and its
 holding page asks nothing of it. The Prefect containers do not receive it.

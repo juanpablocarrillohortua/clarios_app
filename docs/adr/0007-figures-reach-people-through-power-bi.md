@@ -5,7 +5,9 @@
   increment 7 of the web app (2026-10-18): the `uploads` and `runs`
   placeholders were removed, and what a load did is read at
   `/api/loads/{run_id}`, with the rows of each sheet and the period it
-  covered ([ADR 0010](0010-a-draft-is-committed-once-in-one-transaction.md))
+  covered ([ADR 0010](0010-a-draft-is-committed-once-in-one-transaction.md)).
+  Proposed amendment: [ADR 0011](0011-the-assistant-reads-the-reporting-views.md)
+  lets the chat assistant read the same `reporting` views (2026-10-19)
 - **Date:** 2026-10-13
 - **Deciders:** Platform team
 

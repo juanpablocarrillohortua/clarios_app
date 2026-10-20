@@ -34,6 +34,7 @@ Environment = Literal["local", "ci", "staging", "production"]
 LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
 LogFormat = Literal["console", "json"]
 ArchiveBackend = Literal["minio", "local"]
+ChatDataSource = Literal["simulated", "database"]
 
 _ENV_FILE = ".env"
 
@@ -487,8 +488,26 @@ class ChatSettings(BaseSettings):
     system_prompt_file: Path | None = Field(
         default=None, validation_alias="CHAT_SYSTEM_PROMPT_FILE"
     )
+    # Where the assistant's queries run: synthetic rows in memory, or the real
+    # `reporting` views through the read-only reporting login. The plant must
+    # agree before `database` is used: its rows would reach the model's vendor.
+    data_source: ChatDataSource = Field(default="simulated", validation_alias="CHAT_DATA_SOURCE")
+    sql_row_limit: int = Field(default=200, ge=1, le=5000, validation_alias="CHAT_SQL_ROW_LIMIT")
+    sql_timeout_seconds: float = Field(
+        default=15, gt=0, le=300, validation_alias="CHAT_SQL_TIMEOUT_SECONDS"
+    )
+    # Where the reporting login reaches the database; the application's own host
+    # and port when unset. From the host: 127.0.0.1 and 5433, through `make powerbi`.
+    db_host: str | None = Field(default=None, validation_alias="CHAT_DB_HOST")
+    db_port: int | None = Field(default=None, ge=1, le=65535, validation_alias="CHAT_DB_PORT")
 
-    @field_validator("api_key", "system_prompt_file", mode="before")
+    @field_validator("data_source", mode="before")
+    @classmethod
+    def _source_in_lower_case(cls, value: object) -> object:
+        """Read the data source without regard to case or surrounding spaces."""
+        return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator("api_key", "system_prompt_file", "db_host", "db_port", mode="before")
     @classmethod
     def _empty_is_unset(cls, value: object) -> object:
         """Treat an empty value as no value."""
@@ -552,6 +571,7 @@ __all__ = [
     "APISettings",
     "ArchiveBackend",
     "ArchiveSettings",
+    "ChatDataSource",
     "ChatSettings",
     "DashSettings",
     "DataSettings",

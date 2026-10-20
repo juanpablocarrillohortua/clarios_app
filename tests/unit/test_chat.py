@@ -16,7 +16,7 @@ from energy.adapters.langchain_chat_model import (
     LangChainChatModel,
     load_system_prompt,
 )
-from energy.core.settings import ChatSettings
+from energy.core.settings import ChatSettings, Settings
 from energy.domain.chat import (
     ChatContext,
     ChatMessage,
@@ -140,6 +140,11 @@ class TestTimeNote:
 
 
 class TestBuildContext:
+    def test_puts_other_notes_after_the_time(self) -> None:
+        context = build_context([], "hola", now=NOW, limit=20, notes=("Sources: none.",))
+
+        assert context.notes == (time_note(NOW), "Sources: none.")
+
     def test_puts_the_note_the_history_and_the_question_in_order(self) -> None:
         history = _conversation(2)
 
@@ -180,6 +185,15 @@ class TestChatService:
         assert context.notes == (time_note(NOW),)
         assert context.messages[:-1] == tuple(_conversation(3)[-2:])
         assert context.question.content == "¿qué es una EQ?"
+
+    def test_sends_its_notes_with_every_question(self) -> None:
+        model = FakeModel()
+        service = ChatService(model, clock=lambda: NOW, notes=("Sources: none.",))
+
+        service.answer([], "uno")
+        service.answer([], "dos")
+
+        assert [context.notes[1:] for context in model.contexts] == [("Sources: none.",)] * 2
 
     def test_the_fake_is_a_chat_model(self) -> None:
         assert isinstance(FakeModel(), ChatModel)
@@ -298,7 +312,7 @@ class TestChatSettings:
 class TestBuildChatService:
     def test_refuses_without_a_key(self) -> None:
         with pytest.raises(ChatNotConfiguredError, match="CHAT_API_KEY"):
-            build_chat_service(ChatSettings(_env_file=None))
+            build_chat_service(Settings(chat=ChatSettings(_env_file=None)))
 
     def test_refuses_an_empty_prompt(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         prompt = tmp_path / "prompt.txt"
@@ -307,11 +321,13 @@ class TestBuildChatService:
         monkeypatch.setenv("CHAT_SYSTEM_PROMPT_FILE", str(prompt))
 
         with pytest.raises(ChatNotConfiguredError, match="empty"):
-            build_chat_service(ChatSettings(_env_file=None))
+            build_chat_service(Settings(chat=ChatSettings(_env_file=None)))
 
     def test_wires_the_service_without_calling_the_vendor(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("CHAT_API_KEY", "sk-made-up")
 
-        assert isinstance(build_chat_service(ChatSettings(_env_file=None)), ChatService)
+        assert isinstance(
+            build_chat_service(Settings(chat=ChatSettings(_env_file=None))), ChatService
+        )

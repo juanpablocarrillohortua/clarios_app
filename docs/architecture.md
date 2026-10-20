@@ -518,6 +518,7 @@ internal.
 - [ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md) — how the dashboard embeds the report with the user's own Power BI token
 - [ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md) — why data is entered and corrected in Excel: no grid and no form in the app
 - [ADR 0010](adr/0010-a-draft-is-committed-once-in-one-transaction.md) — why a draft is committed once, in one transaction, with the loader's own SQL
+- [ADR 0011](adr/0011-the-assistant-reads-the-reporting-views.md) — why the chat assistant reads the `reporting` views with read-only SQL, on simulated data until the plant agrees (proposed)
 - [The API](api.md) — what it is in plain words, every endpoint, the token check, the errors, how the web app calls it
 - [Sign-in and roles](sign-in.md) — the app registration, giving someone access, troubleshooting
 - [Frontend plan](frontend-plan.md) — the web app's design and its increments

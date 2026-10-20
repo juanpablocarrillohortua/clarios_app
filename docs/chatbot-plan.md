@@ -7,8 +7,9 @@ is adapted here in three phases:
 
 1. **The assistant works**, through a development page in Streamlit, with no
    tools. *Built on 2026-10-19.*
-2. **It answers from the database**, with read-only SQL over the `reporting`
-   views. When the data a question needs has no table yet, it says so.
+2. **It answers from data**, with read-only SQL over the `reporting` views.
+   When the data a question needs has no table yet, it says so. *Built on
+   2026-10-19, on simulated data: the real database is one setting away.*
 3. **People use it from the web app**, in an accordion on the dashboard.
 
 Decisions taken with the owner on 2026-10-19:
@@ -18,6 +19,7 @@ Decisions taken with the owner on 2026-10-19:
 | The library | **LangChain + OpenAI**, as in the imported code (`create_agent`, `ChatOpenAI`) |
 | How phase 2 reads data | **Free read-only SQL** written by the model, run with the read-only `reporting_reader` login |
 | Where a conversation lives in the web app | **In the browser.** The API stores nothing |
+| What phase 2 reads while the plant has not agreed to send data to OpenAI | **Simulated data** in DuckDB by default; the PostgreSQL adapter is built and off (`CHAT_DATA_SOURCE`) |
 
 ## 0. Starting point and rules for every phase
 
@@ -87,10 +89,12 @@ messages, then the conversation.
 The imported variable was the generic `API_KEY`. It is now `CHAT_API_KEY`: rename
 it in your `.env`.
 
-Phase 2 adds `CHAT_SQL_ROW_LIMIT` and `CHAT_SQL_TIMEOUT_SECONDS`.
+Phase 2 adds `CHAT_DATA_SOURCE`, `CHAT_SQL_ROW_LIMIT`, `CHAT_SQL_TIMEOUT_SECONDS`,
+`CHAT_DB_HOST` and `CHAT_DB_PORT` (section "Phase 2").
 
 ### Dependencies
 
+- **`duckdb` is a main dependency** since phase 2, for the simulation.
 - **`langchain` and `langchain-openai` are main dependencies.** The adapter
   lives in `src/`, so it must import and type-check in CI, and the API image
   needs them in phase 3.
@@ -145,7 +149,7 @@ Phase 2 adds `CHAT_SQL_ROW_LIMIT` and `CHAT_SQL_TIMEOUT_SECONDS`.
 - A refusal is shown as a message, not a stack trace: not configured, an empty
   question, or the model not answering.
 
-**Tests:** `tests/unit/test_chat.py` (29 tests) covers:
+**Tests:** `tests/unit/test_chat.py` (31 tests, two of them added in phase 2) covers:
 - the cutoff;
 - the time note at the plant (any time zone, a naive time refused);
 - the order of the context;
@@ -169,122 +173,136 @@ Phase 2 adds `CHAT_SQL_ROW_LIMIT` and `CHAT_SQL_TIMEOUT_SECONDS`.
 **To try it:** put `CHAT_API_KEY` in `.env`, run `make chat-ui`, and open
 http://localhost:8501.
 
-## Phase 2: the assistant answers from the database
+## Phase 2: the assistant answers from data (built 2026-10-19, on simulated data)
 
-### The rule it changes
+The plant has not agreed to send its data to OpenAI. So the assistant's tools
+read **simulated data** by default, and the real database is one setting away.
 
-[ADR 0007](adr/0007-figures-reach-people-through-power-bi.md) says figures
-reach people through Power BI only. **ADR 0011, "The assistant reads the
-reporting views with read-only SQL"**, amends it:
+### The switch
 
-- the assistant reads the same `reporting` views as Power BI, so the two cannot
-  disagree;
-- section 9 of `docs/api.md` (every way into the database) gains the
-  assistant.
-
-### Guards, the database first
-
-- **The login.** The model's SQL runs as `reporting_reader`. That login:
-  - is read-only (`default_transaction_read_only`);
-  - has `search_path = reporting`;
-  - is refused on `bronze`, `silver` and `gold`.
-
-  It already exists (`energy reporting create-reader`, `REPORTING_DB_USER` and
-  `REPORTING_DB_PASSWORD`).
-- **Each query** runs in a read-only transaction under `SET LOCAL
-  statement_timeout` (`CHAT_SQL_TIMEOUT_SECONDS`, default 15). It fetches at
-  most `CHAT_SQL_ROW_LIMIT` + 1 rows (default 200), so the tool can say the
-  result was cut.
-- **Before a query runs,** `domain/chat_sql.py` (pure) refuses:
-  - more than one statement;
-  - a statement that does not start with `SELECT` or `WITH`;
-  - a query over a size cap.
-
-  A refusal goes back to the model as the tool's result, never to the person
-  as an error.
-
-### Port and adapter
-
-- **`ports/reporting_query.py`:**
-  - `describe()`: the views of `reporting` and their columns, from
-    `information_schema`;
-  - `run(sql)`: the rows.
-- **`adapters/postgres_reporting_query.py`:**
-  - its own engine for the reporting login;
-  - its host and port are settings: `db:5432` inside compose, and
-    `127.0.0.1:5433` through `make powerbi`'s bridge for the development page on
-    the host.
-
-### Sources that have a table, and sources that do not
-
-`config/chat/sources.yaml` lists every Excel the plant keeps, with its state and,
-when it has a table, the views that hold it:
-
-| Source | State | Where |
+| `CHAT_DATA_SOURCE` | Where the tools read | What reaches OpenAI |
 |---|---|---|
-| The five EQUS exports: transactions, invoices, structures, catalogues, production lines | implemented | the twelve `reporting` views: `equs_mensual`, `equs_batt_mensual`, `aporte_cuenta`, `recibos_produccion`, `articulos`, `cuentas`, `equs_poly_mensual`, `calidad_datos_mensual`, `cierres`, `cierres_calidad`, `equs_cerrado`, `equs_cerrado_historial` |
-| `Base_de_datos.xlsx` (monthly energy by area) | pending | no table yet |
-| `SCADA-Base de datos F&A.xlsx` (formation rectifiers) | pending | no table yet |
-| `SCADA-Base de datos Energia RC.xlsx` (RC's meters) | pending | no table yet |
-| `SCADA-Base de datos GAS RC.xlsx` (RC's gas) | pending | no table yet |
+| `simulated` (default) | Synthetic rows with the names, columns and column order of the 12 `reporting` views, in an in-memory DuckDB (`adapters/simulated_reporting.py`, `adapters/duckdb_reporting_query.py`) | Invented figures only |
+| `database` | The real `reporting` views, with the read-only reporting login (`adapters/postgres_reporting_query.py`) | Rows of those views. **Only once the plant agrees** |
 
-### Tools
+**To turn the database on:**
+1. Make sure the reporting login exists: `make powerbi` creates or renews it.
+2. Set `CHAT_DATA_SOURCE=database` in `.env`.
+3. For `make chat-ui` on the host, also set `CHAT_DB_HOST=127.0.0.1` and
+   `CHAT_DB_PORT=5433`. That port is the bridge `make powerbi` opens.
 
-Three LangChain tools, built over the ports:
+**Where the database settings come from:**
+- the address is the application's (`DATABASE_URL` or `POSTGRES_*`);
+- the login is `REPORTING_DB_USER` and `REPORTING_DB_PASSWORD`;
+- without the password, the assistant says it is not configured;
+- the application's own login is never used.
 
-- `list_sources()`;
-- `describe_reporting()`;
-- `run_sql(query)`.
+[ADR 0011](adr/0011-the-assistant-reads-the-reporting-views.md) records the
+decision. It is **Proposed** until the plant agrees, and it amends ADR 0007:
+the assistant reads the same views as Power BI, so the two cannot disagree.
 
-### When there is no table
+### The simulation
 
-Where it can be, this is decided by code, not by the model:
+The simulation is fiscal year 2026, built the same way every time:
 
-- **A pending source:** `list_sources` marks it pending.
-- **A missing table:** a query fails because a table or column does not exist.
+| What | Whose |
+|---|---|
+| Drivers, standards, multipliers, weights, the report's sections and rows, the data-quality checks | The repository's configuration (revisions `0003` and `0004`), restated |
+| Items (`SIM-...`), production lines, receipts, invoices, quantities, closes, the one reclose | Invented |
 
-In both cases the tool answers `pending_implementation`. The prompt's new "Data"
-section then makes the model answer exactly:
+It holds together as the real views do:
+- `equs = cantidad × factor`;
+- `equs_mensual` is `aporte_cuenta` summed by month and driver;
+- `equs_batt_mensual` is `equs_mensual` summed by process;
+- the plastics of `equs_poly_mensual` sum their receipts;
+- October to August are closed and September is open;
+- January was reclosed once.
 
-> **No encontrado: la tabla está pendiente de implementación.**
+Monthly EQUS BATT runs from about 116,000 to 238,000.
 
-That Spanish sentence, quoted in the English prompt, becomes a deliberate
-exception to the repository's language rule, recorded in CLAUDE.md.
+### Guards
 
-The "Data" section also says:
-- ask `list_sources`, then `describe_reporting`, then `run_sql`;
-- never give a figure the tools did not return.
+| Guard | Where |
+|---|---|
+| One statement, starting with `SELECT` or `WITH`, at most 10,000 characters. Literals, quoted names and comments are masked first, so a `;` inside them counts for nothing and a statement hidden after a comment is still seen | `domain/chat_sql.py`, before any engine |
+| Read-only: the login's rights (database), a transaction that is always rolled back (both engines) | the adapters |
+| No files, no network, no extensions, settings locked | DuckDB |
+| `statement_timeout` (PostgreSQL), an interrupt (DuckDB): `CHAT_SQL_TIMEOUT_SECONDS`, default 15 | the adapters |
+| At most `CHAT_SQL_ROW_LIMIT` rows (default 200), and `truncated` when there were more | the adapters |
+| The model's SQL is sent as written: no `%` is taken for a parameter | PostgreSQL adapter |
 
-### Logs
+### Tools and the sources catalogue
 
-- Each SQL that runs is logged with its row count; in phase 3, also with the
-  caller's `subject`.
-- The question is never logged.
+`services/chat_data_service.py` gives the model three tools. Each answers JSON
+text, and each answer says `data_source`:
+
+- **`list_sources`:** `config/chat/sources.yaml`, which lists each file as
+  implemented (with its views) or pending:
+  - **implemented:** the seven EQUS exports, with the 12 views;
+  - **pending:** `Base_de_datos.xlsx`, `SCADA-Base de datos F&A.xlsx`,
+    `SCADA-Base de datos Energia RC.xlsx` and
+    `SCADA-Base de datos GAS RC.xlsx`;
+- **`describe_reporting`:** the views and their columns;
+- **`run_sql`:** one query. It answers in one of three ways:
+  - `ok` with the rows;
+  - `pending_implementation` when a table does not exist;
+  - `error` with a reason the model can act on, such as a wrong column, a
+    refusal or a timeout.
+
+The catalogue also goes with **every question** as a note, so a question about
+a pending source is answered without a query. In the first smoke test, without
+that note, the model searched the EQ views for energy and did not give the
+pending sentence.
+
+Each query is logged with its SQL, its rows and its time, never the question.
+
+### The prompt
+
+`system_prompt.txt` gained a "Data" section:
+- use the tools in order;
+- write PostgreSQL;
+- aggregate in SQL;
+- where the EQ of a month is;
+- retry a failed query at most twice.
+
+It also quotes two Spanish sentences word for word, a deliberate exception to
+the repository's language rule:
+- **"No encontrado: la tabla está pendiente de implementación."** for data that
+  has no table yet;
+- **"(Datos simulados: no son cifras reales de la planta.)"** at the end of
+  every answer with a figure when `data_source` is `simulated`.
 
 ### Tests
 
-- **Unit:**
-  - the SQL checks: several statements, `UPDATE`, `COPY`, a second statement
-    hidden behind a comment;
-  - the catalogue;
-  - the tools' results;
-  - the pending path, with a fake port.
-- **Integration** (TimescaleDB container, reusing the `reporting_reader` setup
-  of `TestReportingSchema`):
-  - a `SELECT` on a view;
-  - a write refused by the database;
+- **`tests/unit/test_chat_sql.py`** (32): what the check accepts and refuses.
+- **`tests/unit/test_chat_data.py`** (51):
+  - the simulation: deterministic, consistent, invented items;
+  - the DuckDB guards: PostgreSQL-style SQL, truncation, missing table, wrong
+    column, no file, time limit, nothing kept, settings locked;
+  - the catalogue and its file;
+  - the three tools' answers and the sources note;
+  - a fake model that calls `run_sql` and reads the rows;
+  - the switch: the login and the bridge, refused without the password.
+- **`tests/integration/test_chat_reporting_query.py`** (13), against
+  TimescaleDB with the login `create-reader` makes:
+  - **the simulated views have exactly the real views' columns, in order;**
+  - a `SELECT` works, and a `%` passes through;
+  - truncation, a missing table;
   - `bronze`, `silver` and `gold` denied;
-  - the timeout;
-  - the row cap;
-  - a missing table answered as pending.
+  - a write refused;
+  - the time limit, and a usable connection after a failure;
+  - an unreachable database.
 
-### Done when
+### Checked on 2026-10-19
 
-- `make check` passes.
-- In the development page, with `make powerbi` up:
-  - "¿Cuántas EQ hubo en septiembre de 2026?" gives the figure of
-    `make resumen MONTH=2026-09`;
-  - "¿Cuánta energía consumió OREC?" gives the pending sentence.
+With the real model and simulated data:
+
+| Question | Answer |
+|---|---|
+| "¿Cuántas EQ hubo en septiembre de 2026?" | 196,712.47, the simulation's figure, with the simulated notice |
+| "¿Cuánta energía consumió OREC en agosto de 2026?" | The pending sentence, with no query |
+| "¿Cuánto gas usó RC el año pasado?" | The pending sentence, with no query |
+| "¿Y qué proceso aportó más EQ en ese mes de septiembre?" | OREC, 73,502.30, with the notice. Its first query named a column that does not exist; it corrected it from the error |
 
 ## Phase 3: an accordion on the dashboard
 
@@ -355,9 +373,10 @@ The "Data" section also says:
   not correct. Showing the query behind an answer is an option for later.
 - **Prompt injection through data.** The text columns of the views reach the
   model. It can only read, and its answer is rendered as plain text.
-- **Data leaves the premises.** From phase 2, rows of the reporting views (EQ
-  figures, item codes) are sent to OpenAI. **The plant must agree before phase 2
-  runs on real data.**
+- **Data leaves the premises in database mode.** Rows of the reporting views
+  (EQ figures, item codes) would be sent to OpenAI. That is why
+  `CHAT_DATA_SOURCE` defaults to `simulated`; **the plant must agree before it
+  is set to `database`.**
 - **Cost and latency.** Each question is a paid call of one to a few seconds.
   There is no limit per person; one can be added if needed.
 - **The model's name** (`CHAT_MODEL`) is a setting. A name OpenAI does not know

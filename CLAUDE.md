@@ -47,9 +47,9 @@ is the guide.
 
 **Chat assistant.** A chatbot adapted from another project, in three phases
 described in [docs/chatbot-plan.md](docs/chatbot-plan.md): phase 1 (it answers
-through a Streamlit development page, `make chat-ui`, with no tools) is built;
-phase 2 (read-only SQL over the `reporting` views) and phase 3 (an accordion on
-the dashboard, `POST /api/chat`) are planned.
+through a Streamlit development page, `make chat-ui`) and phase 2 (read-only SQL
+over the `reporting` views, on simulated data by default, `CHAT_DATA_SOURCE`)
+are built; phase 3 (an accordion on the dashboard, `POST /api/chat`) is planned.
 
 **Web app.** `frontend/` is a React single-page app (TypeScript, Vite) that Caddy
 serves at `/`; Dash moved to `/dash/`. It is built in the increments of
@@ -966,8 +966,33 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
   `request_timeout`) under mypy's pydantic plugin, not the aliases.
 - **Tests never call OpenAI:** a fake `ChatModel` and LangChain's
   `GenericFakeChatModel` (`tests/unit/test_chat.py`).
-- **Phase 2 amends ADR 0007** (figures through Power BI only) with ADR 0011
-  before any figure is answered, and the plant must agree to send rows to OpenAI.
+- **Phase 2 (built 2026-10-19): `CHAT_DATA_SOURCE=simulated` is the default
+  and must stay so until the plant agrees to send rows to OpenAI** ([ADR
+  0011](docs/adr/0011-the-assistant-reads-the-reporting-views.md), Proposed,
+  amends ADR 0007). `simulated` is an in-memory DuckDB holding
+  `adapters/simulated_reporting.py`: the 12 `reporting` views with the same
+  names and column order (the integration test compares them with the real
+  views; change both together), the equation's configuration restated, every
+  row invented (`SIM-...`). `database` uses `PostgresReportingQuery` with the
+  reporting login, never the application's.
+- **The guards:** `domain/chat_sql.py` (one `SELECT`/`WITH`, literals and
+  comments masked first), then the login's rights or DuckDB's locked
+  configuration (no files, no extensions), a transaction always rolled back,
+  a time limit (`CHAT_SQL_TIMEOUT_SECONDS`) and a row cap
+  (`CHAT_SQL_ROW_LIMIT`). The PostgreSQL adapter sends the model's SQL on the
+  raw psycopg cursor, so a `%` is never a parameter.
+- **`config/chat/sources.yaml`** lists the plant's files as implemented (with
+  views) or pending. Its note goes with every question
+  (`ChatDataService.sources_note`): without it the model searched the EQ views
+  for energy instead of saying the data is pending.
+- **Two Spanish sentences in the English prompt are a deliberate exception** to
+  the language rule: "No encontrado: la tabla está pendiente de
+  implementación." and "(Datos simulados: no son cifras reales de la
+  planta.)". A test keeps both word for word.
+- **The tools are plain methods** of `services/chat_data_service.py` handed to
+  the adapter by the composition root, which wraps them with
+  `StructuredTool.from_function` (name from the method, description from its
+  docstring): the adapter imports no service.
 
 **EQUS Bronze loader** (built 2026-10-07):
 

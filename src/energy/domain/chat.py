@@ -135,7 +135,12 @@ def time_note(now: datetime) -> str:
 
 
 def build_context(
-    history: Sequence[ChatMessage], question: str, *, now: datetime, limit: int
+    history: Sequence[ChatMessage],
+    question: str,
+    *,
+    now: datetime,
+    limit: int,
+    notes: Sequence[str] = (),
 ) -> ChatContext:
     """Put together what a model receives for one question.
 
@@ -144,9 +149,11 @@ def build_context(
         question: what the user asks now.
         now: the current instant, with its time zone.
         limit: how many earlier messages go with the question.
+        notes: other facts the model needs with every question, such as which
+            data sources have tables; after the time note.
 
     Returns:
-        The context: the time note, the history after the cutoff, then the
+        The context: the notes, the history after the cutoff, then the
         question.
 
     Raises:
@@ -157,7 +164,7 @@ def build_context(
         msg = "the question is empty"
         raise EmptyQuestionError(msg)
     return ChatContext(
-        notes=(time_note(now),),
+        notes=(time_note(now), *notes),
         messages=(*apply_cutoff(history, limit), ChatMessage(ChatRole.USER, question)),
     )
 

@@ -5,6 +5,9 @@ needs ``CHAT_API_KEY`` in ``.env``. The conversation lives in this browser tab
 only (Streamlit's session state): nothing is stored, and each question carries
 the conversation so far, as the web app will in phase 3.
 
+The assistant's data tools read simulated rows unless ``CHAT_DATA_SOURCE`` is
+``database`` (docs/chatbot-plan.md, phase 2); the caption says which.
+
 This page is for developers trying the assistant; people of the plant will use
 it from the web app.
 """
@@ -15,6 +18,7 @@ from typing import TYPE_CHECKING
 
 import streamlit as st
 
+from energy.core.settings import get_settings
 from energy.domain.chat import ChatMessage, ChatRole
 from energy.domain.exceptions import (
     ChatModelUnavailableError,
@@ -34,7 +38,11 @@ def _service() -> ChatService:
 
 
 st.title("Clarios Energy assistant")
-st.caption("Development page. The conversation lives in this browser tab only.")
+data_source = get_settings().chat.data_source
+st.caption(
+    "Development page. The conversation lives in this browser tab only. "
+    f"Data: {'simulated' if data_source == 'simulated' else 'database (real reporting views)'}."
+)
 
 try:
     service = _service()

@@ -53,6 +53,8 @@ dependencies = [
     # The assistant's agent loop and its OpenAI model (docs/chatbot-plan.md).
     "langchain>=1.0",
     "langchain-openai>=1.0",
+    # The simulated data the assistant reads until the plant agrees to send it real rows.
+    "duckdb>=1.1",
     # ---- Cross-cutting ---------------------------------------------------
     "structlog>=24.4",
     "pyyaml>=6.0",

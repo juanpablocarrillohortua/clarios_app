@@ -48,6 +48,7 @@ class ChatService:
         *,
         history_limit: int = DEFAULT_HISTORY_LIMIT,
         clock: Callable[[], datetime] = _utc_now,
+        notes: Sequence[str] = (),
     ) -> None:
         """Wire the service.
 
@@ -55,10 +56,12 @@ class ChatService:
             model: the language model.
             history_limit: how many earlier messages go with each question.
             clock: the current instant, with its time zone.
+            notes: facts that go with every question, after the time note.
         """
         self._model = model
         self._history_limit = history_limit
         self._clock = clock
+        self._notes = tuple(notes)
 
     def answer(self, history: Sequence[ChatMessage], question: str) -> str:
         """Answer a question, given the conversation so far.
@@ -74,7 +77,9 @@ class ChatService:
             EmptyQuestionError: if the question is empty or blank.
             ChatModelUnavailableError: if the model could not answer.
         """
-        context = build_context(history, question, now=self._clock(), limit=self._history_limit)
+        context = build_context(
+            history, question, now=self._clock(), limit=self._history_limit, notes=self._notes
+        )
         started = time.perf_counter()
         answer = self._model.reply(context)
         logger.info(

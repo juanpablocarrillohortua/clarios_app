@@ -5,8 +5,11 @@ Layer: adapters
 Responsibility:
     Implements :class:`~energy.ports.chat_model.ChatModel` with LangChain's
     ``create_agent``. The agent holds the assistant's instructions (the system
-    prompt) and, from phase 2 of ``docs/chatbot-plan.md``, its tools; phase 1
-    gives it none. This module turns a domain
+    prompt) and its tools: plain functions that take text and return text,
+    each turned into a LangChain tool named after the function and described
+    by its docstring (phase 2 of ``docs/chatbot-plan.md`` gives it the data
+    tools of :class:`~energy.services.chat_data_service.ChatDataService`,
+    passed in by the composition root). This module turns a domain
     :class:`~energy.domain.chat.ChatContext` into LangChain messages (each note
     a system message, the history and the question as user and assistant
     messages) and returns the text of the agent's last message.
@@ -31,6 +34,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from openai import OpenAIError
 
@@ -38,10 +42,9 @@ from energy.domain.chat import ChatRole
 from energy.domain.exceptions import ChatModelUnavailableError, ChatNotConfiguredError
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from langchain_core.language_models import BaseChatModel
-    from langchain_core.tools import BaseTool
     from pydantic import SecretStr
 
     from energy.domain.chat import ChatContext, ChatMessage
@@ -88,16 +91,21 @@ class LangChainChatModel:
     """A chat model run as a LangChain agent with fixed instructions."""
 
     def __init__(
-        self, llm: BaseChatModel, system_prompt: str, tools: Sequence[BaseTool] = ()
+        self,
+        llm: BaseChatModel,
+        system_prompt: str,
+        tools: Sequence[Callable[..., str]] = (),
     ) -> None:
         """Build the agent.
 
         Args:
             llm: the language model.
             system_prompt: the assistant's instructions.
-            tools: what the agent may call; none in phase 1.
+            tools: what the agent may call: functions named for the model, whose
+                docstrings tell it when and how.
         """
-        self._agent: Any = create_agent(llm, tools=list(tools), system_prompt=system_prompt)
+        wrapped = [StructuredTool.from_function(func=tool) for tool in tools]
+        self._agent: Any = create_agent(llm, tools=wrapped, system_prompt=system_prompt)
 
     def reply(self, context: ChatContext) -> str:
         """Return the agent's answer to the context's question.
@@ -121,7 +129,12 @@ class LangChainChatModel:
 
 
 def openai_chat_model(
-    *, api_key: SecretStr, model: str, timeout_seconds: float, system_prompt: str
+    *,
+    api_key: SecretStr,
+    model: str,
+    timeout_seconds: float,
+    system_prompt: str,
+    tools: Sequence[Callable[..., str]] = (),
 ) -> LangChainChatModel:
     """Build the assistant's model on OpenAI.
 
@@ -130,6 +143,7 @@ def openai_chat_model(
         model: the OpenAI model's name.
         timeout_seconds: how long one request may take.
         system_prompt: the assistant's instructions.
+        tools: what the model may call.
 
     Returns:
         The model, ready to answer.
@@ -140,7 +154,7 @@ def openai_chat_model(
         request_timeout=timeout_seconds,
         max_retries=_MAX_RETRIES,
     )
-    return LangChainChatModel(llm, system_prompt)
+    return LangChainChatModel(llm, system_prompt, tools)
 
 
 __all__ = [
