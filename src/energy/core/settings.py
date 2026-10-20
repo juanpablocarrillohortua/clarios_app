@@ -463,6 +463,44 @@ class PowerBISettings(BaseSettings):
         return f"{POWERBI_SERVICE_URL}/groups/{self.workspace_id}/reports/{self.report_id}"
 
 
+class ChatSettings(BaseSettings):
+    """The chat assistant: its OpenAI model and how much history goes with a question.
+
+    An empty key means "not configured": the platform starts and works, and the
+    assistant says it is not available. The key is a secret: it reaches no log
+    and no browser. See ``docs/chatbot-plan.md``.
+    """
+
+    model_config = _BASE_CONFIG
+
+    api_key: SecretStr | None = Field(default=None, validation_alias="CHAT_API_KEY")
+    model: str = Field(default="gpt-4.1-mini", min_length=1, validation_alias="CHAT_MODEL")
+    # How many earlier messages go with each question.
+    context_window_limit: int = Field(
+        default=20, ge=0, le=200, validation_alias="CHAT_CONTEXT_WINDOW_LIMIT"
+    )
+    # How long one answer may take, in seconds, before the model counts as unavailable.
+    timeout_seconds: float = Field(
+        default=60, gt=0, le=600, validation_alias="CHAT_TIMEOUT_SECONDS"
+    )
+    # Another file of instructions for the assistant; the packaged prompt when unset.
+    system_prompt_file: Path | None = Field(
+        default=None, validation_alias="CHAT_SYSTEM_PROMPT_FILE"
+    )
+
+    @field_validator("api_key", "system_prompt_file", mode="before")
+    @classmethod
+    def _empty_is_unset(cls, value: object) -> object:
+        """Treat an empty value as no value."""
+        return _blank_is_unset(value)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_configured(self) -> bool:
+        """Return whether a model key is set."""
+        return self.api_key is not None
+
+
 class Settings(BaseSettings):
     """Root configuration object composing every settings group."""
 
@@ -485,6 +523,7 @@ class Settings(BaseSettings):
     reporting: ReportingSettings = Field(default_factory=ReportingSettings)
     entra: EntraSettings = Field(default_factory=EntraSettings)
     powerbi: PowerBISettings = Field(default_factory=PowerBISettings)
+    chat: ChatSettings = Field(default_factory=ChatSettings)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -513,6 +552,7 @@ __all__ = [
     "APISettings",
     "ArchiveBackend",
     "ArchiveSettings",
+    "ChatSettings",
     "DashSettings",
     "DataSettings",
     "DatabaseSettings",

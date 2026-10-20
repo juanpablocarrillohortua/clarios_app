@@ -45,6 +45,12 @@ directly; the report published to the Power BI Service connects through an
 on-premises data gateway on the same machine. [docs/powerbi.md](docs/powerbi.md)
 is the guide.
 
+**Chat assistant.** A chatbot adapted from another project, in three phases
+described in [docs/chatbot-plan.md](docs/chatbot-plan.md): phase 1 (it answers
+through a Streamlit development page, `make chat-ui`, with no tools) is built;
+phase 2 (read-only SQL over the `reporting` views) and phase 3 (an accordion on
+the dashboard, `POST /api/chat`) are planned.
+
 **Web app.** `frontend/` is a React single-page app (TypeScript, Vite) that Caddy
 serves at `/`; Dash moved to `/dash/`. It is built in the increments of
 [docs/frontend-plan.md](docs/frontend-plan.md): increment 0 (decisions),
@@ -936,6 +942,32 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
 - **Try commits on a scratch database,** never the development one: a
   committed synthetic catalogue becomes the current `lineas_produccion` at the
   next Silver build, and nothing voids a load until increment 11.
+
+**Chat assistant** (phase 1 built 2026-10-19; [docs/chatbot-plan.md](docs/chatbot-plan.md)):
+
+- **The imported package `src/energy/agent/` was dissolved into the layers**
+  (`domain/chat.py`, `ports/chat_model.py`, `adapters/langchain_chat_model.py`,
+  `services/chat_service.py`, `pipelines/flows/chat.py`); do not bring back a
+  top-level `agent` package, which the architecture test does not know. Its
+  WhatsApp, congress and conversation-table parts were dropped.
+- **LangChain + OpenAI.** `langchain` and `langchain-openai` are main
+  dependencies; `streamlit` is the extra `chat-ui`, for `scripts/chat_streamlit.py`
+  only (`make chat-ui`, http://localhost:8501, on the host).
+- **`CHAT_API_KEY`** (not the imported `API_KEY`) is a secret; empty means not
+  configured and the platform still starts. `CHAT_MODEL`,
+  `CHAT_CONTEXT_WINDOW_LIMIT`, `CHAT_TIMEOUT_SECONDS`, `CHAT_SYSTEM_PROMPT_FILE`.
+- **The instructions are `adapters/prompts/system_prompt.txt`,** in English,
+  packaged in the wheel; an empty or missing file is refused
+  (`ChatNotConfiguredError`). They tell the model to answer in Spanish.
+- **Stateless.** The caller sends the conversation with each question; the
+  question is never in the history (the imported code sent it twice). Nothing
+  of a conversation is logged.
+- **ChatOpenAI takes its field names** (`model_name`, `openai_api_key`,
+  `request_timeout`) under mypy's pydantic plugin, not the aliases.
+- **Tests never call OpenAI:** a fake `ChatModel` and LangChain's
+  `GenericFakeChatModel` (`tests/unit/test_chat.py`).
+- **Phase 2 amends ADR 0007** (figures through Power BI only) with ADR 0011
+  before any figure is answered, and the plant must agree to send rows to OpenAI.
 
 **EQUS Bronze loader** (built 2026-10-07):
 

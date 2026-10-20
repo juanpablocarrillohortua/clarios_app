@@ -49,6 +49,10 @@ dependencies = [
     # Reads cached cell values an order of magnitude faster than openpyxl; the
     # Bronze loader needs it for exports of 100k+ rows.
     "python-calamine>=0.8",
+    # ---- Chat assistant --------------------------------------------------
+    # The assistant's agent loop and its OpenAI model (docs/chatbot-plan.md).
+    "langchain>=1.0",
+    "langchain-openai>=1.0",
     # ---- Cross-cutting ---------------------------------------------------
     "structlog>=24.4",
     "pyyaml>=6.0",
@@ -64,6 +68,10 @@ analytics = [
     "scikit-learn>=1.5",
     "statsmodels>=0.14",
     "shap>=0.46",
+]
+# The assistant's development page (`make chat-ui`), run on the host only.
+chat-ui = [
+    "streamlit>=1.40",
 ]
 
 [project.scripts]

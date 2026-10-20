@@ -75,7 +75,7 @@ endif
         security test test-unit test-integration check db-upgrade db-downgrade \
         db-revision db-reset seed equs-load equs-silver refresh refresh-all resumen \
         close report powerbi powerbi-down frontend-install frontend-check \
-        frontend-format frontend-dev clean
+        frontend-format frontend-dev chat-ui clean
 
 # -----------------------------------------------------------------------------
 # Meta
@@ -235,6 +235,13 @@ powerbi: ## Create or renew the Power BI login and open the reporting port (127.
 
 powerbi-down: ## Close the reporting port opened by make powerbi
 	$(DC) --profile reporting rm --stop --force reporting-bridge
+
+# -----------------------------------------------------------------------------
+# Chat assistant (docs/chatbot-plan.md)
+# -----------------------------------------------------------------------------
+chat-ui: ## The assistant's development page on the host, at http://localhost:8501 (needs CHAT_API_KEY)
+	$(UV) run --extra chat-ui streamlit run scripts/chat_streamlit.py \
+		--server.headless true --server.address 127.0.0.1 --browser.gatherUsageStats false
 
 # -----------------------------------------------------------------------------
 # Housekeeping

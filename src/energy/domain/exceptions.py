@@ -161,6 +161,35 @@ class CloseRefusedError(DomainRuleError):
     code = "close_refused"
 
 
+class EmptyQuestionError(DomainRuleError):
+    """Raised when the chat assistant is asked an empty or blank question."""
+
+    code = "empty_question"
+
+
+# -----------------------------------------------------------------------------
+# Chat assistant
+# -----------------------------------------------------------------------------
+class ChatNotConfiguredError(ConfigurationError):
+    """Raised when the chat assistant is used but this process cannot run it.
+
+    Its model key is missing, or its instructions (the system prompt file) are
+    missing or empty. The rest of the platform works without it.
+    """
+
+    code = "chat_not_configured"
+
+
+class ChatModelUnavailableError(EnergyError):
+    """Raised when the language model behind the chat assistant did not answer.
+
+    The vendor refused the request, timed out, or could not be reached. The
+    question may well be fine: the failure is on this side.
+    """
+
+    code = "chat_model_unavailable"
+
+
 # -----------------------------------------------------------------------------
 # Data quality and ingestion
 # -----------------------------------------------------------------------------
@@ -469,6 +498,8 @@ __all__ = [
     "AccessError",
     "AlreadyLoadedError",
     "AuthenticationError",
+    "ChatModelUnavailableError",
+    "ChatNotConfiguredError",
     "CloseRefusedError",
     "CommitCountMismatchError",
     "CommitRefusedError",
@@ -484,6 +515,7 @@ __all__ = [
     "DraftBusyError",
     "DuplicateReadingError",
     "EmptyFileError",
+    "EmptyQuestionError",
     "EnergyError",
     "EntityNotFoundError",
     "FileTooLargeError",
