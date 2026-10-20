@@ -18,6 +18,7 @@ policy can be read in one place:
   public (:data:`PUBLIC_PATHS`);
 - ``/datasets`` needs ``loads:write``: dataset specs serve loading data;
 - ``/drafts`` needs ``loads:write`` too: files uploaded to be loaded;
+- ``/chat`` needs ``chat:use``: questions to the assistant;
 - ``/me`` needs a signed-in person;
 - every other router is mounted with the permission it needs;
 - ``/ingest`` is for devices and keeps its API key (:data:`DEVICE_PATH_PREFIX`).
@@ -40,6 +41,7 @@ from fastapi.responses import JSONResponse
 from energy.api.deps import load_dataset_catalogue, requires
 from energy.api.middleware import RequestContextMiddleware
 from energy.api.routers import (
+    chat,
     client_config,
     datasets,
     drafts,
@@ -56,12 +58,15 @@ from energy.db.session import dispose_engine
 from energy.domain.exceptions import (
     AlreadyLoadedError,
     AuthenticationError,
+    ChatModelUnavailableError,
+    ChatNotConfiguredError,
     CommitCountMismatchError,
     CurrentVersionChangedError,
     DatasetBusyError,
     DatasetSpecError,
     DraftBlockedError,
     DraftBusyError,
+    EmptyQuestionError,
     EnergyError,
     EntityNotFoundError,
     FileTooLargeError,
@@ -109,6 +114,7 @@ TAGS_METADATA = [
         "name": "loads",
         "description": "What landed in Bronze: the history, and each load in detail.",
     },
+    {"name": "chat", "description": "Questions to the assistant. Nothing is stored."},
 ]
 
 #: Domain errors that have an HTTP status of their own. Anything else the
@@ -129,6 +135,9 @@ _STATUS_OF: Final[dict[type[EnergyError], int]] = {
     FileTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
     UnsupportedFileFormatError: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
     SourceUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    EmptyQuestionError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    ChatModelUnavailableError: status.HTTP_502_BAD_GATEWAY,
+    ChatNotConfiguredError: status.HTTP_503_SERVICE_UNAVAILABLE,
 }
 
 
@@ -304,10 +313,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # People, by permission.
     may_view = [Depends(requires(Permission.DASHBOARD_VIEW))]
     may_load = [Depends(requires(Permission.LOADS_WRITE))]
+    may_chat = [Depends(requires(Permission.CHAT_USE))]
     app.include_router(kpis.router, dependencies=may_view)
     app.include_router(datasets.router, dependencies=may_load)
     app.include_router(drafts.router, dependencies=may_load)
     app.include_router(loads.router, dependencies=may_load)
+    app.include_router(chat.router, dependencies=may_chat)
     # Devices, by API key (Phase 3).
     app.include_router(ingest.router)
 

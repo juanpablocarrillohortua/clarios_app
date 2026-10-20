@@ -230,7 +230,8 @@ services:
       PREFECT_API_URL: http://prefect-server:4200/api
       DATA_FRESHNESS_MAX_LAG_HOURS: ${DATA_FRESHNESS_MAX_LAG_HOURS:-6}
       CONFIG_DIR: /app/config
-      # Read by `energy reporting create-reader` (make powerbi).
+      # Read by `energy reporting create-reader` (make powerbi), and by the chat
+      # assistant when CHAT_DATA_SOURCE=database.
       REPORTING_DB_USER: ${REPORTING_DB_USER:-powerbi}
       REPORTING_DB_PASSWORD: ${REPORTING_DB_PASSWORD:-}
       REPORTING_BIND_ADDRESS: ${REPORTING_BIND_ADDRESS:-127.0.0.1}
@@ -246,6 +247,20 @@ services:
       # Left empty, the dashboard says that the report is not configured.
       POWERBI_WORKSPACE_ID: ${POWERBI_WORKSPACE_ID:-}
       POWERBI_REPORT_ID: ${POWERBI_REPORT_ID:-}
+      # The chat assistant (docs/chatbot-plan.md). CHAT_API_KEY is a secret: it
+      # reaches the API and no browser. Left empty, `POST /api/chat` answers 503
+      # and everything else works. An empty variable keeps the setting's default.
+      # CHAT_DATA_SOURCE stays `simulated` until the plant agrees that rows of the
+      # reporting views may be sent to OpenAI (ADR 0011). CHAT_SYSTEM_PROMPT_FILE,
+      # CHAT_DB_HOST and CHAT_DB_PORT are not passed: they name the host's files
+      # and addresses, and in here the database's own address is the right one.
+      CHAT_API_KEY: ${CHAT_API_KEY:-}
+      CHAT_MODEL: ${CHAT_MODEL:-}
+      CHAT_CONTEXT_WINDOW_LIMIT: ${CHAT_CONTEXT_WINDOW_LIMIT:-}
+      CHAT_TIMEOUT_SECONDS: ${CHAT_TIMEOUT_SECONDS:-}
+      CHAT_DATA_SOURCE: ${CHAT_DATA_SOURCE:-}
+      CHAT_SQL_ROW_LIMIT: ${CHAT_SQL_ROW_LIMIT:-}
+      CHAT_SQL_TIMEOUT_SECONDS: ${CHAT_SQL_TIMEOUT_SECONDS:-}
     networks: [backend]
     depends_on:
       db:

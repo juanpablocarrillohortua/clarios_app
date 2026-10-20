@@ -161,6 +161,45 @@ class CloseRefusedError(DomainRuleError):
     code = "close_refused"
 
 
+class EmptyQuestionError(DomainRuleError):
+    """Raised when the chat assistant is asked an empty or blank question."""
+
+    code = "empty_question"
+
+
+class QueryRefusedError(DomainRuleError):
+    """Raised when a query of the chat assistant is not one read-only statement.
+
+    ``details["reason"]`` says why: empty, too long, more than one statement, or
+    not a ``SELECT``. The reason goes back to the model, never to the person.
+    """
+
+    code = "query_refused"
+
+
+# -----------------------------------------------------------------------------
+# Chat assistant
+# -----------------------------------------------------------------------------
+class ChatNotConfiguredError(ConfigurationError):
+    """Raised when the chat assistant is used but this process cannot run it.
+
+    Its model key is missing, or its instructions (the system prompt file) are
+    missing or empty. The rest of the platform works without it.
+    """
+
+    code = "chat_not_configured"
+
+
+class ChatModelUnavailableError(EnergyError):
+    """Raised when the language model behind the chat assistant did not answer.
+
+    The vendor refused the request, timed out, or could not be reached. The
+    question may well be fine: the failure is on this side.
+    """
+
+    code = "chat_model_unavailable"
+
+
 # -----------------------------------------------------------------------------
 # Data quality and ingestion
 # -----------------------------------------------------------------------------
@@ -320,6 +359,32 @@ class DatabaseUnavailableError(RepositoryError):
     code = "database_unavailable"
 
 
+class MissingRelationError(RepositoryError):
+    """Raised when a query of the chat assistant names a table or view that does not exist.
+
+    The data the question needs has no table yet: the assistant answers that it
+    is pending implementation.
+    """
+
+    code = "relation_missing"
+
+
+class QueryTimeoutError(RepositoryError):
+    """Raised when a query of the chat assistant runs longer than it may."""
+
+    code = "query_timeout"
+
+
+class QueryFailedError(RepositoryError):
+    """Raised when the database refuses or cannot run a query of the chat assistant.
+
+    ``details["reason"]`` holds the database's first line, such as an unknown
+    column, so the model can correct its query.
+    """
+
+    code = "query_failed"
+
+
 # -----------------------------------------------------------------------------
 # Committing a draft (increment 7)
 # -----------------------------------------------------------------------------
@@ -469,6 +534,8 @@ __all__ = [
     "AccessError",
     "AlreadyLoadedError",
     "AuthenticationError",
+    "ChatModelUnavailableError",
+    "ChatNotConfiguredError",
     "CloseRefusedError",
     "CommitCountMismatchError",
     "CommitRefusedError",
@@ -484,6 +551,7 @@ __all__ = [
     "DraftBusyError",
     "DuplicateReadingError",
     "EmptyFileError",
+    "EmptyQuestionError",
     "EnergyError",
     "EntityNotFoundError",
     "FileTooLargeError",
@@ -495,6 +563,7 @@ __all__ = [
     "InvalidTimeWindowError",
     "LengthRequiredError",
     "LockTimeoutError",
+    "MissingRelationError",
     "NaiveDatetimeError",
     "NegativeEnergyError",
     "NotValidatedError",
@@ -503,6 +572,9 @@ __all__ = [
     "PermissionDeniedError",
     "PipelineError",
     "QuarantinedRowsError",
+    "QueryFailedError",
+    "QueryRefusedError",
+    "QueryTimeoutError",
     "RepositoryError",
     "SchemaValidationError",
     "SignInNotConfiguredError",

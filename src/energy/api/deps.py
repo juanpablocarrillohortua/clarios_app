@@ -14,8 +14,8 @@ rule of its own: what a role may do is decided in :mod:`energy.api.security`.
 
 Wired today: settings, database sessions, the request id, the signed-in
 caller, the dataset specs (read once, when the app is built), the writer of
-their templates, and the draft service of the loading page (built on first
-use and kept on the app: it holds the object storage client). Repository and
+their templates, the draft and load services of the loading page, and the
+chat assistant (each built on first use and kept on the app). Repository and
 service providers arrive with the endpoints that need them.
 """
 
@@ -29,6 +29,7 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from energy.adapters.calamine_workbook import CalamineWorkbookReader
+from energy.adapters.chat_wiring import build_chat_model, build_reporting_query, require_chat_key
 from energy.adapters.entra_token_verifier import EntraTokenVerifier
 from energy.adapters.local_storage import LocalObjectStorage
 from energy.adapters.minio_storage import MinioObjectStorage
@@ -36,6 +37,7 @@ from energy.adapters.postgres_draft_repo import PostgresDraftRepository
 from energy.adapters.postgres_load_committer import PostgresLoadCommitter
 from energy.adapters.postgres_load_ledger import PostgresLoadLedger
 from energy.adapters.xlsx_dataset_template import XlsxDatasetTemplateWriter
+from energy.adapters.yaml_chat_sources import load_chat_sources
 from energy.adapters.yaml_dataset_specs import load_dataset_specs
 from energy.adapters.zip_package import ZipPackageInspector
 from energy.api import security
@@ -48,6 +50,8 @@ from energy.domain.exceptions import AuthenticationError, SignInNotConfiguredErr
 from energy.ports.dataset_template import DatasetTemplateWriter
 from energy.ports.object_storage import ObjectStorage
 from energy.ports.token_verifier import TokenVerifier
+from energy.services.chat_data_service import ChatDataService
+from energy.services.chat_service import ChatService
 from energy.services.draft_service import DraftService
 from energy.services.load_service import LoadService
 
@@ -319,6 +323,50 @@ def get_load_service(request: Request) -> LoadService:
     return service
 
 
+def get_chat_service(request: Request) -> ChatService:
+    """Return the chat assistant, building it on first use.
+
+    It is wired as ``pipelines/flows/chat.py`` wires it for the development
+    page: the model, with the data tools of
+    :class:`~energy.services.chat_data_service.ChatDataService`, reading
+    where ``CHAT_DATA_SOURCE`` says. Once built it is kept on the app, so the
+    simulated data are built once. A failure is not kept: the next request
+    tries again, and the API starts and serves everything else without a key.
+
+    Args:
+        request: the current request, whose app holds the settings and, once
+            built, the service.
+
+    Returns:
+        The :class:`~energy.services.chat_service.ChatService`.
+
+    Raises:
+        ChatNotConfiguredError: if the model key is missing, the instructions
+            are missing or empty, or database mode has no reporting login
+            (HTTP 503). The key is checked first, so a refusal builds nothing.
+    """
+    service: ChatService | None = getattr(request.app.state, "chat_service", None)
+    if service is None:
+        settings: Settings = request.app.state.settings
+        require_chat_key(settings)
+        data = ChatDataService(
+            build_reporting_query(settings),
+            load_chat_sources(settings.data.config_dir),
+            row_limit=settings.chat.sql_row_limit,
+            timeout_seconds=settings.chat.sql_timeout_seconds,
+        )
+        model = build_chat_model(
+            settings, tools=(data.list_sources, data.describe_reporting, data.run_sql)
+        )
+        service = ChatService(
+            model,
+            history_limit=settings.chat.context_window_limit,
+            notes=(data.sources_note(),),
+        )
+        request.app.state.chat_service = service
+    return service
+
+
 # -----------------------------------------------------------------------------
 # Annotated aliases - route handlers depend on these, never on the functions.
 # -----------------------------------------------------------------------------
@@ -331,6 +379,7 @@ DatasetCatalogueDep = Annotated[DatasetCatalogue, Depends(get_dataset_catalogue)
 TemplateWriterDep = Annotated[DatasetTemplateWriter, Depends(get_template_writer)]
 DraftServiceDep = Annotated[DraftService, Depends(get_draft_service)]
 LoadServiceDep = Annotated[LoadService, Depends(get_load_service)]
+ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
 
 
 def requires(permission: Permission) -> Callable[[Principal], Principal]:
@@ -359,6 +408,7 @@ def requires(permission: Permission) -> Callable[[Principal], Principal]:
 
 __all__ = [
     "APIKeyDep",
+    "ChatServiceDep",
     "DatasetCatalogueDep",
     "DraftServiceDep",
     "LoadServiceDep",
@@ -369,6 +419,7 @@ __all__ = [
     "TemplateWriterDep",
     "build_object_storage",
     "get_app_settings",
+    "get_chat_service",
     "get_dataset_catalogue",
     "get_db_session",
     "get_draft_service",

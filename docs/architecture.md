@@ -355,6 +355,36 @@ Nothing is aggregated on the way out. Whether Dash draws these charts at all is
 decided when Phase 5 starts
 ([ADR 0004](adr/0004-react-spa-entra-and-embedded-power-bi.md)).
 
+### A question to the assistant
+
+A round button on the dashboard opens a panel where a person asks the chat assistant
+([chatbot-plan.md](chatbot-plan.md)). The conversation lives in the browser;
+the API stores nothing.
+
+```
+POST /api/chat {history, question}          chat:use
+  → deps.get_chat_service                    built on the first question, kept
+  → ChatService.answer                       the last CHAT_CONTEXT_WINDOW_LIMIT
+                                             messages, the time and the sources
+  → ChatModel.reply                          (port; adapters.langchain_chat_model)
+      OpenAI, with three tools of ChatDataService:
+        list_sources · describe_reporting · run_sql
+          → domain.chat_sql: one SELECT or WITH
+          → ReportingQuery.run               (port)
+              simulated: adapters.duckdb_reporting_query (the default)
+              database:  adapters.postgres_reporting_query,
+                         the reporting login, read-only, rolled back
+  → {answer}                                 plain text
+```
+
+The assistant reads the same `reporting` views as Power BI, so the two cannot
+disagree; with `CHAT_DATA_SOURCE=simulated`, the default until the plant
+agrees, it reads synthetic rows of the same shape and nothing of the plant
+reaches OpenAI ([ADR 0011](adr/0011-the-assistant-reads-the-reporting-views.md)).
+The adapters both composition roots need are built by
+`adapters/chat_wiring.py`: `api/deps.py` for the web app,
+`pipelines/flows/chat.py` for `make chat-ui`.
+
 ---
 
 ## 5. Consolidating seven sources
@@ -497,6 +527,7 @@ internal.
 | Add a KPI | `config/kpis.yaml`, then `domain/kpi_formulas.py` if the maths is new |
 | Change what counts as valid data | `schemas/silver.py` |
 | Change how source conflicts resolve | `config/sources.yaml` priorities |
+| Change what the assistant knows or may do | its instructions, `adapters/prompts/system_prompt.txt`; the sources it lists, `config/chat/sources.yaml`; its tools, `services/chat_data_service.py` |
 | Add an endpoint | `api/routers/`, `api/schemas/`, and mount it in `api/main.py` with the permission it needs: a route nobody is asked about fails `tests/unit/test_api_auth.py` |
 | Change what a role may do | the table `GRANTS` in `api/security.py`, and `tests/unit/test_api_security.py`. The web app follows: it reads permissions from `GET /me` |
 | Give a person access | no code: assign them a role in Entra ID ([Sign-in and roles](sign-in.md)) |
@@ -518,6 +549,7 @@ internal.
 - [ADR 0008](adr/0008-embedding-the-report-in-the-dashboard.md) — how the dashboard embeds the report with the user's own Power BI token
 - [ADR 0009](adr/0009-data-is-entered-and-corrected-in-excel.md) — why data is entered and corrected in Excel: no grid and no form in the app
 - [ADR 0010](adr/0010-a-draft-is-committed-once-in-one-transaction.md) — why a draft is committed once, in one transaction, with the loader's own SQL
+- [ADR 0011](adr/0011-the-assistant-reads-the-reporting-views.md) — why the chat assistant reads the `reporting` views with read-only SQL, on simulated data until the plant agrees (proposed)
 - [The API](api.md) — what it is in plain words, every endpoint, the token check, the errors, how the web app calls it
 - [Sign-in and roles](sign-in.md) — the app registration, giving someone access, troubleshooting
 - [Frontend plan](frontend-plan.md) — the web app's design and its increments

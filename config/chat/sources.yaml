@@ -1,0 +1,80 @@
+# The data sources the chat assistant knows of (docs/chatbot-plan.md, phase 2).
+#
+# implemented: the data is in the database, and the assistant reads it through
+#              the views of schema `reporting` named under `views`.
+# pending:     nothing loads it into a table yet; the assistant says so.
+#
+# When a pending source gets its tables and its reporting views, move it to
+# implemented and name the views. A test checks that every view named here
+# exists in the simulated data and in the reporting schema.
+
+sources:
+  - key: equs_exports
+    files:
+      - "Calculo de equivalente - Explorar transacciones por art.xlsx"
+      - "Calculo de equivalente - Unidades facturadas.xlsx"
+      - "BOM BATERIAS FORMADAS.xlsx"
+      - "ESTRUCTURA DECORADO.xlsx"
+      - "Calculo de equivalente- Comparativo lineas.xlsx"
+      - "EQUS BATT.xlsx"
+      - "Item_Master.xlsx"
+    description: >-
+      The QAD exports behind the equivalent batteries (EQUS): production receipts,
+      invoices, product structures, the item master and the production lines, with
+      the monthly calculation and its frozen closes.
+    state: implemented
+    views:
+      - name: cuentas
+        description: Every driver (cuenta STATS) of every version, with its factor and place in the report
+      - name: articulos
+        description: Every item, with its product line and Campo Equs
+      - name: equs_mensual
+        description: Column H of RESUMEN EQU by month and driver, 0 included
+      - name: equs_batt_mensual
+        description: EQUS BATT and the EQ of each process (OREC, Ensamble, Formacion, Decorado, Shipping), by month
+      - name: equs_poly_mensual
+        description: EQUS POLY by month and plastic category
+      - name: aporte_cuenta
+        description: What each production receipt and invoice line contributed to each driver
+      - name: recibos_produccion
+        description: Every production receipt, with its conversions
+      - name: calidad_datos_mensual
+        description: Rows each data-quality check returns, by month
+      - name: cierres
+        description: Every monthly close and reclose
+      - name: cierres_calidad
+        description: The data-quality counts each close saw
+      - name: equs_cerrado
+        description: The official close of each closed month, by driver
+      - name: equs_cerrado_historial
+        description: The closed rows a reclose replaced
+
+  - key: energy_by_area
+    files:
+      - "Base_de_datos.xlsx"
+    description: >-
+      Monthly electricity (kWh) of each plant area (OREC, Ensamble, F&A, RC), with
+      its cost.
+    state: pending
+
+  - key: scada_formation
+    files:
+      - "SCADA-Base de datos F&A.xlsx"
+    description: >-
+      Hourly energy counters of the three formation rectifiers (F&A).
+    state: pending
+
+  - key: scada_rc_energy
+    files:
+      - "SCADA-Base de datos Energia RC.xlsx"
+    description: >-
+      Hourly energy counters of the RC recycling plant's meters (main meter,
+      administration building, filters, furnace, refining, crushing, water plant).
+    state: pending
+
+  - key: scada_rc_gas
+    files:
+      - "SCADA-Base de datos GAS RC.xlsx"
+    description: >-
+      Gas counters of the RC recycling plant.
+    state: pending

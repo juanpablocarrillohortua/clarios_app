@@ -37,7 +37,7 @@ way.
 
 | Role | May |
 |---|---|
-| `viewer` | See the dashboard |
+| `viewer` | See the dashboard, and ask the chat assistant on it |
 | `operator` | The above, and load data, accept its warnings, and see the history of loads |
 | `engineer` | The same as `operator` today. Later: void a load, start the update of the figures |
 | `admin` | The same as `operator` today. Later: manage dataset specifications |
@@ -52,6 +52,7 @@ In the code a role is never checked directly. Each endpoint asks for a
 |---|---|---|
 | `dashboard:view` | `viewer`, `operator`, `engineer`, `admin` | `/api/kpis/*`, the dashboard section |
 | `loads:write` | `operator`, `engineer`, `admin` | `/api/datasets/*`, `/api/drafts/*`, `/api/loads/*`, the data-loading section |
+| `chat:use` | `viewer`, `operator`, `engineer`, `admin` | `/api/chat`, the assistant's panel on the dashboard |
 
 The table is `GRANTS` in
 [`src/energy/api/security.py`](../src/energy/api/security.py), and it is the

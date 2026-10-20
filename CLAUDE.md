@@ -45,6 +45,13 @@ directly; the report published to the Power BI Service connects through an
 on-premises data gateway on the same machine. [docs/powerbi.md](docs/powerbi.md)
 is the guide.
 
+**Chat assistant.** A chatbot adapted from another project, in three phases
+described in [docs/chatbot-plan.md](docs/chatbot-plan.md): phase 1 (it answers
+through a Streamlit development page, `make chat-ui`) and phase 2 (read-only SQL
+over the `reporting` views, on simulated data by default, `CHAT_DATA_SOURCE`)
+are built; phase 3 (a round button on the dashboard, `POST /api/chat`) is built
+and waits for the owner's check in a signed-in browser.
+
 **Web app.** `frontend/` is a React single-page app (TypeScript, Vite) that Caddy
 serves at `/`; Dash moved to `/dash/`. It is built in the increments of
 [docs/frontend-plan.md](docs/frontend-plan.md): increment 0 (decisions),
@@ -936,6 +943,95 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
 - **Try commits on a scratch database,** never the development one: a
   committed synthetic catalogue becomes the current `lineas_produccion` at the
   next Silver build, and nothing voids a load until increment 11.
+
+**Chat assistant** (phases 1 to 3 built 2026-10-19; [docs/chatbot-plan.md](docs/chatbot-plan.md)):
+
+- **The imported package `src/energy/agent/` was dissolved into the layers**
+  (`domain/chat.py`, `ports/chat_model.py`, `adapters/langchain_chat_model.py`,
+  `services/chat_service.py`, `pipelines/flows/chat.py`); do not bring back a
+  top-level `agent` package, which the architecture test does not know. Its
+  WhatsApp, congress and conversation-table parts were dropped.
+- **LangChain + OpenAI.** `langchain` and `langchain-openai` are main
+  dependencies; `streamlit` is the extra `chat-ui`, for `scripts/chat_streamlit.py`
+  only (`make chat-ui`, http://localhost:8501, on the host).
+- **`CHAT_API_KEY`** (not the imported `API_KEY`) is a secret; empty means not
+  configured and the platform still starts. `CHAT_MODEL`,
+  `CHAT_CONTEXT_WINDOW_LIMIT`, `CHAT_TIMEOUT_SECONDS`, `CHAT_SYSTEM_PROMPT_FILE`.
+- **The instructions are `adapters/prompts/system_prompt.txt`,** in English,
+  packaged in the wheel; an empty or missing file is refused
+  (`ChatNotConfiguredError`). They tell the model to answer in Spanish.
+- **Stateless.** The caller sends the conversation with each question; the
+  question is never in the history (the imported code sent it twice). Nothing
+  of a conversation is logged.
+- **ChatOpenAI takes its field names** (`model_name`, `openai_api_key`,
+  `request_timeout`) under mypy's pydantic plugin, not the aliases.
+- **Tests never call OpenAI:** a fake `ChatModel` and LangChain's
+  `GenericFakeChatModel` (`tests/unit/test_chat.py`).
+- **Phase 2 (built 2026-10-19): `CHAT_DATA_SOURCE=simulated` is the default
+  and must stay so until the plant agrees to send rows to OpenAI** ([ADR
+  0011](docs/adr/0011-the-assistant-reads-the-reporting-views.md), Proposed,
+  amends ADR 0007). `simulated` is an in-memory DuckDB holding
+  `adapters/simulated_reporting.py`: the 12 `reporting` views with the same
+  names and column order (the integration test compares them with the real
+  views; change both together), the equation's configuration restated, every
+  row invented (`SIM-...`). `database` uses `PostgresReportingQuery` with the
+  reporting login, never the application's.
+- **The guards:** `domain/chat_sql.py` (one `SELECT`/`WITH`, literals and
+  comments masked first), then the login's rights or DuckDB's locked
+  configuration (no files, no extensions), a transaction always rolled back,
+  a time limit (`CHAT_SQL_TIMEOUT_SECONDS`) and a row cap
+  (`CHAT_SQL_ROW_LIMIT`). The PostgreSQL adapter sends the model's SQL on the
+  raw psycopg cursor, so a `%` is never a parameter.
+- **`config/chat/sources.yaml`** lists the plant's files as implemented (with
+  views) or pending. Its note goes with every question
+  (`ChatDataService.sources_note`): without it the model searched the EQ views
+  for energy instead of saying the data is pending.
+- **Two Spanish sentences in the English prompt are a deliberate exception** to
+  the language rule: "No encontrado: la tabla está pendiente de
+  implementación." and "(Datos simulados: no son cifras reales de la
+  planta.)". A test keeps both word for word.
+- **The tools are plain methods** of `services/chat_data_service.py` handed to
+  the adapter by the composition root, which wraps them with
+  `StructuredTool.from_function` (name from the method, description from its
+  docstring): the adapter imports no service.
+- **Phase 3 (built 2026-10-19): `POST /api/chat`, permission `chat:use`**
+  (viewer, operator, engineer, admin), and a panel on the dashboard.
+  - **Two composition roots.** `api` may not import `pipelines`, so what both
+    need is `adapters/chat_wiring.py` (`require_chat_key`,
+    `build_reporting_query`, `build_chat_model`). `api/deps.py`
+    `get_chat_service` builds the service on the first question and keeps it
+    on `app.state`; a failure is never kept.
+  - **Statuses:** 422 `empty_question`, 502 `chat_model_unavailable`, 503
+    `chat_not_configured`, rows of `_STATUS_OF`. The question has no
+    `min_length`, so a blank one is refused by the domain, in the envelope.
+  - **History:** at most `MAX_CHAT_HISTORY` (200, `core/constants.py`)
+    messages, each at most 20,000 characters; question at most 4,000. The
+    browser keeps and sends at most 200 (`MAX_HISTORY` in
+    `frontend/src/api/chat.ts`, kept equal by hand); the service trims to
+    `CHAT_CONTEXT_WINDOW_LIMIT`.
+  - **Compose passes the `CHAT_*` variables as `${VAR:-}`;** `ChatSettings`
+    has `env_ignore_empty`, so an empty one keeps its default. Not passed:
+    `CHAT_SYSTEM_PROMPT_FILE`, `CHAT_DB_HOST`, `CHAT_DB_PORT` (host settings).
+  - **In the app:** `src/chat/` (`useChat`, `ChatLauncher`, `ChatLog`,
+    `ChatComposer`, `chat.module.css`), shown on the dashboard when `GET /me`
+    lists `chat:use`. The conversation is in `sessionStorage` under
+    `clarios.chat` with the person's `subject`; a question shows at once and
+    joins the history only with its answer; a failure puts it back in the
+    box. Answers are plain text. `useDelayed` moved to `src/hooks/`.
+  - **Mantine's growing `Textarea` reads `document.fonts`,** which jsdom
+    lacks: `src/test/setup.ts` stubs it. The test fixtures `viewer` and
+    `operator` carry `chat:use`, as the API gives it; `person()` is exported
+    for a user without it.
+  - **The launcher** (2026-10-20, replacing a full-width accordion) is a
+    fixed round button bottom right; its panel grows out of it by CSS
+    transitions on `data-open` (interruptible), and is `inert` and
+    `aria-hidden` while closed, never unmounted, so the motion can close it.
+    It is a parallel tool: no scrim, no close on a click outside. A dot on
+    the button (and a live region beside it) marks an answer that landed
+    while it was closed. Under 48 em the panel is a bottom sheet.
+  - **After "Enviar" the focus goes back to the box:** the button turns
+    disabled while the answer comes, and a disabled button drops the focus to
+    the page, where Escape no longer reaches the panel.
 
 **EQUS Bronze loader** (built 2026-10-07):
 

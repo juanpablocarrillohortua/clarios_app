@@ -28,6 +28,7 @@ import { useSearchParams } from "react-router";
 import type { PowerBiConfig } from "../api/config";
 import type { AuthClient, ServiceToken } from "../auth/authClient";
 import { useSession } from "../auth/Session";
+import { ChatLauncher } from "../chat/ChatLauncher";
 import { Panel, type PanelTone } from "../components/Panel";
 import { HeaderAction } from "../layout/HeaderAction";
 import { useWideLayout } from "../layout/useWideLayout";
@@ -72,7 +73,7 @@ interface DashboardPageProps {
 
 export function DashboardPage({ loadEmbedReport }: DashboardPageProps) {
   const { t } = useTranslation();
-  const { powerBi } = useSession();
+  const { powerBi, me } = useSession();
   const wide = useWideLayout();
 
   const openInPowerBi = powerBi && (
@@ -98,6 +99,10 @@ export function DashboardPage({ loadEmbedReport }: DashboardPageProps) {
           {openInPowerBi}
         </Group>
       )}
+      {/* The assistant: a round button in the corner, over the report, that
+          opens its panel. It is fixed, so it takes no room from the report,
+          and it shows whether or not the report is configured. */}
+      {me.permissions.includes("chat:use") && <ChatLauncher />}
       {powerBi ? (
         <Report config={powerBi} loadEmbedReport={loadEmbedReport} />
       ) : (

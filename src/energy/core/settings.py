@@ -26,6 +26,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from energy.core.constants import (
     ENTRA_API_SCOPE_NAME,
     ENTRA_LOGIN_HOST,
+    MAX_CHAT_HISTORY,
     POWERBI_API_URL,
     POWERBI_SERVICE_URL,
 )
@@ -34,6 +35,7 @@ Environment = Literal["local", "ci", "staging", "production"]
 LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
 LogFormat = Literal["console", "json"]
 ArchiveBackend = Literal["minio", "local"]
+ChatDataSource = Literal["simulated", "database"]
 
 _ENV_FILE = ".env"
 
@@ -463,6 +465,65 @@ class PowerBISettings(BaseSettings):
         return f"{POWERBI_SERVICE_URL}/groups/{self.workspace_id}/reports/{self.report_id}"
 
 
+class ChatSettings(BaseSettings):
+    """The chat assistant: its OpenAI model and how much history goes with a question.
+
+    An empty key means "not configured": the platform starts and works, and the
+    assistant says it is not available. The key is a secret: it reaches no log
+    and no browser. See ``docs/chatbot-plan.md``.
+
+    An empty variable counts as unset, so compose can pass every ``CHAT_*``
+    variable through as ``${VAR:-}`` and an unset one keeps its default here.
+    """
+
+    model_config = SettingsConfigDict(**_BASE_CONFIG, env_ignore_empty=True)
+
+    api_key: SecretStr | None = Field(default=None, validation_alias="CHAT_API_KEY")
+    model: str = Field(default="gpt-4.1-mini", min_length=1, validation_alias="CHAT_MODEL")
+    # How many earlier messages go with each question.
+    context_window_limit: int = Field(
+        default=20, ge=0, le=MAX_CHAT_HISTORY, validation_alias="CHAT_CONTEXT_WINDOW_LIMIT"
+    )
+    # How long one answer may take, in seconds, before the model counts as unavailable.
+    timeout_seconds: float = Field(
+        default=60, gt=0, le=600, validation_alias="CHAT_TIMEOUT_SECONDS"
+    )
+    # Another file of instructions for the assistant; the packaged prompt when unset.
+    system_prompt_file: Path | None = Field(
+        default=None, validation_alias="CHAT_SYSTEM_PROMPT_FILE"
+    )
+    # Where the assistant's queries run: synthetic rows in memory, or the real
+    # `reporting` views through the read-only reporting login. The plant must
+    # agree before `database` is used: its rows would reach the model's vendor.
+    data_source: ChatDataSource = Field(default="simulated", validation_alias="CHAT_DATA_SOURCE")
+    sql_row_limit: int = Field(default=200, ge=1, le=5000, validation_alias="CHAT_SQL_ROW_LIMIT")
+    sql_timeout_seconds: float = Field(
+        default=15, gt=0, le=300, validation_alias="CHAT_SQL_TIMEOUT_SECONDS"
+    )
+    # Where the reporting login reaches the database; the application's own host
+    # and port when unset. From the host: 127.0.0.1 and 5433, through `make powerbi`.
+    db_host: str | None = Field(default=None, validation_alias="CHAT_DB_HOST")
+    db_port: int | None = Field(default=None, ge=1, le=65535, validation_alias="CHAT_DB_PORT")
+
+    @field_validator("data_source", mode="before")
+    @classmethod
+    def _source_in_lower_case(cls, value: object) -> object:
+        """Read the data source without regard to case or surrounding spaces."""
+        return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator("api_key", "system_prompt_file", "db_host", "db_port", mode="before")
+    @classmethod
+    def _empty_is_unset(cls, value: object) -> object:
+        """Treat an empty value as no value."""
+        return _blank_is_unset(value)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_configured(self) -> bool:
+        """Return whether a model key is set."""
+        return self.api_key is not None
+
+
 class Settings(BaseSettings):
     """Root configuration object composing every settings group."""
 
@@ -485,6 +546,7 @@ class Settings(BaseSettings):
     reporting: ReportingSettings = Field(default_factory=ReportingSettings)
     entra: EntraSettings = Field(default_factory=EntraSettings)
     powerbi: PowerBISettings = Field(default_factory=PowerBISettings)
+    chat: ChatSettings = Field(default_factory=ChatSettings)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -513,6 +575,8 @@ __all__ = [
     "APISettings",
     "ArchiveBackend",
     "ArchiveSettings",
+    "ChatDataSource",
+    "ChatSettings",
     "DashSettings",
     "DataSettings",
     "DatabaseSettings",
