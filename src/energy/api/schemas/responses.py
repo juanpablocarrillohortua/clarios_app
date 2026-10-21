@@ -897,6 +897,195 @@ class IngestAcceptedResponse(ResponseModel):
     watermark_utc: AwareDatetime | None = None
 
 
+class ModelSummaryResponse(ResponseModel):
+    """One energy baseline model in force (ADR 0012).
+
+    Attributes:
+        key: the model's key: ``orec_mensual``, ``fa_mensual`` or ``fa_diario``.
+        area: the plant area whose energy it predicts.
+        granularity: ``month`` (the total of a month) or ``day`` (one day).
+        target: the name of the predicted quantity (``kwh``).
+        unit: its unit (``kWh``).
+        trained_at: when it was trained.
+        training_start: the first period of its training window.
+        training_end: the last period of its training window.
+        n_training: the periods it was trained on.
+        coverage: the share of the window's calendar periods that had data.
+        validation_wape: its typical error out of sample, in %.
+        validation_mase: its error over the naive forecast's; below 1 beats it.
+    """
+
+    key: str
+    area: str
+    granularity: Literal["month", "day"]
+    target: str
+    unit: str
+    trained_at: AwareDatetime
+    training_start: date
+    training_end: date
+    n_training: int
+    coverage: float
+    validation_wape: float
+    validation_mase: float
+
+
+class ModelFeatureResponse(ResponseModel):
+    """One variable of a model, and what the model learned about it.
+
+    Attributes:
+        name: the variable's name (``eq``, ``dias``, ``domingo``, ``sin_eq``).
+        kind: ``numeric``, or ``binary`` (0 or 1).
+        entered: whether a person enters it; ``false`` when it follows from
+            another (``sin_eq`` is 1 exactly when ``eq`` is 0).
+        minimum: the smallest value a forecast accepts, or ``null``.
+        maximum: the largest value a forecast accepts, or ``null``.
+        reference: the value it is measured from in the equation, or ``null``.
+        training_minimum: the smallest value it took in the training window.
+        training_maximum: the largest value it took in the training window.
+        default: the value a forecast starts from; ``null`` for a derived variable.
+        coefficient: what one unit of it adds to the target.
+        p_value: the coefficient's p-value with Newey-West (HAC) errors.
+        significant: whether that p-value is below 0.05.
+    """
+
+    name: str
+    kind: Literal["numeric", "binary"]
+    entered: bool
+    minimum: float | None
+    maximum: float | None
+    reference: float | None
+    training_minimum: float | None
+    training_maximum: float | None
+    default: float | None
+    coefficient: float
+    p_value: float
+    significant: bool
+
+
+class ModelMetricsResponse(ResponseModel):
+    """How well a model fits its training data, and how well it forecasts.
+
+    Training figures are the mean, over the validation folds, of each fold's
+    fit on its own training window. Validation figures come from the one-step
+    forecasts of ``TimeSeriesSplit``, none of which saw its own value.
+
+    Attributes:
+        train_r2: mean R² of the folds on their training windows.
+        train_wape: mean WAPE of the folds on their training windows, in %.
+        validation_r2: R² of the one-step forecasts.
+        validation_mae: their mean absolute error, in the target's unit.
+        validation_wape: their WAPE, in %.
+        validation_mase: their MAE over the naive forecast's.
+        naive_wape: the naive forecast's WAPE over the same periods, in %.
+        diebold_mariano_p: p-value of the model against the naive forecast.
+        alert_band: half-width of the 90 % band around a forecast.
+        validation_periods: how many one-step forecasts there were.
+    """
+
+    train_r2: float
+    train_wape: float
+    validation_r2: float
+    validation_mae: float
+    validation_wape: float
+    validation_mase: float
+    naive_wape: float
+    diebold_mariano_p: float
+    alert_band: float
+    validation_periods: int
+
+
+class ModelHistoryPointResponse(ResponseModel):
+    """One period of a model's history.
+
+    Attributes:
+        period: the first day of the month, or the day.
+        actual: the real value.
+        predicted: the one-step forecast of the validation, or ``null`` before it.
+        naive: the naive forecast (the previous period), or ``null`` before the validation.
+        inputs: the variables' values in that period.
+    """
+
+    period: date
+    actual: float
+    predicted: float | None
+    naive: float | None
+    inputs: dict[str, float]
+
+
+class ModelDetailResponse(ModelSummaryResponse):
+    """Everything the web app shows of one model.
+
+    Attributes:
+        sources: where its data come from.
+        equation: the equation as text, every variable measured from its reference.
+        intercept: the intercept, with every variable at its reference.
+        intercept_p_value: the intercept's p-value with HAC errors.
+        intercept_significant: whether that p-value is below 0.05.
+        features: its variables, in the order of the equation.
+        metrics: its training and validation figures.
+        next_period: the period a forecast is for.
+        history: every period it was trained or judged on, oldest first.
+    """
+
+    sources: list[str]
+    equation: str
+    intercept: float
+    intercept_p_value: float
+    intercept_significant: bool
+    features: list[ModelFeatureResponse]
+    metrics: ModelMetricsResponse
+    next_period: date
+    history: list[ModelHistoryPointResponse]
+
+
+class ForecastTermResponse(ResponseModel):
+    """One term of a forecast's equation, with the value entered.
+
+    Attributes:
+        feature: the variable.
+        coefficient: its coefficient.
+        value: the value entered, or derived.
+        reference: what the value is measured from, or ``null``.
+        contribution: coefficient * (value - reference).
+    """
+
+    feature: str
+    coefficient: float
+    value: float
+    reference: float | None
+    contribution: float
+
+
+class ForecastResponse(ResponseModel):
+    """A model's forecast of its next period, for the values entered.
+
+    Attributes:
+        key: the model.
+        unit: the forecast's unit.
+        period: the period forecast.
+        prediction: the predicted value.
+        low: the prediction minus the alert band, never below zero.
+        high: the prediction plus the alert band.
+        intercept: the intercept, with every variable at its reference.
+        terms: one per variable, in the order of the equation; the prediction
+            is the intercept plus their contributions.
+        per_unit: the prediction per equivalent battery, or ``null`` without production.
+        outside_training: the variables whose value lies outside the range the
+            model was trained on: the forecast is an extrapolation there.
+    """
+
+    key: str
+    unit: str
+    period: date
+    prediction: float
+    low: float
+    high: float
+    intercept: float
+    terms: list[ForecastTermResponse]
+    per_unit: float | None
+    outside_training: list[str]
+
+
 class ChatAnswerResponse(ResponseModel):
     """The assistant's answer to one question.
 
@@ -925,6 +1114,8 @@ __all__ = [
     "DraftStatusName",
     "DraftValidationResponse",
     "ErrorResponse",
+    "ForecastResponse",
+    "ForecastTermResponse",
     "HealthResponse",
     "IngestAcceptedResponse",
     "IssueResponse",
@@ -941,6 +1132,11 @@ __all__ = [
     "LoadValidationResponse",
     "LoadsPageResponse",
     "MeResponse",
+    "ModelDetailResponse",
+    "ModelFeatureResponse",
+    "ModelHistoryPointResponse",
+    "ModelMetricsResponse",
+    "ModelSummaryResponse",
     "OriginalFileResponse",
     "PeriodResponse",
     "PersonResponse",

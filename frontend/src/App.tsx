@@ -15,6 +15,7 @@ import { LoadDetailPage } from "./history/LoadDetailPage";
 import { Shell } from "./layout/Shell";
 import { DraftPage } from "./loads/DraftPage";
 import { LoadsPage } from "./loads/LoadsPage";
+import { ModelsPage } from "./models/ModelsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { paths } from "./paths";
@@ -58,6 +59,14 @@ export function App({ createAuthClient, loadEmbedReport }: AppProps) {
                 element={
                   <RequirePermission permission="dashboard:view">
                     <DashboardPage loadEmbedReport={loadEmbedReport} />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path={paths.models}
+                element={
+                  <RequirePermission permission="models:view">
+                    <ModelsPage />
                   </RequirePermission>
                 }
               />

@@ -660,6 +660,22 @@ erDiagram
 | `kpi_daily` | The same per day, week or month, with the target in force. |
 | `plant_daily_summary` | One wide row per plant and day; what the dashboard's first page reads. |
 
+### The energy baseline models
+
+Created by [`0010_add_baseline_models.py`](../migrations/versions/0010_add_baseline_models.py)
+([ADR 0012](adr/0012-the-app-shows-the-energy-baseline-models.md)).
+
+| Table | What it holds |
+|---|---|
+| `baseline_models` | One row per trained model (`orec_mensual`, `fa_mensual`, `fa_diario`): what it predicts and from what (`spec`), its coefficients with their p-values, its training and validation figures, the history it was judged on, the range of each variable, its training window and `coverage`. |
+
+`make models-train` fills it, on the host: it reads the energy workbooks and the
+daily production of Gold, fits each model, and stores it. Training again stamps
+`superseded_at` on the model in force and inserts the new one, so a model is
+never overwritten, and a partial unique index keeps one model in force per key.
+The API reads the models in force for the web app's "Modelos" section;
+`reporting_reader` is granted nothing here.
+
 Every Gold row has a `coverage` between 0 and 1: the share of the period that is
 backed by reliable readings. Read it before trusting the value next to it. In
 `plant_daily_summary`, a positive `deviation_pct` means the plant used **more**
@@ -896,7 +912,8 @@ flowchart LR
     m7["0007<br/>staging<br/>4 tables: uploads<br/>while they are checked"]
     m8["0008<br/>staging<br/>reasons, corrections,<br/>1 table"]
     m9["0009<br/>staging<br/>the commit: committed drafts,<br/>what a load records"]
-    m1 --> m2 --> m3 --> m4 --> m5 --> m6 --> m7 --> m8 --> m9
+    m10["0010<br/>gold<br/>baseline_models:<br/>the energy models"]
+    m1 --> m2 --> m3 --> m4 --> m5 --> m6 --> m7 --> m8 --> m9 --> m10
 ```
 
 Revisions 0002, 0003 and 0004 were rewritten in place while the EQUS layers were
@@ -904,7 +921,7 @@ built. A database migrated before a rewrite is brought up to date by going down 
 the revision before the rewritten one and up again: for the Gold rewrite,
 `make db-downgrade` until `alembic current` says `0003`, then `make db-upgrade`.
 That leaves Bronze and Silver as they are, but it drops `gold`, closed months
-included. Revisions 0006 to 0009 were added as new files, so `make db-upgrade`
+included. Revisions 0006 to 0010 were added as new files, so `make db-upgrade`
 applies them to any database already at the revision before.
 
 ---

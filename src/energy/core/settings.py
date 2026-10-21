@@ -270,6 +270,8 @@ class DataSettings(BaseSettings):
         default=6, ge=1, validation_alias="DATA_FRESHNESS_MAX_LAG_HOURS"
     )
     config_dir: Path = Field(default=Path("config"), validation_alias="CONFIG_DIR")
+    #: The plant's energy workbooks, which the baseline models are trained on.
+    energy_data_dir: Path = Field(default=Path("data"), validation_alias="ENERGY_DATA_DIR")
 
     @field_validator("canonical_timezone")
     @classmethod

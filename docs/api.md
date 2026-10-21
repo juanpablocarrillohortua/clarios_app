@@ -113,7 +113,7 @@ to Microsoft with that account is usually not asked for the password again.
 
 | Role | May |
 |---|---|
-| `viewer` | See the dashboard, and ask the chat assistant on it |
+| `viewer` | See the dashboard, ask the chat assistant on it, and use the energy models |
 | `operator` | The above, and load data, see the history of every load (whoever made it, in the app or by a command), and read the dataset specs and download their templates. A file someone uploads is theirs alone until it is loaded: nobody else sees it, whatever their role |
 | `engineer`, `admin` | The same as `operator` today; more arrives with later features |
 | No role | Sign in, and nothing else. The app shows a page saying so |
@@ -220,6 +220,7 @@ flowchart LR
 | **Works, outside the API** | Power BI reading the equivalent batteries through the reporting views |
 | **Works** | Confirming a checked file, so that it lands in the database's evidence exactly once. A summary comes first: the rows, the period of an export, the warnings to accept and, for a catalogue, what changes from the version in force. Then the history of every load, the app's and the command line's, and each load in detail, with its original file to download. Built on 2026-10-18; seeing it as a signed-in user is still to be checked in a browser |
 | **Works** | Asking the chat assistant from the dashboard. It answers from simulated figures until the plant agrees to send real ones to OpenAI, and the API keeps nothing of a conversation. Built on 2026-10-19; seeing it as a signed-in user is still to be checked in a browser |
+| **Works** | The energy models: pick OREC by month, F&A by month or F&A by day, enter the production planned, and see the forecast, its place in the area's history, and the equation that produced it, term by term. The models are trained by a command on the server ([ADR 0012](adr/0012-the-app-shows-the-energy-baseline-models.md)). Built on 2026-10-20; seeing it as a signed-in user is still to be checked in a browser |
 | **Planned** | Checking files over 5 MB. Updating the figures after a load: until then Silver, Gold and the report are rebuilt by commands. Undoing a load, with a reason |
 | **Defined, not built** | Readings sent by the plant's devices |
 | **Built, outside the API** | The Power BI report shown inside the web app's dashboard. Built on 2026-10-13; seeing it as a signed-in user is still to be checked in a browser |
@@ -349,6 +350,9 @@ refused, and how the app and Entra ID take part.
 | `GET /api/loads/{run_id}` | `loads:write` | Built | One load: what it wrote and each sheet's rows, the original file, its validation and the warnings accepted, a catalogue's difference, and `draft_available`, whether the caller can still open its draft. 404 `unknown_load` |
 | `GET /api/loads/{run_id}/original` | `loads:write` | Built | The file the load came from, streamed from object storage under the name it was uploaded with, its bytes checked against its hash on the way. 404 `unknown_load` when Bronze catalogues no file for the load |
 | `POST /api/chat` | `chat:use` | Built | The assistant's answer to one question (body: `history`, the earlier messages, at most 200, and `question`, at most 4,000 characters), as plain text. Nothing is stored. 422 `empty_question` for a blank question, 502 `chat_model_unavailable` when the model does not answer, 503 `chat_not_configured` without a key ([chatbot-plan.md](chatbot-plan.md)) |
+| `GET /api/models` | `models:view` | Built | The energy baseline models in force ([ADR 0012](adr/0012-the-app-shows-the-energy-baseline-models.md)): each one's key, area, `granularity` (`month` or `day`), unit, when it was trained and on which window, and its validation WAPE and MASE. A model never trained is not listed |
+| `GET /api/models/{model_key}` | `models:view` | Built | One model in full: its sources, its equation, the intercept and every variable with its coefficient, HAC p-value, allowed and trained range and the value a forecast starts from; its training and validation figures and alert band; the period a forecast is for; and its history, each period with the real value and, in the validation window, the one-step forecast. 404 `unknown_model` for a key no model has, `model_not_trained` for one never trained |
+| `POST /api/models/{model_key}/forecast` | `models:view` | Built | The forecast of the model's next period for the values entered (body: `inputs`, one number per variable a person enters), with its 90 % band and every term of the equation, so it can be traced; and the variables outside the range the model was trained on. Nothing is stored. 422 `invalid_forecast_input` for an unknown, missing or out-of-range value |
 | `POST /api/ingest/readings` | Devices. Not enforced yet | Placeholder, Phase 3 | The accepted and rejected counts of a batch |
 | `GET /api/ingest/watermark/{plant_code}/{source_key}` | Devices. Not enforced yet | Placeholder, Phase 3 | The newest timestamp held for a plant and source |
 
@@ -363,6 +367,12 @@ refused, and how the app and Entra ID take part.
   it: Phase 4 removes the three routes and delivers the energy KPIs as
   reporting views. Until then they answer 501, and their rows stay in this
   table because the routes still exist.
+- **The three model routes serve figures, by exception.** [ADR
+  0012](adr/0012-the-app-shows-the-energy-baseline-models.md) amends ADR 0007
+  for them: a forecast answers values a person enters, which a report cannot.
+  The models are trained on the host by `make models-train` and kept in
+  `gold.baseline_models`; the API reads them and does the arithmetic of a
+  forecast in plain Python, with no statistics library.
 - **The device routes are not protected yet.** The watermark route asks for no
   credential. The readings route uses a stand-in from Phase 1
   (`deps.require_api_key`), which accepts a request without a key unless
@@ -914,6 +924,117 @@ it replaced (`sheets[].rows` is filled in the detail only)
 - **The service is built on the first question and kept.** Without a key, each
   question answers 503 and nothing is built.
 
+`GET /api/models/{model_key}`, for `orec_mensual`, cut to one period of its
+history. The figures are made up: they are the test suite's hand-made model.
+
+```json
+{
+  "key": "orec_mensual",
+  "area": "OREC",
+  "granularity": "month",
+  "target": "kwh",
+  "unit": "kWh",
+  "trained_at": "2026-10-20T12:00:00Z",
+  "training_start": "2026-04-01",
+  "training_end": "2026-06-01",
+  "n_training": 3,
+  "coverage": 1.0,
+  "validation_wape": 4.89,
+  "validation_mase": 0.48,
+  "sources": [
+    "data/Base_de_datos.xlsx, hoja OREC (fila total: KWH y Produccion (Equivalente))"
+  ],
+  "equation": "kwh = 100,000 + 5.00 * eq + 6,000 * (dias - 30)",
+  "intercept": 100000.0,
+  "intercept_p_value": 0.0001,
+  "intercept_significant": true,
+  "features": [
+    {
+      "name": "eq",
+      "kind": "numeric",
+      "entered": true,
+      "minimum": 0.0,
+      "maximum": null,
+      "reference": null,
+      "training_minimum": 40000.0,
+      "training_maximum": 90000.0,
+      "default": 70000.0,
+      "coefficient": 5.0,
+      "p_value": 1e-05,
+      "significant": true
+    },
+    {
+      "name": "dias",
+      "kind": "numeric",
+      "entered": true,
+      "minimum": 28.0,
+      "maximum": 31.0,
+      "reference": 30.0,
+      "training_minimum": 28.0,
+      "training_maximum": 31.0,
+      "default": 31.0,
+      "coefficient": 6000.0,
+      "p_value": 0.108,
+      "significant": false
+    }
+  ],
+  "metrics": {
+    "train_r2": 0.75,
+    "train_wape": 3.82,
+    "validation_r2": 0.91,
+    "validation_mae": 27085.0,
+    "validation_wape": 4.89,
+    "validation_mase": 0.48,
+    "naive_wape": 10.21,
+    "diebold_mariano_p": 0.027,
+    "alert_band": 50000.0,
+    "validation_periods": 2
+  },
+  "next_period": "2026-07-01",
+  "history": [
+    {
+      "period": "2026-06-01",
+      "actual": 500000.0,
+      "predicted": 501000.0,
+      "naive": 450000.0,
+      "inputs": { "eq": 80000.0, "dias": 30.0 }
+    }
+  ]
+}
+```
+
+`POST /api/models/{model_key}/forecast`, for `orec_mensual`, with the body
+`{"inputs": {"eq": 70000, "dias": 31}}`
+
+```json
+{
+  "key": "orec_mensual",
+  "unit": "kWh",
+  "period": "2026-07-01",
+  "prediction": 456000.0,
+  "low": 406000.0,
+  "high": 506000.0,
+  "intercept": 100000.0,
+  "terms": [
+    { "feature": "eq", "coefficient": 5.0, "value": 70000.0, "reference": null, "contribution": 350000.0 },
+    { "feature": "dias", "coefficient": 6000.0, "value": 31.0, "reference": 30.0, "contribution": 6000.0 }
+  ],
+  "per_unit": 6.514285714285714,
+  "outside_training": []
+}
+```
+
+- **Training and validation figures are kept apart.** Training figures
+  (`train_r2`, `train_wape`) are each validation fold's fit on its own
+  window, averaged; every other figure comes from one-step forecasts of
+  `TimeSeriesSplit` that never saw their own value.
+- **The prediction is the intercept plus the contributions,** and each
+  contribution is the coefficient times the value less its `reference`
+  (`dias` is measured from 30). The band is the prediction plus or minus
+  `alert_band`, never below zero.
+- **`sin_eq` of the daily model is never sent:** it is 1 exactly when `eq` is
+  0, and the API works it out (`entered` is `false`).
+
 ### 3. The three parties
 
 ```mermaid
@@ -1066,6 +1187,7 @@ permissions              what the caller may do
 | `dashboard:view` | `viewer`, `operator`, `engineer`, `admin` | The dashboard section of the app, and `/api/kpis/*` until Phase 4 removes it |
 | `loads:write` | `operator`, `engineer`, `admin` | `/api/datasets/*`, `/api/drafts/*`, `/api/loads/*`, the data-loading section of the app |
 | `chat:use` | `viewer`, `operator`, `engineer`, `admin` | `/api/chat`, and the assistant's panel on the dashboard |
+| `models:view` | `viewer`, `operator`, `engineer`, `admin` | `/api/models/*`, and the models section of the app |
 
 - **`dashboard:view` is navigation, not the protection of a figure.** It makes
   the app show the dashboard section. Who sees the report is decided in Power
@@ -1107,7 +1229,7 @@ developer; the app shows its own texts and reads only the status and the
 | 400 | The error's own, for example `invalid_time_window`, `invalid_filename` or `incomplete_upload` | A rule of the domain refused the request: any `EnergyError` without a row of its own | Envelope |
 | 401 | `unauthenticated` | No token, or a token that failed a check of section 5 | Envelope, with a fixed message and empty `details` |
 | 403 | `forbidden` | A valid token without the permission the route needs | Envelope; `details.permission` names it |
-| 404 | `entity_not_found`, or `unknown_dataset`, `unknown_draft` and `unknown_load` | A lookup by identifier found nothing. A draft of someone else answers the same, and so does the cleared list of a draft that is no correction to compare, or the difference of one that is no validated catalogue | Envelope |
+| 404 | `entity_not_found`, or `unknown_dataset`, `unknown_draft`, `unknown_load`, `unknown_model` and `model_not_trained` | A lookup by identifier found nothing. A draft of someone else answers the same, and so does the cleared list of a draft that is no correction to compare, or the difference of one that is no validated catalogue | Envelope |
 | 409 | `draft_busy` | A draft still arriving, failed, or being validated or committed by another request; a validation of a committed draft; or a correction of a draft whose own file never arrived | Envelope |
 | 409 | `not_validated`, `validation_changed`, `current_version_changed`, `already_loaded`, `dataset_busy`, `original_missing` | A commit refused because something changed since the confirmation: the draft is not validated (or is over 5 MiB), its validation differs from the digest sent, another load became the catalogue's current version, a completed load has the same file (`details.run_id`), another commit of the dataset held its lock for 10 seconds, or the archived original is gone. Nothing was written | Envelope |
 | 411 | `length_required` | An upload without `Content-Length` | Envelope |
@@ -1117,6 +1239,7 @@ developer; the app shows its own texts and reads only the status and the
 | 422 | | A parameter or the body failed validation | FastAPI's own: `{"detail": [ … ]}`, one entry per problem |
 | 422 | `draft_blocked`, `warnings_not_accepted`, `nothing_to_load` | A commit refused because the draft cannot land as it is: it has errors, its warnings were not accepted, or it has no rows. Nothing was written | Envelope |
 | 422 | `empty_question` | A question to the assistant that is blank | Envelope |
+| 422 | `invalid_forecast_input` | A forecast's value is unknown to the model, missing, not 0 or 1 where it must be, or out of range (`details` names it) | Envelope |
 | 500 | `commit_count_mismatch` | The rows a commit landed are not the rows staged. It is a bug, and the transaction was rolled back | Envelope |
 | 500 | | An error nobody foresaw. The log line `request failed` has the traceback and the request ID | Plain text, without the `X-Request-ID` header |
 | 501 | `not_implemented` | A placeholder endpoint, or a feature not built for this input (the validation of a draft over 5 MiB). The message names the phase or increment | Envelope |
@@ -1239,6 +1362,7 @@ sections 3 to 6 protect that one only. These are all of them:
 |---|---|---|---|
 | The API process, in the `api` container | The users of the web app | The application's own role, which owns every schema | Yes: token and permission |
 | The command line: `energy …`, the `make` targets that call it (`equs-load`, `equs-silver`, `refresh`, `resumen`, `close`, `report`, `powerbi`) and Alembic (`db-upgrade`) | An engineer with a shell on the machine that runs the stack | The same role. Each command runs in a container of the `api` image, started by `docker compose run`. It is not an HTTP request | No. Whoever may run `docker compose` on that machine may run them |
+| `make models-train` (`energy models train`), which trains the energy models | An engineer with a shell on the machine that runs the stack | The application's own role, from the host, through a relay to the database opened for the run on 127.0.0.1:5434 and removed after it | No |
 | `reporting-bridge`, for Power BI Desktop | Whoever holds the password of the login `powerbi`, on that machine | `SELECT` on the 12 views of schema `reporting`, in read-only sessions | No |
 | The same bridge, for the Power BI Service, through the on-premises data gateway | The people added to the gateway's connection | The same login | No |
 | The chat assistant's data tools, **only with `CHAT_DATA_SOURCE=database`**; the default, `simulated`, reads synthetic rows and touches no database ([chatbot-plan.md](chatbot-plan.md), ADR 0011) | An engineer running `make chat-ui` on the machine, and the web app's users through `POST /api/chat` | The reporting login: `SELECT` on the 12 views, in read-only transactions that are rolled back, with a time limit per query | No |

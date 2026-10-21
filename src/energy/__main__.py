@@ -16,7 +16,9 @@ Responsibility:
     of its own, ``reporting create-reader``, which gives a BI tool such as
     Power BI its read-only login, ``datasets check``, which checks the
     dataset specs as the API does when it starts, and ``drafts purge``, which
-    removes the web app's abandoned drafts. The other commands are
+    removes the web app's abandoned drafts, and ``models train`` and ``models
+    show``, which train the energy baseline models the web app shows and list
+    the ones in force (ADR 0012). The other commands are
     placeholders for the phase named in each, and are not registered until they
     are built.
 
@@ -27,7 +29,9 @@ Responsibility:
     ``close-month``, ``equs-report``): 0 success; 1 invalid arguments, or a
     request refused (a month already closed, a blocking data-quality check);
     2 a database error; 3 the refresh lock was not released in time.
-    ``reporting create-reader`` uses the same codes. A malformed command line
+    ``reporting create-reader`` and the ``models`` commands use the same codes
+    (1 also when a workbook cannot be read or the analytics extra is missing).
+    A malformed command line
     exits 1 too, rather than Click's usual 2, so that 2 always means the
     database.
 
@@ -51,6 +55,7 @@ import typer
 
 from energy.core.logging import configure_from_settings
 from energy.core.settings import get_settings
+from energy.domain.baseline_models import SPECS, ModelKey, describe_model
 from energy.domain.equs_gold import (
     COLUMN_H_FIELDS,
     REPORT_SOURCES,
@@ -67,6 +72,7 @@ from energy.domain.exceptions import (
 )
 from energy.domain.landing import DEFAULT_PLANT_CODE, LANDING_SOURCES, parse_sheet_spec
 from energy.domain.reporting import describe_reader
+from energy.pipelines.flows.baseline_models import current_models, train_models
 from energy.pipelines.flows.dataset_specs import read_dataset_specs
 from energy.pipelines.flows.drafts_purge import purge_drafts
 from energy.pipelines.flows.equs_bronze_load import (
@@ -806,6 +812,72 @@ def drafts_purge(
     )
 
 
+# =============================================================================
+# Energy baseline models (ADR 0012)
+# =============================================================================
+_MODEL_KEYS = ", ".join(SPECS)
+
+
+def models_train(
+    model: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--model",
+            help=f"Train only this model (repeatable): {_MODEL_KEYS}. Default: all.",
+        ),
+    ] = None,
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            help="The folder of the energy workbooks. Default: ENERGY_DATA_DIR.",
+            file_okay=False,
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Train and validate, and store nothing.")
+    ] = False,
+) -> None:
+    """Train the energy baseline models the web app shows, and store them in Gold.
+
+    Reads the energy workbooks and Gold's daily production, fits each model on
+    its window, validates it one step ahead with TimeSeriesSplit, and stores it
+    in gold.baseline_models, superseding the model in force. Needs the
+    analytics extra (scikit-learn, statsmodels).
+    """
+    try:
+        keys = [_model_key(value) for value in model] if model else None
+        trained = train_models(keys, data_dir=data_dir, dry_run=dry_run)
+    except EnergyError as error:
+        raise _stop(error) from error
+    for item in trained:
+        for line in describe_model(item):
+            typer.echo(line)
+    verb = "trained, not stored (dry run)" if dry_run else "trained and stored"
+    typer.echo(f"{len(trained)} model(s) {verb}.")
+
+
+def models_show() -> None:
+    """List the energy baseline models in force, with their equation and figures."""
+    try:
+        models = current_models()
+    except EnergyError as error:
+        raise _stop(error) from error
+    if not models:
+        typer.echo("No model has been trained: run `energy models train`.")
+    for item in models:
+        for line in describe_model(item):
+            typer.echo(line)
+
+
+def _model_key(value: str) -> ModelKey:
+    """Check one --model value."""
+    try:
+        return ModelKey(value)
+    except ValueError:
+        raise InvalidPeriodError(f"--model takes one of: {_MODEL_KEYS}", value=value) from None
+
+
 def build_app() -> typer.Typer:
     """Build the Typer application with every implemented command.
 
@@ -817,8 +889,10 @@ def build_app() -> typer.Typer:
         ``energy equs resumen-equ`` prints column H of a month,
         ``energy equs close-month`` freezes a month,
         ``energy reporting create-reader`` gives Power BI its read-only login,
-        ``energy datasets check`` checks the dataset specs and
-        ``energy drafts purge`` removes abandoned drafts.
+        ``energy datasets check`` checks the dataset specs,
+        ``energy drafts purge`` removes abandoned drafts, and
+        ``energy models train`` / ``energy models show`` train and list the
+        energy baseline models.
     """
     app = typer.Typer(
         name="energy",
@@ -862,6 +936,14 @@ def build_app() -> typer.Typer:
     )
     drafts.command("purge")(drafts_purge)
     app.add_typer(drafts, name="drafts")
+    models = typer.Typer(
+        help="The energy baseline models the web app shows (ADR 0012): train them "
+        "from the energy workbooks, and list the ones in force.",
+        no_args_is_help=True,
+    )
+    models.command("train")(models_train)
+    models.command("show")(models_show)
+    app.add_typer(models, name="models")
     return app
 
 

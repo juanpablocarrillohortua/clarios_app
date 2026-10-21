@@ -61,6 +61,7 @@ def test_the_table_says_what_each_role_may_do() -> None:
         Permission.DASHBOARD_VIEW: {Role.VIEWER, Role.OPERATOR, Role.ENGINEER, Role.ADMIN},
         Permission.LOADS_WRITE: {Role.OPERATOR, Role.ENGINEER, Role.ADMIN},
         Permission.CHAT_USE: {Role.VIEWER, Role.OPERATOR, Role.ENGINEER, Role.ADMIN},
+        Permission.MODELS_VIEW: {Role.VIEWER, Role.OPERATOR, Role.ENGINEER, Role.ADMIN},
     }
 
 
@@ -82,10 +83,10 @@ def test_the_table_cannot_be_changed_at_run_time() -> None:
 @pytest.mark.parametrize(
     ("role", "expected"),
     [
-        (Role.VIEWER, {Permission.DASHBOARD_VIEW, Permission.CHAT_USE}),
-        (Role.OPERATOR, {Permission.DASHBOARD_VIEW, Permission.LOADS_WRITE, Permission.CHAT_USE}),
-        (Role.ENGINEER, {Permission.DASHBOARD_VIEW, Permission.LOADS_WRITE, Permission.CHAT_USE}),
-        (Role.ADMIN, {Permission.DASHBOARD_VIEW, Permission.LOADS_WRITE, Permission.CHAT_USE}),
+        (Role.VIEWER, {Permission.DASHBOARD_VIEW, Permission.CHAT_USE, Permission.MODELS_VIEW}),
+        (Role.OPERATOR, set(Permission)),
+        (Role.ENGINEER, set(Permission)),
+        (Role.ADMIN, set(Permission)),
         (Role.DEVICE, set()),
     ],
 )
@@ -102,6 +103,7 @@ def test_permissions_add_up_across_roles() -> None:
         Permission.DASHBOARD_VIEW,
         Permission.LOADS_WRITE,
         Permission.CHAT_USE,
+        Permission.MODELS_VIEW,
     }
 
 

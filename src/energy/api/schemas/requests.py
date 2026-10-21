@@ -196,6 +196,23 @@ class ChatRequest(StrictModel):
     question: str = Field(max_length=MAX_QUESTION_CHARS)
 
 
+#: The most variables a forecast may name: every model has three or fewer.
+MAX_FORECAST_INPUTS: Final = 10
+
+
+class ForecastRequest(StrictModel):
+    """The values a person enters for a baseline model's forecast.
+
+    Attributes:
+        inputs: one value per variable the person enters, by name (``eq``,
+            ``dias`` or ``domingo``). Which names a model takes, and their
+            ranges, are in ``GET /models/{model_key}``; the service refuses
+            anything else with ``invalid_forecast_input`` (422).
+    """
+
+    inputs: dict[str, float] = Field(max_length=MAX_FORECAST_INPUTS)
+
+
 def parse_query_window(start: datetime, end: datetime) -> TimeRangeRequest:
     """Build a validated time range from two loose datetimes.
 
@@ -217,12 +234,14 @@ def parse_query_window(start: datetime, end: datetime) -> TimeRangeRequest:
 
 
 __all__ = [
+    "MAX_FORECAST_INPUTS",
     "MAX_QUESTION_CHARS",
     "MAX_TURN_CHARS",
     "BackfillRequest",
     "ChatRequest",
     "ChatTurn",
     "CommitDraftRequest",
+    "ForecastRequest",
     "Granularity",
     "KPIQueryRequest",
     "SensorBatchRequest",

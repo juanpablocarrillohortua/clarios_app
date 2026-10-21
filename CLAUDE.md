@@ -52,6 +52,12 @@ over the `reporting` views, on simulated data by default, `CHAT_DATA_SOURCE`)
 are built; phase 3 (a round button on the dashboard, `POST /api/chat`) is built
 and waits for the owner's check in a signed-in browser.
 
+**Energy models.** A section "Modelos" of the web app (built 2026-10-20,
+[ADR 0012](docs/adr/0012-the-app-shows-the-energy-baseline-models.md), Proposed):
+three baseline models of energy from production, from section 7 of
+`notebooks/further_search.ipynb`, trained on the host (`make models-train`)
+into `gold.baseline_models` (revision `0010`) and served by `/api/models`.
+
 **Web app.** `frontend/` is a React single-page app (TypeScript, Vite) that Caddy
 serves at `/`; Dash moved to `/dash/`. It is built in the increments of
 [docs/frontend-plan.md](docs/frontend-plan.md): increment 0 (decisions),
@@ -1032,6 +1038,70 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
   - **After "Enviar" the focus goes back to the box:** the button turns
     disabled while the answer comes, and a disabled button drops the focus to
     the page, where Escape no longer reaches the panel.
+
+**Energy baseline models** (built 2026-10-20; revision `0010`, [ADR 0012](docs/adr/0012-the-app-shows-the-energy-baseline-models.md)):
+
+- **An exception to ADR 0007, and only this one.** `GET /api/models`,
+  `GET /api/models/{model_key}` and `POST /api/models/{model_key}/forecast`
+  serve figures, behind `models:view` (viewer, operator, engineer, admin).
+  KPIs still go through Power BI.
+- **Three models, no Ensamble** (its R² is too low): `orec_mensual` (last 36
+  months), `fa_mensual` (all history), `fa_diario` (rectifiers, by day).
+  `domain/baseline_models.py` (`SPECS`) holds them, with the forecast's
+  arithmetic, the input checks and the defaults; nothing else may compute a
+  forecast. `sin_eq` is derived from `eq`, never entered. `dias` is measured
+  from 30 in the equation (`intercept_at_reference`); the fit centres it on
+  its training mean, which changes no prediction.
+- **Training runs on the host,** never in the api image: the energy is in the
+  workbooks of `data/` (`ENERGY_DATA_DIR`), never loaded into the database, and
+  the fit needs the `analytics` extra. `make models-train [MODEL=key]
+  [DRY_RUN=1]` opens a relay to `db` on 127.0.0.1:5434 (`alpine/socat`) for the
+  run and removes it, whatever happens; `make models-show` lists the models in
+  force.
+- **`adapters/sklearn_baseline_trainer.py` is the only module that imports
+  scikit-learn or statsmodels,** and the flow imports it lazily. CI installs
+  no extras, so `tests/unit/test_sklearn_baseline_trainer.py` is skipped
+  there (`importorskip`), and so is the trainer's entry in the import sweep
+  of `test_architecture.py` (`OPTIONAL_EXTRAS`): two more skips than
+  locally. Diebold-Mariano with the
+  Harvey correction, one step ahead, is computed as the one-sample t-test of
+  the squared-error differences (statsmodels' `DescrStatsW`): scipy is not
+  imported, because mypy has no override for it and CI does not have it.
+- **The trainer is the notebook's:** a `ColumnTransformer` →
+  `LinearRegression` pipeline, `TimeSeriesSplit(n_splits=24 or 30,
+  test_size=1, max_train_size=window)`, HAC p-values from statsmodels on the
+  pipeline's own columns (3 lags monthly, 7 daily), alert band 1.645 × the
+  standard deviation of the validation errors. Training and validation
+  figures are always kept apart. On 2026-10-20 the monthly models matched the
+  notebook to the last digit (OREC 4.79 kWh/EQ, 4.89 % WAPE; F&A 16.78,
+  4.72 %).
+- **The daily model does not interpolate** the days without SCADA readings,
+  which the notebook did (3 of 91): 15.24 kWh/EQ and 12.35 % WAPE instead of
+  15.39 and 12.28 %. Do not add the interpolation back: it trains on
+  invented days.
+- **Daily production comes from Gold** (`PostgresDailyProduction`): the rule
+  rows of `v_reporte_qad_regla` and `v_unit_ship_regla` times
+  `silver.factores_equ`, FORMACION + DECORADO, every day from the first
+  movement to the last, zero on a day without production. A test in
+  `test_equs_gold_rules.py` keeps its months equal to `v_equs_batt_mes`.
+- **The store supersedes, never overwrites;** a partial unique index keeps
+  one model in force per key. A stored model whose variables differ from its
+  spec in the code is not served: train again after changing a spec.
+- **In the app** (`frontend/src/models/`): the chart is hand-drawn SVG, no
+  chart library. The scenario's point and band move by CSS `transform` on
+  `--ce-ease-spring` (attributes would jump). The forecast is asked 120 ms
+  after the last change (`useDebouncedValue`), with `keepPreviousData`.
+  Model and variable names are keys of `es.json` (`models.names`,
+  `models.predicts`, `models.features`), looked up by `models/texts.ts`; a
+  test of the API fails for a model or variable without its texts. The test
+  fixtures `viewer` and `operator` carry `models:view`. A Mantine `Switch`
+  with a `description` puts it in the accessible name: the description is
+  a separate text with `aria-describedby`.
+- **The test database container can need 90 s to start** on this machine
+  with the stack up (2026-10-20). When the 120 s limit skips every database
+  test, start a TimescaleDB container by hand with a published port and run
+  pytest with `DATABASE_URL` pointing at it: the fixtures use a reachable
+  `DATABASE_URL` instead of starting their own.
 
 **EQUS Bronze loader** (built 2026-10-07):
 

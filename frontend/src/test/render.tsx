@@ -63,8 +63,11 @@ export function person(roles: string[], permissions: string[]): Me {
 // What GET /api/me answers for each kind of user. The permissions are written
 // out because the app must take them as given: it holds no rule that derives
 // them from a role.
-export const viewer = person(["viewer"], ["chat:use", "dashboard:view"]);
-export const operator = person(["operator"], ["chat:use", "dashboard:view", "loads:write"]);
+export const viewer = person(["viewer"], ["chat:use", "dashboard:view", "models:view"]);
+export const operator = person(
+  ["operator"],
+  ["chat:use", "dashboard:view", "loads:write", "models:view"],
+);
 export const noRole = person([], []);
 
 export interface FakeAuthClient extends AuthClient {

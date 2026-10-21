@@ -177,6 +177,17 @@ class QueryRefusedError(DomainRuleError):
     code = "query_refused"
 
 
+class InvalidForecastInputError(DomainRuleError):
+    """Raised when the values entered for a model's forecast cannot be used.
+
+    A variable is unknown to the model or missing, not a number, a 0/1 variable
+    holds something else, or a value is outside what the variable allows (the
+    days of a month are 28 to 31). The API answers 422.
+    """
+
+    code = "invalid_forecast_input"
+
+
 # -----------------------------------------------------------------------------
 # Chat assistant
 # -----------------------------------------------------------------------------
@@ -341,6 +352,21 @@ class UnknownLoadError(EntityNotFoundError):
     """Raised when no load of the caller's plants has that run ID. The API answers 404."""
 
     code = "unknown_load"
+
+
+class UnknownModelError(EntityNotFoundError):
+    """Raised when no baseline model has the requested key. The API answers 404."""
+
+    code = "unknown_model"
+
+
+class ModelNotTrainedError(EntityNotFoundError):
+    """Raised when a baseline model exists but has never been trained.
+
+    ``energy models train`` (``make models-train``) trains it. The API answers 404.
+    """
+
+    code = "model_not_trained"
 
 
 class CommitCountMismatchError(RepositoryError):
@@ -559,11 +585,13 @@ __all__ = [
     "IncompleteUploadError",
     "IngestionError",
     "InvalidFilenameError",
+    "InvalidForecastInputError",
     "InvalidPeriodError",
     "InvalidTimeWindowError",
     "LengthRequiredError",
     "LockTimeoutError",
     "MissingRelationError",
+    "ModelNotTrainedError",
     "NaiveDatetimeError",
     "NegativeEnergyError",
     "NotValidatedError",
@@ -584,6 +612,7 @@ __all__ = [
     "UnknownDraftError",
     "UnknownKPIError",
     "UnknownLoadError",
+    "UnknownModelError",
     "UnknownSourceError",
     "UnsupportedFileFormatError",
     "UploadAbortedError",
