@@ -55,6 +55,13 @@ COMPOSITION_ROOTS: dict[str, frozenset[str]] = {
     "api/deps.py": frozenset({"adapters"}),
 }
 
+# Modules that need an optional extra of pyproject.toml. CI installs no extras,
+# so the sweep skips such a module where its extra is missing instead of
+# failing. Only the extras' own adapters belong here.
+OPTIONAL_EXTRAS: dict[str, tuple[str, ...]] = {
+    "energy.adapters.sklearn_baseline_trainer": ("sklearn", "statsmodels"),
+}
+
 
 def _iter_modules() -> list[str]:
     """Return every importable module name under ``energy``."""
@@ -105,7 +112,16 @@ ALL_SOURCE_FILES = sorted(SRC_ROOT.rglob("*.py"))
 @pytest.mark.parametrize("module_name", ALL_MODULES)
 def test_module_imports_cleanly(module_name: str) -> None:
     """Every module under `energy` imports without error."""
+    for dependency in OPTIONAL_EXTRAS.get(module_name, ()):
+        pytest.importorskip(dependency)
     importlib.import_module(module_name)
+
+
+@pytest.mark.unit
+def test_optional_extras_name_real_modules() -> None:
+    """A module exempted for its extra still exists, so no exemption goes stale."""
+    stale = sorted(set(OPTIONAL_EXTRAS) - set(ALL_MODULES))
+    assert not stale, f"OPTIONAL_EXTRAS names modules that do not exist: {stale}"
 
 
 @pytest.mark.unit

@@ -1061,7 +1061,9 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
 - **`adapters/sklearn_baseline_trainer.py` is the only module that imports
   scikit-learn or statsmodels,** and the flow imports it lazily. CI installs
   no extras, so `tests/unit/test_sklearn_baseline_trainer.py` is skipped
-  there (`importorskip`): one more skip than locally. Diebold-Mariano with the
+  there (`importorskip`), and so is the trainer's entry in the import sweep
+  of `test_architecture.py` (`OPTIONAL_EXTRAS`): two more skips than
+  locally. Diebold-Mariano with the
   Harvey correction, one step ahead, is computed as the one-sample t-test of
   the squared-error differences (statsmodels' `DescrStatsW`): scipy is not
   imported, because mypy has no override for it and CI does not have it.
