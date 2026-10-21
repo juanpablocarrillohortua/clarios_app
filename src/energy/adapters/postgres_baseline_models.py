@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 FA_PROCESSES: Final = ("FORMACION", "DECORADO")
 
 # Every f-string below interpolates module constants only. Values travel as
-# bound parameters. Hence the S608 suppressions.
+# bound parameters. Hence the S608 / B608 suppressions.
 _TABLE: Final = f"{GOLD_SCHEMA}.baseline_models"
 
 _COLUMNS: Final = (
@@ -59,12 +59,12 @@ _COLUMNS: Final = (
 )
 
 _SUPERSEDE: Final = text(
-    f"UPDATE {_TABLE} SET superseded_at = now()"  # noqa: S608
+    f"UPDATE {_TABLE} SET superseded_at = now()"  # noqa: S608  # nosec B608
     " WHERE model_key = :model_key AND superseded_at IS NULL"
 )
 
 _INSERT: Final = text(
-    f"INSERT INTO {_TABLE} (model_key, spec, coefficients, metrics, history,"  # noqa: S608
+    f"INSERT INTO {_TABLE} (model_key, spec, coefficients, metrics, history,"  # noqa: S608  # nosec B608
     " feature_ranges, training_start, training_end, n_training, coverage)"
     " VALUES (:model_key, CAST(:spec AS jsonb), CAST(:coefficients AS jsonb),"
     " CAST(:metrics AS jsonb), CAST(:history AS jsonb), CAST(:feature_ranges AS jsonb),"
@@ -73,12 +73,12 @@ _INSERT: Final = text(
 )
 
 _CURRENT: Final = text(
-    f"SELECT {_COLUMNS} FROM {_TABLE}"  # noqa: S608
+    f"SELECT {_COLUMNS} FROM {_TABLE}"  # noqa: S608  # nosec B608
     " WHERE superseded_at IS NULL AND model_key = :model_key"
 )
 
 _ALL_CURRENT: Final = text(
-    f"SELECT {_COLUMNS} FROM {_TABLE}"  # noqa: S608
+    f"SELECT {_COLUMNS} FROM {_TABLE}"  # noqa: S608  # nosec B608
     " WHERE superseded_at IS NULL ORDER BY model_key"
 )
 
@@ -100,7 +100,7 @@ _DAILY_PRODUCTION: Final = text(
       ON factor.version = pareja.version AND factor.cuenta_stats = pareja.cuenta_stats
     WHERE pareja.en_vigor
     GROUP BY pareja.fecha_efectiva
-    """  # noqa: S608
+    """  # noqa: S608  # nosec B608
 ).bindparams(bindparam("processes", expanding=True))
 
 
