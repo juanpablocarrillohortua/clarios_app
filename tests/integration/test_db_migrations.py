@@ -133,7 +133,13 @@ EXPECTED_TABLES: dict[str, set[str]] = {
     "reference": {"plants", "meters", "shifts", "targets"},
     BRONZE_SCHEMA: {"raw_readings", "ingestion_runs", "raw_files", *LANDING_TABLES},
     SILVER_SCHEMA: {*ENERGY_SILVER_TABLES, *EQUS_SILVER_TABLES},
-    GOLD_SCHEMA: {"kpi_hourly", "kpi_daily", "plant_daily_summary", *EQUS_GOLD_TABLES},
+    GOLD_SCHEMA: {
+        "kpi_hourly",
+        "kpi_daily",
+        "plant_daily_summary",
+        "baseline_models",
+        *EQUS_GOLD_TABLES,
+    },
     STAGING_SCHEMA: {
         "drafts",
         "draft_rows",
@@ -186,7 +192,7 @@ def test_migrations_apply_to_head(migrated_engine: Engine) -> None:
         version = connection.execute(
             text("SELECT version_num FROM public.alembic_version")
         ).scalar_one()
-    assert version == "0009"
+    assert version == "0010"
 
 
 def test_all_schemas_exist(migrated_engine: Engine) -> None:
@@ -1307,7 +1313,7 @@ def test_gold_downgrades_to_silver_and_up_again(database_url: str) -> None:
             version = connection.execute(
                 text("SELECT version_num FROM public.alembic_version")
             ).scalar_one()
-        assert version == "0009"
+        assert version == "0010"
     finally:
         with engine.begin() as connection:
             for schema in reversed(ALL_SCHEMAS):
@@ -1354,7 +1360,7 @@ def test_staging_reasons_downgrade_to_0007_and_up_again(database_url: str) -> No
             version = connection.execute(
                 text("SELECT version_num FROM public.alembic_version")
             ).scalar_one()
-        assert version == "0009"
+        assert version == "0010"
     finally:
         with engine.begin() as connection:
             for schema in reversed(ALL_SCHEMAS):
@@ -1590,7 +1596,7 @@ def test_staging_commit_downgrades_to_0008_and_up_again(database_url: str) -> No
             version = connection.execute(
                 text("SELECT version_num FROM public.alembic_version")
             ).scalar_one()
-        assert version == "0009"
+        assert version == "0010"
     finally:
         with engine.begin() as connection:
             for schema in reversed(ALL_SCHEMAS):

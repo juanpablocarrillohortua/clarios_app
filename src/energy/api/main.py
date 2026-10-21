@@ -19,6 +19,8 @@ policy can be read in one place:
 - ``/datasets`` needs ``loads:write``: dataset specs serve loading data;
 - ``/drafts`` needs ``loads:write`` too: files uploaded to be loaded;
 - ``/chat`` needs ``chat:use``: questions to the assistant;
+- ``/models`` needs ``models:view``: the energy baseline models and their
+  forecasts (ADR 0012);
 - ``/me`` needs a signed-in person;
 - every other router is mounted with the permission it needs;
 - ``/ingest`` is for devices and keeps its API key (:data:`DEVICE_PATH_PREFIX`).
@@ -50,6 +52,7 @@ from energy.api.routers import (
     kpis,
     loads,
     me,
+    models,
 )
 from energy.api.security import Permission
 from energy.core.logging import configure_from_settings, get_logger
@@ -71,6 +74,7 @@ from energy.domain.exceptions import (
     EntityNotFoundError,
     FileTooLargeError,
     IdentityProviderUnavailableError,
+    InvalidForecastInputError,
     LengthRequiredError,
     NothingToLoadError,
     NotValidatedError,
@@ -115,6 +119,10 @@ TAGS_METADATA = [
         "description": "What landed in Bronze: the history, and each load in detail.",
     },
     {"name": "chat", "description": "Questions to the assistant. Nothing is stored."},
+    {
+        "name": "models",
+        "description": "The energy baseline models, and forecasts with them (ADR 0012).",
+    },
 ]
 
 #: Domain errors that have an HTTP status of their own. Anything else the
@@ -136,6 +144,7 @@ _STATUS_OF: Final[dict[type[EnergyError], int]] = {
     UnsupportedFileFormatError: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
     SourceUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
     EmptyQuestionError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    InvalidForecastInputError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     ChatModelUnavailableError: status.HTTP_502_BAD_GATEWAY,
     ChatNotConfiguredError: status.HTTP_503_SERVICE_UNAVAILABLE,
 }
@@ -314,11 +323,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     may_view = [Depends(requires(Permission.DASHBOARD_VIEW))]
     may_load = [Depends(requires(Permission.LOADS_WRITE))]
     may_chat = [Depends(requires(Permission.CHAT_USE))]
+    may_model = [Depends(requires(Permission.MODELS_VIEW))]
     app.include_router(kpis.router, dependencies=may_view)
     app.include_router(datasets.router, dependencies=may_load)
     app.include_router(drafts.router, dependencies=may_load)
     app.include_router(loads.router, dependencies=may_load)
     app.include_router(chat.router, dependencies=may_chat)
+    app.include_router(models.router, dependencies=may_model)
     # Devices, by API key (Phase 3).
     app.include_router(ingest.router)
 

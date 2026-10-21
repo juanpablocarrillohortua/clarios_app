@@ -1,5 +1,5 @@
 // The shell and its routes, exercised through what a signed-in user sees and
-// clicks. The user here is an operator, who may open both sections; what other
+// clicks. The user here is an operator, who may open every section; what other
 // users see is in auth/Session.test.tsx.
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -36,13 +36,14 @@ describe("the app shell", () => {
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(es.app.name);
   });
 
-  it("links to the two sections from the navigation", async () => {
+  it("links to the three sections from the navigation", async () => {
     renderAppAt(paths.dashboard);
 
     const links = within(await navigation()).getAllByRole("link");
 
     expect(links.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
       [es.nav.dashboard, paths.dashboard],
+      [es.nav.models, paths.models],
       [es.nav.loads, paths.loads],
     ]);
   });
@@ -102,6 +103,7 @@ describe("the app shell on a wide screen", () => {
 
     expect(links.getAllByRole("link").map((link) => link.textContent)).toEqual([
       es.nav.dashboard,
+      es.nav.models,
       es.nav.loads,
     ]);
     expect(links.getByRole("link", { name: es.nav.loads })).toHaveAttribute("aria-current", "page");

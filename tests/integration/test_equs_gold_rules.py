@@ -23,7 +23,8 @@ import shutil
 import subprocess
 import sys
 import threading
-from datetime import date
+from collections import defaultdict
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -33,6 +34,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 
+from energy.adapters.postgres_baseline_models import PostgresDailyProduction
 from energy.core.settings import get_settings
 from energy.domain.exceptions import (
     CloseRefusedError,
@@ -327,6 +329,34 @@ def _subsection(report: dict[str, Any], cuenta: str) -> dict[str, Any]:
 
 class TestGoldViews:
     """The calculation views, the data-quality views and the date-range report."""
+
+    def test_the_daily_production_of_fa_adds_up_to_gold_by_month(self, seeded: Engine) -> None:
+        """The daily EQ the baseline models train on (ADR 0012) is Gold's, day by day.
+
+        Every day from the first movement to the last is there, a day without
+        production as zero, and the days of each month add up to FORMACION +
+        DECORADO of ``gold.v_equs_batt_mes``.
+        """
+        days = PostgresDailyProduction(seeded)()
+
+        assert days
+        first, last = min(days), max(days)
+        assert len(days) == (last - first).days + 1
+        assert all(first + timedelta(days=offset) in days for offset in range(len(days)))
+        by_month: defaultdict[date, float] = defaultdict(float)
+        for day, eq in days.items():
+            by_month[day.replace(day=1)] += eq
+        with seeded.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT mes, coalesce(equs_formacion, 0) + coalesce(equs_decorado, 0) AS fa"
+                    " FROM gold.v_equs_batt_mes"
+                )
+            ).all()
+        gold = {row.mes: float(row.fa) for row in rows}
+        assert any(eq > 0 for eq in by_month.values())
+        for month, eq in by_month.items():
+            assert eq == pytest.approx(gold.get(month, 0.0)), month
 
     def test_the_receipts_carry_the_columns_the_workbook_calculates(
         self, connection: Connection

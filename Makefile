@@ -75,7 +75,7 @@ endif
         security test test-unit test-integration check db-upgrade db-downgrade \
         db-revision db-reset seed equs-load equs-silver refresh refresh-all resumen \
         close report powerbi powerbi-down frontend-install frontend-check \
-        frontend-format frontend-dev chat-ui clean
+        frontend-format frontend-dev chat-ui models-train models-show clean
 
 # -----------------------------------------------------------------------------
 # Meta
@@ -242,6 +242,32 @@ powerbi-down: ## Close the reporting port opened by make powerbi
 chat-ui: ## The assistant's development page on the host, at http://localhost:8501 (needs CHAT_API_KEY)
 	$(UV) run --extra chat-ui streamlit run scripts/chat_streamlit.py \
 		--server.headless true --server.address 127.0.0.1 --browser.gatherUsageStats false
+
+# -----------------------------------------------------------------------------
+# Energy baseline models (ADR 0012). Training reads the energy workbooks of
+# data/ (ENERGY_DATA_DIR) and needs scikit-learn and statsmodels (the analytics
+# extra); the api image has neither, so it runs on the host. The database
+# publishes no port, so a short-lived relay (alpine/socat) opens
+# 127.0.0.1:$(MODELS_RELAY_PORT) to it for the run and is removed afterwards,
+# whatever happens. The API reads the models from gold.baseline_models.
+# -----------------------------------------------------------------------------
+MODELS_RELAY := clarios-models-relay
+MODELS_RELAY_PORT ?= 5434
+MODELS_NETWORK ?= $(or $(COMPOSE_PROJECT_NAME),clarios-energy)_backend
+MODELS_ENERGY = DATABASE_URL= POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=$(MODELS_RELAY_PORT) $(PY) energy
+
+models-train: ## Train the energy baseline models on the host and store them in Gold [MODEL=key] [DRY_RUN=1]
+	@docker run --rm -d --name $(MODELS_RELAY) --network $(MODELS_NETWORK) \
+		-p 127.0.0.1:$(MODELS_RELAY_PORT):5432 alpine/socat \
+		TCP-LISTEN:5432,fork,reuseaddr TCP:db:5432 >/dev/null
+	@trap 'docker stop $(MODELS_RELAY) >/dev/null' EXIT; \
+		$(MODELS_ENERGY) models train $(if $(MODEL),--model $(MODEL)) $(if $(filter 1 yes true,$(DRY_RUN)),--dry-run)
+
+models-show: ## List the energy baseline models in force
+	@docker run --rm -d --name $(MODELS_RELAY) --network $(MODELS_NETWORK) \
+		-p 127.0.0.1:$(MODELS_RELAY_PORT):5432 alpine/socat \
+		TCP-LISTEN:5432,fork,reuseaddr TCP:db:5432 >/dev/null
+	@trap 'docker stop $(MODELS_RELAY) >/dev/null' EXIT; $(MODELS_ENERGY) models show
 
 # -----------------------------------------------------------------------------
 # Housekeeping

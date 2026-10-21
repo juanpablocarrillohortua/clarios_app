@@ -84,13 +84,16 @@ describe("a visitor who is not signed in", () => {
 });
 
 describe("a viewer", () => {
-  it("sees the dashboard and no entry for data loading", async () => {
+  it("sees the dashboard and the models, and no entry for data loading", async () => {
     stubApi({ me: viewer });
     renderAppAt("/");
 
     expect(await sectionHeading()).toHaveTextContent(es.dashboard.title);
     const links = within(screen.getByRole("navigation", { name: es.nav.label }));
-    expect(links.getAllByRole("link").map((link) => link.textContent)).toEqual([es.nav.dashboard]);
+    expect(links.getAllByRole("link").map((link) => link.textContent)).toEqual([
+      es.nav.dashboard,
+      es.nav.models,
+    ]);
   });
 
   it("cannot open data loading by its address", async () => {

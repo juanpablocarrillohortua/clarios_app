@@ -158,7 +158,7 @@
   --ce-accent-amber: var(--ce-amber);
 
   /* Data: the report's theme order for series, and its heat-map scale. The
-     app draws no chart yet. */
+     models' chart (frontend/src/models) draws with them. */
   --ce-chart-1: var(--ce-blue);
   --ce-chart-2: var(--ce-purple);
   --ce-chart-3: var(--ce-cyan);

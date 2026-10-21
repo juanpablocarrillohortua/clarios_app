@@ -1,0 +1,291 @@
+/*
+ * The models' section: the forecast and its scenario, the chart, the equation
+ * and what each variable means. Every value comes from tokens.css.
+ *
+ * Motion is the app's spring, on transform and opacity only. A changed model
+ * fades in where it stands; the scenario's point moves from where it is on
+ * screen to its new place, so typing again while it moves redirects it.
+ */
+
+/* A model's view arrives as a material does: up a little, and in. */
+.view {
+  animation: arrive var(--ce-duration-spring) var(--ce-ease-spring) both;
+}
+
+@keyframes arrive {
+  from {
+    opacity: 0;
+    transform: translateY(var(--ce-enter-offset));
+  }
+}
+
+.predicts {
+  max-width: 68ch;
+  color: var(--ce-text-secondary);
+  line-height: var(--ce-leading-body);
+}
+
+/* The forecast ---------------------------------------------------------------- */
+
+.eyebrow {
+  color: var(--ce-text-muted);
+  font-size: var(--mantine-font-size-xs);
+  font-weight: 600;
+  letter-spacing: var(--ce-tracking-small);
+  text-transform: uppercase;
+}
+
+.figure {
+  margin: 0;
+  color: var(--ce-text);
+  font-size: clamp(2.25rem, 1.6rem + 2.4vw, 3.25rem);
+  font-weight: var(--ce-weight-title);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--ce-leading-title);
+  letter-spacing: var(--ce-tracking-display);
+  transition: opacity var(--ce-duration-fade) var(--ce-ease-out);
+}
+
+/* While the next forecast is on its way the last one stays, dimmed a little. */
+.figure[data-updating] {
+  opacity: 0.72;
+}
+
+.unit {
+  margin-inline-start: 0.35em;
+  color: var(--ce-text-secondary);
+  font-size: 0.45em;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.numbers {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The chart ------------------------------------------------------------------- */
+
+.chart {
+  position: relative;
+  container-type: inline-size;
+}
+
+.chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: pan-y;
+  overflow: visible;
+}
+
+.gridLine {
+  stroke: var(--ce-hairline);
+  stroke-width: 1;
+}
+
+.axisText {
+  fill: var(--ce-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.actualLine,
+.validationLine {
+  fill: none;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.actualLine {
+  stroke: var(--ce-chart-1);
+  stroke-width: 2.25;
+}
+
+.validationLine {
+  stroke: var(--ce-chart-3);
+  stroke-width: 1.75;
+  stroke-dasharray: 5 4;
+}
+
+.band {
+  fill: color-mix(in srgb, var(--ce-chart-3) 16%, transparent);
+  stroke: none;
+}
+
+.scenarioDivider {
+  stroke: var(--ce-border);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+
+/* The scenario's band and point: moved by transform, on the spring. */
+.scenarioBand,
+.scenarioPoint {
+  transform-box: view-box;
+  transform-origin: 0 0;
+  transition: transform var(--ce-duration-spring) var(--ce-ease-spring);
+  will-change: transform;
+}
+
+.scenarioBand {
+  fill: color-mix(in srgb, var(--ce-accent) 32%, transparent);
+}
+
+.scenarioPoint {
+  fill: var(--ce-accent);
+  stroke: var(--ce-surface);
+  stroke-width: 2;
+}
+
+.crosshair {
+  stroke: var(--ce-border-control);
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.tooltip {
+  position: absolute;
+  top: 0.5rem;
+  display: grid;
+  gap: 0.15rem;
+  min-width: 11rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--ce-border);
+  border-radius: var(--ce-radius-sm);
+  background-color: var(--ce-material);
+  backdrop-filter: var(--ce-material-blur);
+  box-shadow: var(--ce-glow-panel);
+  color: var(--ce-text);
+  font-size: var(--mantine-font-size-xs);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.tooltip[data-side="right"] {
+  transform: translateX(0.75rem);
+}
+
+.tooltip[data-side="left"] {
+  transform: translateX(calc(-100% - 0.75rem));
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ce-text-secondary);
+  font-size: var(--mantine-font-size-xs);
+}
+
+.legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* Each series' mark: a line, a dashed line, a swatch, a dot. Never colour alone. */
+.legend li::before {
+  content: "";
+  display: inline-block;
+  width: 1.25rem;
+  height: 0;
+  border-top: 2px solid var(--ce-chart-1);
+}
+
+.legend li[data-series="validation"]::before {
+  border-top: 2px dashed var(--ce-chart-3);
+}
+
+.legend li[data-series="band"]::before {
+  height: 0.6rem;
+  border: 0;
+  border-radius: var(--ce-radius-xs);
+  background-color: color-mix(in srgb, var(--ce-chart-3) 16%, transparent);
+}
+
+.legend li[data-series="scenario"]::before {
+  width: 0.6rem;
+  height: 0.6rem;
+  border: 0;
+  border-radius: var(--ce-radius-pill);
+  background-color: var(--ce-accent);
+}
+
+/* The equation ---------------------------------------------------------------- */
+
+.equation {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--ce-hairline);
+  border-radius: var(--ce-radius-sm);
+  background-color: var(--ce-surface-sunken);
+  color: var(--ce-text);
+  font-family: var(--ce-font-mono);
+  font-size: var(--mantine-font-size-sm);
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.terms td,
+.terms th {
+  font-variant-numeric: tabular-nums;
+}
+
+.terms td[data-numeric],
+.terms th[data-numeric] {
+  text-align: end;
+}
+
+.terms tr[data-total] td {
+  border-top: 1px solid var(--ce-border);
+  color: var(--ce-text);
+  font-weight: 600;
+}
+
+.term {
+  border-bottom: 1px dotted var(--ce-text-muted);
+  cursor: help;
+}
+
+/* What each variable means ------------------------------------------------------ */
+
+.glossary {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+}
+
+.glossary dt {
+  color: var(--ce-text);
+  font-weight: 600;
+}
+
+.glossary dd {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0 0 0.25rem;
+  color: var(--ce-text-secondary);
+  line-height: var(--ce-leading-body);
+}
+
+.effect {
+  color: var(--ce-text);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view {
+    animation-name: fade;
+  }
+
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
+  }
+}

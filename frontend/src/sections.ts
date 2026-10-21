@@ -5,6 +5,7 @@ import { paths } from "./paths";
 
 export const sections = [
   { path: paths.dashboard, label: "nav.dashboard", permission: "dashboard:view" },
+  { path: paths.models, label: "nav.models", permission: "models:view" },
   { path: paths.loads, label: "nav.loads", permission: "loads:write" },
 ] as const;
 

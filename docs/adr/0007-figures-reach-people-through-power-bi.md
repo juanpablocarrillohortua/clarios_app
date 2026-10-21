@@ -7,7 +7,10 @@
   `/api/loads/{run_id}`, with the rows of each sheet and the period it
   covered ([ADR 0010](0010-a-draft-is-committed-once-in-one-transaction.md)).
   Proposed amendment: [ADR 0011](0011-the-assistant-reads-the-reporting-views.md)
-  lets the chat assistant read the same `reporting` views (2026-10-19)
+  lets the chat assistant read the same `reporting` views (2026-10-19).
+  Proposed amendment: [ADR 0012](0012-the-app-shows-the-energy-baseline-models.md)
+  lets the API serve the energy baseline models and their forecasts to
+  the web app (2026-10-20)
 - **Date:** 2026-10-13
 - **Deciders:** Platform team
 

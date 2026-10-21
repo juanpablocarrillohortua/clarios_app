@@ -3,6 +3,8 @@
 // /minio and /prefect. Do not add a section under one of those.
 export const paths = {
   dashboard: "/dashboard",
+  // The energy baseline models, and forecasts with them (ADR 0012).
+  models: "/models",
   loads: "/loads",
   // One uploaded file, while it is checked. A draft's ID fills the segment.
   draft: "/loads/drafts/:draftId",

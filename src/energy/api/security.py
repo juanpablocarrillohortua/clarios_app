@@ -74,6 +74,8 @@ class Permission(StrEnum):
     LOADS_WRITE = "loads:write"
     #: Ask the chat assistant (``POST /chat``).
     CHAT_USE = "chat:use"
+    #: See the energy baseline models and forecast with them (``/models``).
+    MODELS_VIEW = "models:view"
 
 
 #: Which roles grant each permission. A role is listed wherever it applies:
@@ -85,6 +87,7 @@ GRANTS: Final[Mapping[Permission, frozenset[Role]]] = MappingProxyType(
         ),
         Permission.LOADS_WRITE: frozenset({Role.OPERATOR, Role.ENGINEER, Role.ADMIN}),
         Permission.CHAT_USE: frozenset({Role.VIEWER, Role.OPERATOR, Role.ENGINEER, Role.ADMIN}),
+        Permission.MODELS_VIEW: frozenset({Role.VIEWER, Role.OPERATOR, Role.ENGINEER, Role.ADMIN}),
     }
 )
 

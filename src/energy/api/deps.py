@@ -14,8 +14,9 @@ rule of its own: what a role may do is decided in :mod:`energy.api.security`.
 
 Wired today: settings, database sessions, the request id, the signed-in
 caller, the dataset specs (read once, when the app is built), the writer of
-their templates, the draft and load services of the loading page, and the
-chat assistant (each built on first use and kept on the app). Repository and
+their templates, the draft and load services of the loading page, the
+chat assistant and the energy baseline models (each built on first use
+and kept on the app). Repository and
 service providers arrive with the endpoints that need them.
 """
 
@@ -33,6 +34,7 @@ from energy.adapters.chat_wiring import build_chat_model, build_reporting_query,
 from energy.adapters.entra_token_verifier import EntraTokenVerifier
 from energy.adapters.local_storage import LocalObjectStorage
 from energy.adapters.minio_storage import MinioObjectStorage
+from energy.adapters.postgres_baseline_models import PostgresBaselineModelStore
 from energy.adapters.postgres_draft_repo import PostgresDraftRepository
 from energy.adapters.postgres_load_committer import PostgresLoadCommitter
 from energy.adapters.postgres_load_ledger import PostgresLoadLedger
@@ -50,6 +52,7 @@ from energy.domain.exceptions import AuthenticationError, SignInNotConfiguredErr
 from energy.ports.dataset_template import DatasetTemplateWriter
 from energy.ports.object_storage import ObjectStorage
 from energy.ports.token_verifier import TokenVerifier
+from energy.services.baseline_model_service import BaselineModelService
 from energy.services.chat_data_service import ChatDataService
 from energy.services.chat_service import ChatService
 from energy.services.draft_service import DraftService
@@ -367,6 +370,28 @@ def get_chat_service(request: Request) -> ChatService:
     return service
 
 
+def get_baseline_model_service(request: Request) -> BaselineModelService:
+    """Return the service of the energy baseline models, building it on first use.
+
+    It only reads ``gold.baseline_models``: training runs on the host
+    (``energy models train``), and the API has no trainer and no statistics
+    library.
+
+    Args:
+        request: the current request, whose app holds, once built, the service.
+
+    Returns:
+        The :class:`~energy.services.baseline_model_service.BaselineModelService`.
+    """
+    service: BaselineModelService | None = getattr(
+        request.app.state, "baseline_model_service", None
+    )
+    if service is None:
+        service = BaselineModelService(PostgresBaselineModelStore(get_engine()))
+        request.app.state.baseline_model_service = service
+    return service
+
+
 # -----------------------------------------------------------------------------
 # Annotated aliases - route handlers depend on these, never on the functions.
 # -----------------------------------------------------------------------------
@@ -380,6 +405,7 @@ TemplateWriterDep = Annotated[DatasetTemplateWriter, Depends(get_template_writer
 DraftServiceDep = Annotated[DraftService, Depends(get_draft_service)]
 LoadServiceDep = Annotated[LoadService, Depends(get_load_service)]
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
+BaselineModelServiceDep = Annotated[BaselineModelService, Depends(get_baseline_model_service)]
 
 
 def requires(permission: Permission) -> Callable[[Principal], Principal]:

@@ -6,6 +6,7 @@
     "label": "Secciones",
     "toggle": "Abrir o cerrar el menú",
     "dashboard": "Tablero",
+    "models": "Modelos",
     "loads": "Carga de datos"
   },
   "dashboard": {
@@ -80,6 +81,109 @@
         "title": "No se pudo mostrar el informe",
         "text": "Power BI informó un error al abrir el informe. Intente de nuevo; si el problema continúa, avise a un administrador con el código que aparece abajo."
       }
+    }
+  },
+  "models": {
+    "title": "Modelos de energía",
+    "intro": "Pronostique cuánta energía consumirá un área a partir de lo que va a producir. Cada cifra se puede rastrear hasta la ecuación que la produce.",
+    "picker": "Modelo",
+    "loading": "Cargando el modelo…",
+    "failed": "No se pudo leer el modelo. Revise su conexión e intente de nuevo.",
+    "retry": "Reintentar",
+    "empty": "Todavía no hay modelos entrenados. Un administrador los entrena desde la línea de comandos con «make models-train».",
+    "names": {
+      "orec_mensual": "OREC · mensual",
+      "fa_mensual": "F&A · mensual",
+      "fa_diario": "F&A · diario"
+    },
+    "predicts": {
+      "orec_mensual": "Predice el total de kWh que consumirá OREC en el mes completo, conociendo cuántas baterías equivalentes (EQ) va a producir y cuántos días tiene el mes.",
+      "fa_mensual": "Predice el total de kWh que consumirá F&A (formación y acabado) en el mes completo, conociendo cuántas EQ va a producir y cuántos días tiene el mes.",
+      "fa_diario": "Predice los kWh que consumirán en un día los tres rectificadores de F&A, conociendo cuántas EQ se formarán y decorarán ese día y si es domingo."
+    },
+    "forecast": {
+      "month": "Total del mes de {{period}}",
+      "day": "Consumo del {{period}}",
+      "band": "Entre {{low}} y {{high}} {{unit}}",
+      "bandHint": "Banda de alerta del 90 %: si el consumo real cae fuera de ella, hay algo que revisar.",
+      "perUnit": "{{value}} {{unit}} por EQ",
+      "noProduction": "sin producción, no hay kWh por EQ",
+      "failed": "No se pudo calcular el pronóstico con estos valores. Intente de nuevo.",
+      "outside": "Fuera del rango con que se entrenó el modelo: {{features}}. El pronóstico es una extrapolación y es menos confiable."
+    },
+    "inputs": {
+      "heading": "Escenario",
+      "hint": "Cambie los valores: el pronóstico, la gráfica y la ecuación se actualizan al instante.",
+      "reset": "Valores iniciales",
+      "trainedRange": "Rango con que se entrenó: {{min}} a {{max}}",
+      "derived": "Se deduce de los EQ: {{value}}",
+      "yes": "sí",
+      "no": "no"
+    },
+    "chart": {
+      "heading": "Tendencia y pronóstico",
+      "label": "Consumo real en {{unit}}, pronósticos de validación con su banda de alerta y el pronóstico del escenario",
+      "actual": "Real",
+      "validation": "Pronóstico de validación (un periodo adelante)",
+      "validationShort": "Pronóstico de validación",
+      "band": "Banda de alerta del 90 %",
+      "forecast": "Pronóstico del escenario"
+    },
+    "equation": {
+      "heading": "Ecuación del modelo",
+      "general": "Forma general, con los coeficientes que aprendió el modelo:",
+      "filled": "Con los valores del escenario:",
+      "term": "Término",
+      "coefficient": "Coeficiente",
+      "value": "Valor",
+      "contribution": "Aporte",
+      "intercept": "Constante",
+      "total": "Pronóstico",
+      "note": "El pronóstico es la constante más la suma de los aportes; cada aporte es el coeficiente por el valor. Los días del mes se miden desde 30."
+    },
+    "features": {
+      "heading": "Qué significa cada variable",
+      "significant": "Efecto significativo (p = {{p}}).",
+      "notSignificant": "Efecto no significativo (p = {{p}}): con estos datos no se distingue de cero.",
+      "intercepto": {
+        "label": "Constante",
+        "what": "La energía que el área consume aunque no produzca: en un mes de 30 días sin EQ o, en el modelo diario, en un día entre semana sin EQ. Es la carga fija.",
+        "effect": "{{value}} kWh fijos."
+      },
+      "eq": {
+        "label": "EQ",
+        "what": "Baterías equivalentes producidas en el periodo. En los modelos mensuales, la «Produccion (Equivalente)» del libro de energía; en el diario, las EQ de formación y decorado del día en la base de datos.",
+        "effect": "Cada EQ adicional cambia el consumo en {{value}} kWh."
+      },
+      "dias": {
+        "label": "Días del mes",
+        "what": "Días calendario del mes, medidos desde 30: un mes de 31 días suma un día y febrero de 28 resta dos.",
+        "effect": "Cada día adicional del mes cambia el consumo en {{value}} kWh."
+      },
+      "domingo": {
+        "label": "Domingo",
+        "what": "1 si el día es domingo, 0 si no.",
+        "effect": "Un domingo cambia el consumo en {{value}} kWh."
+      },
+      "sin_eq": {
+        "label": "Sin producción",
+        "what": "1 si el día no registró EQ. No se escribe: se deduce de los EQ.",
+        "effect": "Un día sin producción cambia el consumo en {{value}} kWh."
+      }
+    },
+    "facts": {
+      "heading": "Cómo se entrenó y qué tan bien pronostica",
+      "window": "Entrenado con {{start}} a {{end}} ({{count}} periodos)",
+      "trainedAt": "actualizado el {{when}}",
+      "metric": "Métrica",
+      "training": "Entrenamiento",
+      "validation": "Validación",
+      "r2": "R²",
+      "wape": "Error típico (WAPE)",
+      "mase": "MASE (menor que 1: mejor que repetir el periodo anterior)",
+      "naive": "Error de repetir el periodo anterior (WAPE)",
+      "explain": "Entrenamiento: el ajuste de cada pliegue sobre sus propios datos, promediado. Validación: {{count}} pronósticos a un periodo adelante, cada uno sin ver su propio dato (validación cruzada temporal, TimeSeriesSplit).",
+      "sources": "Fuentes"
     }
   },
   "loads": {
