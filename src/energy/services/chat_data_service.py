@@ -52,6 +52,16 @@ logger = get_logger(__name__)
 #: What ``run_sql`` answers when the data the question needs has no table yet.
 PENDING_IMPLEMENTATION: Final = "pending_implementation"
 
+#: The line that ends every answer with a figure in simulated mode, word for word.
+SIMULATED_NOTICE: Final = "(Datos simulados: no son cifras reales de la planta.)"
+
+# Said to the model in simulated mode only. In the instructions it was always in
+# view, and the model ended answers on real data with it too.
+_SIMULATED_RULE: Final = (
+    "The data is simulated: the figures are not real. End every answer that gives a figure "
+    f'with this line, exactly: "{SIMULATED_NOTICE}"'
+)
+
 # How much of a query reaches the log.
 _LOGGED_SQL_CHARS: Final = 2000
 _NEWLINE: Final = chr(10)
@@ -96,6 +106,8 @@ class ChatDataService:
 
         The model then knows which data has a table before it calls any tool,
         so a question about a pending source gets its answer without a query.
+        In simulated mode the note ends with the rule that marks every figure
+        as simulated; in database mode it says nothing of it.
         """
         lines = [f"Data sources of the plant (data: {self.data_source}):"]
         for source in self._catalogue.sources:
@@ -105,6 +117,8 @@ class ChatDataService:
                 lines.append(f"- implemented: {source.description} Files: {files}. Views: {views}.")
             else:
                 lines.append(f"- pending (no table yet): {source.description} Files: {files}.")
+        if self.data_source == "simulated":
+            lines.append(_SIMULATED_RULE)
         return _NEWLINE.join(lines)
 
     def list_sources(self) -> str:
@@ -216,4 +230,4 @@ class ChatDataService:
         )
 
 
-__all__ = ["PENDING_IMPLEMENTATION", "ChatDataService"]
+__all__ = ["PENDING_IMPLEMENTATION", "SIMULATED_NOTICE", "ChatDataService"]

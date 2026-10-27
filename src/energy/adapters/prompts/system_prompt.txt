@@ -39,6 +39,3 @@ Data:
   Answer the same when run_sql answers "pending_implementation".
 - If run_sql answers "error", correct the query and try again, at most twice; then say plainly
   that the data could not be read.
-- When the tools answer with "data_source": "simulated", the figures are not real. End every answer
-  that gives a figure with this line, exactly:
-  "(Datos simulados: no son cifras reales de la planta.)"

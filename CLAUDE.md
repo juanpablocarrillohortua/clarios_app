@@ -121,7 +121,7 @@ Definition-of-Done item is verified against a running stack.
 | Coverage | **95.57%** (threshold 70%) |
 | `make test-integration` | **118 passed** against real TimescaleDB and MinIO, with the workbooks present (2026-10-07; not re-run on its own since) |
 | `make powerbi` | **Exit 0** in the stack: the bridge healthy on 127.0.0.1:5433; the login reads the reporting views from Windows through it, is refused on gold/silver and with a wrong password; `make powerbi-down` closes the port without touching the db container |
-| No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer. Two deliberate exceptions: `docs/equs_calculation_explained.es.md`, the Spanish translation of the non-technical explanation (asked for on 2026-10-08), and `frontend/src/i18n/es.json`, the texts of the web app's interface (decided on 2026-10-12, ADR 0004) |
+| No Spanish anywhere | 0 hits (UTF-8-aware scan, 2026-09-19). Since then Spanish appears only as data: header texts and sheet names of the QAD exports, and the table and column names of the EQUS Silver layer. Three deliberate exceptions: `docs/equs_calculation_explained.es.md`, the Spanish translation of the non-technical explanation (asked for on 2026-10-08), `frontend/src/i18n/es.json`, the texts of the web app's interface (decided on 2026-10-12, ADR 0004), and the Spanish half of the bilingual quick start at the top of `README.md` (asked for on 2026-10-26) |
 
 The schema, `make check`, test, coverage and `make powerbi` rows were re-verified
 on 2026-10-08, after the EQUS Gold layer and the reporting schema were built,
@@ -992,10 +992,13 @@ section 10 of [docs/frontend-plan.md](docs/frontend-plan.md), ADR 0008,
   views) or pending. Its note goes with every question
   (`ChatDataService.sources_note`): without it the model searched the EQ views
   for energy instead of saying the data is pending.
-- **Two Spanish sentences in the English prompt are a deliberate exception** to
-  the language rule: "No encontrado: la tabla está pendiente de
-  implementación." and "(Datos simulados: no son cifras reales de la
-  planta.)". A test keeps both word for word.
+- **Two Spanish sentences are a deliberate exception** to the language rule:
+  "No encontrado: la tabla está pendiente de implementación." in the English
+  prompt, and "(Datos simulados: no son cifras reales de la planta.)"
+  (`SIMULATED_NOTICE`), which `sources_note()` asks for in simulated mode
+  only. Do not put the second back in the prompt: there, even conditioned on
+  `data_source`, the model added it to answers on real data (2026-10-23).
+  Tests keep both word for word.
 - **The tools are plain methods** of `services/chat_data_service.py` handed to
   the adapter by the composition root, which wraps them with
   `StructuredTool.from_function` (name from the method, description from its
