@@ -1,5 +1,306 @@
 # Clarios Energy
 
+## Quick start / Inicio rápido
+
+[Español](#español) · [English](#english)
+
+### Español
+
+**Necesita:** Docker Desktop (con Docker Compose v2), `make`, `git` y
+[uv](https://docs.astral.sh/uv/), que instala Python por usted. Node solo hace
+falta para programar la aplicación web ([requisitos completos](#prerequisites)).
+Para instalar uv:
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+**Pasos**
+
+1. Descargue el repositorio:
+   ```bash
+   git clone https://github.com/clarios/clarios-energy.git
+   cd clarios-energy
+   ```
+2. Cree su archivo de configuración y complete las variables de la tabla de
+   abajo:
+   ```bash
+   cp .env.example .env
+   ```
+3. Instale Python 3.12 y los paquetes del proyecto en este equipo. La
+   plataforma corre en Docker, pero los modelos de energía, la página de
+   prueba del asistente y las pruebas corren aquí:
+   ```bash
+   make install
+   ```
+4. Arranque la plataforma (la primera vez tarda varios minutos):
+   ```bash
+   make up
+   ```
+5. Cree las tablas de la base de datos:
+   ```bash
+   make db-upgrade
+   ```
+6. Ponga los archivos de Excel en la carpeta `data/` como se explica en
+   [Cargar los datos](#cargar-los-datos-manual-temporal) y cárguelos:
+   ```bash
+   make refresh-all
+   ```
+7. Cree el usuario de solo lectura que usan Power BI y el asistente:
+   ```bash
+   make powerbi
+   ```
+8. Abra **http://localhost:8080** (escriba `localhost`, no `127.0.0.1`).
+
+#### Cargar los datos (manual, temporal)
+
+> **Esta forma de cargar datos es temporal.** La página **"Carga de datos"** de
+> la aplicación la irá reemplazando, conjunto por conjunto. Dos fuentes ya se
+> cargan allí de forma automática (se sube el archivo, la página lo revisa sola
+> y usted confirma):
+> - las **líneas de producción** (hoja "Lineas Produccion" de `EQUS BATT.xlsx`);
+> - las **unidades facturadas** (`Calculo de equivalente - Unidades facturadas.xlsx`).
+>
+> Lo confirmado en la página llega a Bronze; corra `make equs-silver` y
+> `make refresh` para verlo en los equivalentes. Los demás archivos todavía se
+> copian a mano en la carpeta y se cargan con un comando, como se explica
+> abajo.
+
+**1. Arme la carpeta `data/`** en la raíz del repositorio, así:
+
+```text
+data/
+├── raw_excels/                                                   ← equivalentes (EQUS)
+│   ├── Calculo de equivalente - Explorar transacciones por art.xlsx
+│   ├── Calculo de equivalente - Unidades facturadas.xlsx
+│   ├── BOM BATERIAS FORMADAS.xlsx
+│   ├── ESTRUCTURA DECORADO.xlsx
+│   ├── EQUS BATT.xlsx
+│   └── Calculo de equivalente- Comparativo lineas.xlsx
+├── Base_de_datos.xlsx                                            ← energía mensual (modelos)
+└── SCADA-Base de datos F&A.xlsx                                  ← energía diaria de F&A (modelos)
+```
+
+Reglas:
+- **Conserve los nombres.** Mayúsculas, espacios, tildes y guiones no importan;
+  las palabras sí. Un archivo con otro nombre no se carga y el comando lo avisa.
+- **Otro año de recibos o facturas va al lado del primero**, con un sufijo:
+  `Calculo de equivalente - Unidades facturadas FY25.xlsx`.
+- **No cambie las hojas** ni sus encabezados: se cargan tal como salen de QAD.
+- `data/` nunca se sube a git (está en `.gitignore`).
+
+**2. Cárguelos en la base de datos:**
+
+```bash
+make refresh-all
+```
+
+Hace todo en orden: guarda los archivos tal cual (Bronze), los limpia y los
+une (Silver) y calcula los equivalentes (Gold). Cada paso también tiene su
+propio comando:
+
+| Comando | Capa | Qué hace |
+|---|---|---|
+| `make equs-load` | Bronze | Guarda los libros de `data/raw_excels` tal como vienen |
+| `make equs-silver` | Silver | Los limpia y los une, e imprime el informe de calidad de datos |
+| `make refresh` | Gold | Recalcula los equivalentes (`MONTH=2026-09` para ver un mes) |
+| `make refresh-all` | Todas | Los tres anteriores, en orden |
+| `make resumen MONTH=2026-09` | Consulta | Las cifras de un mes (`FORMAT=json` o `csv`) |
+| `make close MONTH=2026-09` | Cierre | Congela el cierre de un mes (`ACCEPT_WARNINGS=1`, `RECLOSE=1`) |
+| `make report START=2025-10-01 END=2026-09-30` | Consulta | Los equivalentes de un rango de fechas, en JSON |
+
+`make help` lista todos los comandos.
+
+**Cada mes:** reemplace o agregue los archivos nuevos y vuelva a correr
+`make refresh-all`. Lo que ya se cargó del mismo archivo se omite, así que
+repetirlo no duplica nada.
+
+**Modelos de energía** (opcional; después de `make install`):
+
+```bash
+uv sync --all-groups --extra analytics
+make models-train
+```
+
+**Variables que debe definir en `.env`**
+
+| Variable | Qué es | ¿Obligatoria? |
+|---|---|---|
+| `POSTGRES_PASSWORD` | Contraseña de la base de datos | Sí |
+| `DATABASE_URL` | Dirección de la base de datos. Lleva la misma contraseña: `postgresql+psycopg://energy:<POSTGRES_PASSWORD>@db:5432/energy` | Sí, debe coincidir |
+| `MINIO_ROOT_PASSWORD` | Contraseña del almacén de archivos | Sí |
+| `API_SECRET_KEY` | Clave secreta de la API. Genérela con `openssl rand -hex 32` | Sí |
+| `REPORTING_DB_PASSWORD` | Contraseña del usuario de solo lectura `powerbi` | Para Power BI y para el asistente con datos reales |
+| `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID` | Inicio de sesión con Microsoft ([guía](docs/sign-in.md)) | Para iniciar sesión |
+| `POWERBI_WORKSPACE_ID`, `POWERBI_REPORT_ID` | El informe que muestra el tablero ([guía](docs/powerbi.md)) | Para ver el informe |
+| `CHAT_API_KEY` | Clave de OpenAI del asistente | Para el asistente |
+| `CHAT_DATA_SOURCE` | `simulated` (datos inventados, por defecto) o `database` (datos reales, que se envían a OpenAI: solo con el acuerdo de la planta) | No |
+
+Las demás variables pueden quedar como están. Una variable opcional vacía solo
+apaga su función: la plataforma arranca igual.
+
+**Si algo falla**
+
+- Después de cambiar `.env`, aplique el cambio con `docker compose up -d api`
+  (`restart` no lee el archivo de nuevo).
+- "El asistente no está configurado en el servidor": falta `CHAT_API_KEY`.
+- Más casos en [Troubleshooting](#troubleshooting); la guía completa está en
+  [Getting Started](#-getting-started).
+
+### English
+
+**You need:** Docker Desktop (with Docker Compose v2), `make`, `git` and
+[uv](https://docs.astral.sh/uv/), which installs Python for you. Node is only
+needed to work on the web app ([full prerequisites](#prerequisites)). To install
+uv:
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+**Steps**
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/clarios/clarios-energy.git
+   cd clarios-energy
+   ```
+2. Create your settings file and fill in the variables in the table below:
+   ```bash
+   cp .env.example .env
+   ```
+3. Install Python 3.12 and the project's packages on this machine. The
+   platform runs in Docker, but the energy models, the assistant's test page
+   and the tests run here:
+   ```bash
+   make install
+   ```
+4. Start the platform (the first run takes several minutes):
+   ```bash
+   make up
+   ```
+5. Create the database tables:
+   ```bash
+   make db-upgrade
+   ```
+6. Put the Excel files in the `data/` folder as described in
+   [Loading the data](#loading-the-data-manual-temporary) and load them:
+   ```bash
+   make refresh-all
+   ```
+7. Create the read-only login that Power BI and the assistant use:
+   ```bash
+   make powerbi
+   ```
+8. Open **http://localhost:8080** (type `localhost`, not `127.0.0.1`).
+
+#### Loading the data (manual, temporary)
+
+> **This way of loading data is temporary.** The app's **"Carga de datos"** page
+> will replace it, dataset by dataset. Two sources are already loaded there
+> automatically (you upload the file, the page checks it by itself and you
+> confirm):
+> - the **production lines** (sheet "Lineas Produccion" of `EQUS BATT.xlsx`);
+> - the **invoiced units** (`Calculo de equivalente - Unidades facturadas.xlsx`).
+>
+> What you confirm on the page lands in Bronze; run `make equs-silver` and
+> `make refresh` to see it in the equivalent batteries. The other files are
+> still copied by hand into the folder and loaded with a command, as described
+> below.
+
+**1. Build the `data/` folder** at the root of the repository, like this:
+
+```text
+data/
+├── raw_excels/                                                   ← equivalent batteries (EQUS)
+│   ├── Calculo de equivalente - Explorar transacciones por art.xlsx
+│   ├── Calculo de equivalente - Unidades facturadas.xlsx
+│   ├── BOM BATERIAS FORMADAS.xlsx
+│   ├── ESTRUCTURA DECORADO.xlsx
+│   ├── EQUS BATT.xlsx
+│   └── Calculo de equivalente- Comparativo lineas.xlsx
+├── Base_de_datos.xlsx                                            ← monthly energy (models)
+└── SCADA-Base de datos F&A.xlsx                                  ← daily energy of F&A (models)
+```
+
+Rules:
+- **Keep the names.** Case, spaces, accents and hyphens do not matter; the words
+  do. A file with another name is not loaded, and the command says so.
+- **Another year of receipts or invoices goes beside the first**, with a
+  suffix: `Calculo de equivalente - Unidades facturadas FY25.xlsx`.
+- **Do not change the sheets** or their headers: they are loaded as QAD
+  exports them.
+- `data/` is never committed (it is in `.gitignore`).
+
+**2. Load them into the database:**
+
+```bash
+make refresh-all
+```
+
+It does everything in order: stores the files as they are (Bronze), cleans and
+joins them (Silver) and computes the equivalent batteries (Gold). Each step
+also has a command of its own:
+
+| Command | Layer | What it does |
+|---|---|---|
+| `make equs-load` | Bronze | Stores the workbooks of `data/raw_excels` as they come |
+| `make equs-silver` | Silver | Cleans and joins them, and prints the data-quality report |
+| `make refresh` | Gold | Recomputes the equivalent batteries (`MONTH=2026-09` to see a month) |
+| `make refresh-all` | All | The three above, in order |
+| `make resumen MONTH=2026-09` | Read | A month's figures (`FORMAT=json` or `csv`) |
+| `make close MONTH=2026-09` | Close | Freezes a month's close (`ACCEPT_WARNINGS=1`, `RECLOSE=1`) |
+| `make report START=2025-10-01 END=2026-09-30` | Read | The equivalent batteries of a date range, as JSON |
+
+`make help` lists every command.
+
+**Every month:** replace or add the new files and run `make refresh-all` again.
+What was already loaded from the same file is skipped, so running it twice
+duplicates nothing.
+
+**Energy models** (optional; after `make install`):
+
+```bash
+uv sync --all-groups --extra analytics
+make models-train
+```
+
+**Variables to set in `.env`**
+
+| Variable | What it is | Required? |
+|---|---|---|
+| `POSTGRES_PASSWORD` | The database password | Yes |
+| `DATABASE_URL` | The database address. It carries the same password: `postgresql+psycopg://energy:<POSTGRES_PASSWORD>@db:5432/energy` | Yes, must match |
+| `MINIO_ROOT_PASSWORD` | The file store's password | Yes |
+| `API_SECRET_KEY` | The API's secret key. Generate it with `openssl rand -hex 32` | Yes |
+| `REPORTING_DB_PASSWORD` | Password of the read-only login `powerbi` | For Power BI and for the assistant on real data |
+| `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID` | Sign-in with Microsoft ([guide](docs/sign-in.md)) | To sign in |
+| `POWERBI_WORKSPACE_ID`, `POWERBI_REPORT_ID` | The report the dashboard shows ([guide](docs/powerbi.md)) | To see the report |
+| `CHAT_API_KEY` | The assistant's OpenAI key | For the assistant |
+| `CHAT_DATA_SOURCE` | `simulated` (invented data, the default) or `database` (real data, sent to OpenAI: only with the plant's agreement) | No |
+
+Every other variable can stay as it is. An empty optional variable only turns
+its feature off: the platform still starts.
+
+**If something fails**
+
+- After changing `.env`, apply it with `docker compose up -d api` (`restart`
+  does not read the file again).
+- The assistant says "El asistente no está configurado en el servidor":
+  `CHAT_API_KEY` is missing.
+- More cases under [Troubleshooting](#troubleshooting); the full guide is
+  [Getting Started](#-getting-started).
+
+---
+
 **An industrial energy and gas consumption monitoring platform for multi-plant
 operations.** It ingests meter readings, sensor streams, ERP production records
 and hand-maintained spreadsheets from every plant in the estate; reconciles them

@@ -267,12 +267,16 @@ Each query is logged with its SQL, its rows and its time, never the question.
 - where the EQ of a month is;
 - retry a failed query at most twice.
 
-It also quotes two Spanish sentences word for word, a deliberate exception to
-the repository's language rule:
-- **"No encontrado: la tabla está pendiente de implementación."** for data that
-  has no table yet;
+Two Spanish sentences are quoted word for word, a deliberate exception to the
+repository's language rule:
+- **"No encontrado: la tabla está pendiente de implementación."**, in the
+  prompt, for data that has no table yet;
 - **"(Datos simulados: no son cifras reales de la planta.)"** at the end of
-  every answer with a figure when `data_source` is `simulated`.
+  every answer with a figure in simulated mode. This rule is not in the
+  prompt: `sources_note()` adds it to the note in simulated mode only
+  (`SIMULATED_NOTICE`). In the prompt it was always in view, conditioned on
+  `data_source`, and the model ended answers on real data with it too
+  (2026-10-23).
 
 ### Tests
 

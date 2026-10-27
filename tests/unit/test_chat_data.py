@@ -36,6 +36,7 @@ from energy.domain.exceptions import (
 )
 from energy.pipelines.flows.chat import build_reporting_query, reporting_login_url
 from energy.ports.reporting_query import QueryResult, ReportingQuery
+from energy.services import chat_data_service as service_module
 from energy.services.chat_data_service import PENDING_IMPLEMENTATION, ChatDataService
 
 if TYPE_CHECKING:
@@ -409,6 +410,20 @@ class TestChatDataService:
         assert "Base_de_datos.xlsx" in note
         assert "Views: cuentas, articulos, equs_mensual" in note
 
+    def test_the_simulated_note_asks_for_the_notice(self, service: ChatDataService) -> None:
+        last_line = service.sources_note().splitlines()[-1]
+
+        assert SIMULATED_NOTICE == service_module.SIMULATED_NOTICE
+        assert last_line.endswith(f'"{SIMULATED_NOTICE}"')
+
+    def test_the_database_note_says_nothing_of_simulation(self, catalogue: SourceCatalogue) -> None:
+        real = ChatDataService(_Unreachable(), catalogue, row_limit=5, timeout_seconds=5)
+        note = real.sources_note()
+
+        assert note.startswith("Data sources of the plant (data: database):")
+        assert SIMULATED_NOTICE not in note
+        assert "simulated" not in note
+
     def test_the_tools_tell_the_model_when_to_use_them(self, service: ChatDataService) -> None:
         for tool in (service.list_sources, service.describe_reporting, service.run_sql):
             assert tool.__doc__
@@ -459,11 +474,12 @@ def test_the_model_runs_a_query_and_reads_its_rows(service: ChatDataService) -> 
     assert Decimal(result["rows"][0][0]) == september["equs_batt"]
 
 
-def test_the_prompt_quotes_the_two_sentences_word_for_word() -> None:
+def test_the_prompt_quotes_the_pending_sentence_word_for_word() -> None:
     prompt = load_system_prompt()
 
     assert PENDING_SENTENCE in prompt
-    assert SIMULATED_NOTICE in prompt
+    # The simulated notice travels in the sources note, in simulated mode only.
+    assert SIMULATED_NOTICE not in prompt
     for tool in ("list_sources", "describe_reporting", "run_sql"):
         assert tool in prompt
 
